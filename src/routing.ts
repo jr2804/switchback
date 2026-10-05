@@ -7,8 +7,10 @@
  * Semantics (per design doc, build-order step 5 + step 8, classifier-only
  * architecture from the user's 2026-10-04 directive):
  *
- *   - reason === "user"     : within the minimum-dwell window, stay on the current
- *                             model; otherwise first non-blocked effective entry.
+ *   - reason === "user"     : stay on the session's current model. Only when it is
+ *                             blocked or no longer available does the walk continue
+ *                             forward from its position (or start at the head when the
+ *                             branch has no state yet).
  *   - reason === "continuation" : stay on the previous model (keeps prompt cache and
  *                                 thinking signature valid).
  *   - reason === "retry"    : classify `request.failed.message` via the configured
@@ -33,10 +35,13 @@
  *   - Zero effective entries = clear config error naming the problem, NOT
  *     "no-non-blocked-fallback".
  *
- * Soft-preference stickiness (default) and a 30s minimum dwell time are applied so a
- * transient blip on the preferred model does not cause oscillation. Dwell holds the
- * current model for `MIN_DWELL_MS` after a switch unless it is blocked or no longer
- * available (see `withinDwell`).
+ * Session stickiness: once the router has moved the session to a model, later turns
+ * stay there. Re-picking the head of the list on every user turn is what made a
+ * multi-model failover look like it never advanced: a model that had just failed the
+ * session was immediately preferred again. A model that is blocked (quota/auth) or no
+ * longer in the catalog is left behind, and the walk continues forward from it, so a
+ * chain of failures visits the list in order instead of bouncing between the first
+ * two entries. A new session starts at the head again.
  *
  * NOT pure: `decide()` reads and writes the blocked-until map (`blocks.json`) via
  * `state.ts` and surfaces no-classifier conditions via `inputs.notify` (the route()
@@ -50,15 +55,14 @@
  */
 
 import type { ExtensionContext, ModelRoute, ModelRouteRequest } from "@earendil-works/pi-coding-agent";
+import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import type { Api, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { pickNextEffective, resolveFallbacks, type AvailabilityRegistry } from "./availability.ts";
 import { classifyError, PROMPT_VERSION, type NoClassifierReason } from "./classify.ts";
+import { chooseThinkingLevel, type ThinkingLevelContext, type ThinkingLevelSource } from "./thinking.ts";
 import { blockModel, unblockModel } from "./state.ts";
 import { recordCrash, type CrashAction } from "./crashes.ts";
 import type { BlockedMap, ModelId, SwitchbackConfig, SwitchbackState } from "./types.ts";
-
-/** Minimum time the router must stay on a model after a switch before it can switch again. */
-export const MIN_DWELL_MS = 30_000;
 
 /** Maximum number of transient retries on the same model before the router moves on. */
 export const MAX_TRANSIENT_RETRIES = 1;
@@ -72,6 +76,19 @@ export type Decision =
 
 /** The subset of the pi modelRegistry that the router needs. */
 export type RouterRegistry = ExtensionContext["modelRegistry"];
+
+/** What one `route()` call resolves to. */
+export interface DecisionOutcome {
+	decision: Decision;
+	nextState?: SwitchbackState;
+	thinkingLevel: ModelThinkingLevel;
+	/**
+	 * How `thinkingLevel` was decided, present when the route activated a model.
+	 * `classifier` means the SystemOne classifier resolved the user's category
+	 * against the activated model; `requested` means it was clamped instead.
+	 */
+	thinkingSource?: ThinkingLevelSource;
+}
 
 /** UI notification sink. Called once per `no-classifier` decision. */
 export type NotifyFn = (message: string, type: "info" | "warning" | "error") => void;
@@ -96,20 +113,9 @@ function isBlockedNow(modelId: ModelId, blocked: BlockedMap, now: number): boole
 	return ts !== undefined && ts > now;
 }
 
-/**
- * True when the router switched to the session's current model less than
- * `MIN_DWELL_MS` ago, so it must not switch away yet (anti-oscillation). Callers
- * still fall through when the current model is blocked or no longer available.
- */
-function withinDwell(state: SwitchbackState | undefined, now: number): boolean {
-	const since = state?.lastSwitchAtMs;
-	return since !== undefined && now - since < MIN_DWELL_MS;
-}
-
-function buildStateAfterSwitch(current: ModelId, prior: SwitchbackState | undefined, now: number): SwitchbackState {
+function buildStateAfterSwitch(current: ModelId, prior: SwitchbackState | undefined): SwitchbackState {
 	const next: SwitchbackState = {
 		current,
-		lastSwitchAtMs: now,
 		transientRetries: 0,
 	};
 	if (prior?.degradedWarned === true) next.degradedWarned = true;
@@ -118,7 +124,6 @@ function buildStateAfterSwitch(current: ModelId, prior: SwitchbackState | undefi
 
 function keepState(current: ModelId, prior: SwitchbackState | undefined, transientRetries: number): SwitchbackState {
 	const next: SwitchbackState = { current, transientRetries };
-	if (prior?.lastSwitchAtMs !== undefined) next.lastSwitchAtMs = prior.lastSwitchAtMs;
 	if (prior?.degradedWarned === true) next.degradedWarned = true;
 	return next;
 }
@@ -202,7 +207,7 @@ export async function decide(
 	modelConfig: SwitchbackConfig,
 	registry: AvailabilityRegistry & RouterRegistry,
 	inputs: RouteInputs,
-): Promise<{ decision: Decision; nextState?: SwitchbackState; thinkingLevel: ModelThinkingLevel }> {
+): Promise<DecisionOutcome> {
 	const now = inputs.now;
 	const blocked = inputs.blocked;
 
@@ -236,26 +241,29 @@ export async function decide(
 	}
 
 	if (reason === "retry") {
-		return decideRetry(request, modelConfig, registry, resolved, inputs);
+		const retry = await decideRetry(request, modelConfig, registry, resolved, inputs);
+		return withActivationLevel(retry, request, modelConfig, registry);
 	}
 
-	// "user" or "direct": minimum dwell first. After a switch, stay on the current
-	// model for MIN_DWELL_MS so a transient blip does not cause oscillation. Dwell
-	// never holds a blocked or unavailable model.
+	// "user" or "direct": the session stays where it is. Stickiness is the fix for the
+	// reported behaviour where every turn restarted at the head of the list, so a model
+	// that had just failed the session was preferred again. A blocked or unavailable
+	// current model is left behind, and the walk continues FORWARD from it.
 	const current = request.state?.current;
-	if (withinDwell(request.state, now) && current !== undefined) {
+	if (current !== undefined) {
 		const cur = resolved.entries.find((e) => e.id === current);
 		if (cur?.availability === "effective" && !isBlockedNow(current, blocked, now)) {
 			return {
-				decision: { kind: "stick", modelId: current, reason: "dwell" },
+				decision: { kind: "stick", modelId: current, reason: "session-sticky" },
 				nextState: keepState(current, request.state, request.state?.transientRetries ?? 0),
 				thinkingLevel: request.thinkingLevel,
 			};
 		}
 	}
 
-	// Otherwise: first non-blocked effective entry.
-	const pick = pickNextEffective(resolved, undefined, blocked, now);
+	// Nothing usable yet: continue forward from where the session was (wrapping), else
+	// start at the head of the configured list.
+	const pick = pickNextEffective(resolved, undefined, blocked, now, current);
 	if (!pick) {
 		// No non-blocked effective entry AND multiple effective entries exist: the user
 		// is quota-locked-out across all configured fallbacks. Surface "exhausted" rather
@@ -263,21 +271,26 @@ export async function decide(
 		return { decision: { kind: "exhausted", reason: "all-effective-blocked" }, thinkingLevel: request.thinkingLevel };
 	}
 	const stateCurrent = request.state?.current;
-	const nextState = buildStateAfterSwitch(pick.modelId, request.state, now);
+	const nextState = buildStateAfterSwitch(pick.modelId, request.state);
 	// Surface the degraded warning once per session when we're forced onto a blocked
 	// model because it is the only effective entry.
 	if (pick.degraded && resolved.effectiveCount === 1 && !nextState.degradedWarned) {
 		nextState.degradedWarned = true;
 	}
-	return {
-		decision: {
-			kind: stateCurrent === pick.modelId ? "stick" : "switch",
-			modelId: pick.modelId,
-			reason: pick.degraded ? `degraded-${reason}` : reason,
+	return withActivationLevel(
+		{
+			decision: {
+				kind: stateCurrent === pick.modelId ? "stick" : "switch",
+				modelId: pick.modelId,
+				reason: pick.degraded ? `degraded-${reason}` : reason,
+			},
+			nextState,
+			thinkingLevel: request.thinkingLevel,
 		},
-		nextState,
-		thinkingLevel: request.thinkingLevel,
-	};
+		request,
+		modelConfig,
+		registry,
+	);
 }
 
 async function decideRetry(
@@ -286,13 +299,17 @@ async function decideRetry(
 	registry: AvailabilityRegistry & RouterRegistry,
 	resolved: ReturnType<typeof resolveFallbacks>,
 	inputs: RouteInputs,
-): Promise<{ decision: Decision; nextState?: SwitchbackState; thinkingLevel: ModelThinkingLevel }> {
+): Promise<DecisionOutcome> {
 	const failedId = physicalId(request.failed?.model);
 	const errorMessage = inputs.simulateErrorMessage ?? request.failed?.message.errorMessage ?? "";
 	const stopReason = request.failed?.message.stopReason;
 	const now = inputs.now;
 	const blocked = inputs.blocked;
 	const priorState = request.state;
+	// Continue the walk from the model that failed (falling back to the session's
+	// current model), so consecutive failures advance through the list in order rather
+	// than bouncing between the first two entries.
+	const advanceFrom = failedId ?? priorState?.current;
 
 	// No-failure marker: route only enters here when `failed` is set, but an empty
 	// error message AND no stopReason means pi flagged this as a retry without a real
@@ -305,13 +322,13 @@ async function decideRetry(
 				thinkingLevel: request.thinkingLevel,
 			};
 		}
-		const pick = pickNextEffective(resolved, undefined, blocked, now);
+		const pick = pickNextEffective(resolved, undefined, blocked, now, advanceFrom);
 		if (!pick) {
 			return { decision: { kind: "exhausted", reason: "all-effective-blocked" }, thinkingLevel: request.thinkingLevel };
 		}
 		return {
 			decision: { kind: "switch", modelId: pick.modelId, reason: "no-prior-state" },
-			nextState: buildStateAfterSwitch(pick.modelId, undefined, now),
+			nextState: buildStateAfterSwitch(pick.modelId, undefined),
 			thinkingLevel: request.thinkingLevel,
 		};
 	}
@@ -325,10 +342,10 @@ async function decideRetry(
 	if (result.kind === "no-classifier") {
 		const reasonText = describeNoClassifier(result.reason);
 		inputs.notify?.(`switchback: no classifier decision (${result.reason}) - cycling without classification`, "warning");
-		const pick = pickNextEffective(resolved, failedId, blocked, now);
+		const pick = pickNextEffective(resolved, failedId, blocked, now, advanceFrom);
 		recordDecideCrash(failedId, registry, errorMessage, now, null, result.reason, "blind-cycle");
 		if (pick) {
-			const nextState = buildStateAfterSwitch(pick.modelId, priorState, now);
+			const nextState = buildStateAfterSwitch(pick.modelId, priorState);
 			if (pick.degraded && resolved.effectiveCount === 1 && !nextState.degradedWarned) {
 				nextState.degradedWarned = true;
 			}
@@ -373,10 +390,10 @@ async function decideRetry(
 				thinkingLevel: request.thinkingLevel,
 			};
 		}
-		const pick = pickNextEffective(resolved, failedId, blocked, now);
+		const pick = pickNextEffective(resolved, failedId, blocked, now, advanceFrom);
 		recordDecideCrash(failedId, registry, errorMessage, now, classified, undefined, pick ? "blocked+advanced" : "stuck-stayed");
 		if (pick) {
-			const nextState = buildStateAfterSwitch(pick.modelId, priorState, now);
+			const nextState = buildStateAfterSwitch(pick.modelId, priorState);
 			if (pick.degraded && resolved.effectiveCount === 1 && !nextState.degradedWarned) {
 				nextState.degradedWarned = true;
 			}
@@ -392,10 +409,10 @@ async function decideRetry(
 	// Quota / auth / unknown: block the failed model with the classifier-supplied
 	// reset time and pick the next non-blocked.
 	blockModel(failedId, classified.resetAtMs, now);
-	const pick = pickNextEffective(resolved, failedId, blocked, now);
+	const pick = pickNextEffective(resolved, failedId, blocked, now, advanceFrom);
 	recordDecideCrash(failedId, registry, errorMessage, now, classified, undefined, pick ? "blocked+advanced" : "stuck-stayed");
 	if (pick) {
-		const nextState = buildStateAfterSwitch(pick.modelId, priorState, now);
+		const nextState = buildStateAfterSwitch(pick.modelId, priorState);
 		if (pick.degraded && resolved.effectiveCount === 1 && !nextState.degradedWarned) {
 			nextState.degradedWarned = true;
 		}
@@ -406,6 +423,39 @@ async function decideRetry(
 		};
 	}
 	return { decision: { kind: "exhausted", reason: `${classified.class}-no-fallback` }, thinkingLevel: request.thinkingLevel };
+}
+
+/**
+ * Resolve the dispatched reasoning level for a decision that activates a model.
+ *
+ * A `switch` decision sends the request to a model the session was not on, so the
+ * user's reasoning category is resolved against that concrete model (see
+ * `src/thinking.ts`): switchback's categories are fixed, the models' level maps
+ * are not, and the classifier is the only decision source. Sticky decisions
+ * (session-sticky, continuation, same-model retry, overflow) keep their level, so
+ * the provider's thinking signature and prompt cache stay valid.
+ */
+async function withActivationLevel(
+	outcome: DecisionOutcome,
+	request: ModelRouteRequest<SwitchbackState>,
+	modelConfig: SwitchbackConfig,
+	registry: AvailabilityRegistry & RouterRegistry,
+): Promise<DecisionOutcome> {
+	if (outcome.decision.kind !== "switch") return outcome;
+	const model = lookupModel(registry, outcome.decision.modelId);
+	if (model === undefined) return outcome;
+	const context: ThinkingLevelContext = {
+		routeReason: request.reason,
+		failover: request.failed !== undefined,
+	};
+	const choice = await chooseThinkingLevel({
+		registry,
+		jev: modelConfig.jev,
+		model,
+		requested: outcome.thinkingLevel,
+		context,
+	});
+	return { ...outcome, thinkingLevel: choice.level, thinkingSource: choice.source };
 }
 
 /**
@@ -431,7 +481,12 @@ export function buildRoute(
 	}
 	const model = lookupModel(registry, decision.modelId);
 	if (!model) throw new Error(`switchback: model "${decision.modelId}" not in catalog (lost between decide() and buildRoute())`);
-	const route: ModelRoute<SwitchbackState> = { model, thinkingLevel };
+	// Clamp to the routed model. A virtual level the physical model does not implement
+	// (zai has no "medium" and cannot disable thinking at all) is otherwise sent as the
+	// provider default, which is what makes "I changed reasoning effort and nothing
+	// happened" look like a bug. Pi clamps too; doing it here keeps the returned route
+	// honest for every caller.
+	const route: ModelRoute<SwitchbackState> = { model, thinkingLevel: clampThinkingLevel(model, thinkingLevel) };
 	if (nextState !== undefined) route.state = nextState;
 	return route;
 }

@@ -84,12 +84,16 @@ export interface ResolvedFallbacks {
 	greyedCount: number;
 }
 
-/** Per-session router state. Persisted on the session branch by pi. */
+/**
+ * Per-session router state. Persisted on the session branch by pi.
+ *
+ * The session stays on `current` until that model is blocked or leaves the catalog
+ * (see `decide`), so this is the router's memory of where it already moved the
+ * session — not a hint it is free to override on the next turn.
+ */
 export interface SwitchbackState {
 	/** "provider/id" of the model the session is currently routed to. Undefined only before the first route. */
 	current: ModelId;
-	/** Epoch ms at which the most recent switch happened. Undefined before any switch. */
-	lastSwitchAtMs?: number;
 	/** Number of transient retries on the current model. Reset on every switch to a new model. */
 	transientRetries: number;
 	/** True when the single-model-degraded warning has been emitted this session. */

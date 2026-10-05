@@ -97,7 +97,17 @@ export function greyedReason(entry: ResolvedEntry | undefined): string | undefin
 }
 
 /**
- * Pick the next effective, non-blocked entry, skipping `skip`.
+ * Pick the next effective, non-blocked entry.
+ *
+ * The walk is ordered and forward-moving, which is what makes a chain of failures
+ * advance through the list instead of bouncing between its first two entries:
+ *
+ *   - `startAfter` names the entry to continue past (the model that just failed, or
+ *     the session's current model when it is no longer usable). The walk starts at
+ *     the entry after it in configured order and wraps around once. Without
+ *     `startAfter` the walk starts at the head of the list.
+ *   - `skip` is never returned (normally the same id as `startAfter`; they differ
+ *     only where the router must not pick an id it is not advancing past).
  *
  * Degraded mode (returns the most-preferred effective entry even when blocked) is
  * only allowed when there is exactly one effective entry. With multiple effective
@@ -110,18 +120,21 @@ export function pickNextEffective(
 	skip: ModelId | undefined,
 	blocked: BlockedMap,
 	now: number,
+	startAfter?: ModelId,
 ): { modelId: ModelId; degraded: boolean } | undefined {
 	const effective = effectiveIds(resolved);
 	if (effective.length === 0) return undefined;
-	// First pass: skip the failed model AND skip blocked entries, prefer earliest.
-	for (const candidate of effective) {
+	const count = effective.length;
+	const start = startAfter === undefined ? 0 : effective.indexOf(startAfter) + 1;
+	for (let i = 0; i < count; i++) {
+		const candidate = effective[(start + i) % count]!;
 		if (candidate === skip) continue;
 		const blockedUntil = blocked[candidate];
 		if (blockedUntil !== undefined && blockedUntil > now) continue;
 		return { modelId: candidate, degraded: false };
 	}
 	// Degraded mode: only when exactly one effective entry exists. Edge case #4.
-	if (effective.length === 1) {
+	if (count === 1) {
 		return { modelId: effective[0]!, degraded: true };
 	}
 	// Multiple effective entries all blocked: return undefined so the router

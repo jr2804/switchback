@@ -31,7 +31,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { decide, buildRoute, MAX_TRANSIENT_RETRIES, MIN_DWELL_MS, type Decision, type RouterRegistry } from "../src/routing.ts";
+import { decide, buildRoute, MAX_TRANSIENT_RETRIES, type Decision, type RouterRegistry } from "../src/routing.ts";
 import { stateFilePath, readBlockedMap, isBlocked, unblockModel, blockModel } from "../src/state.ts";
 import { simulateRetry, loadSimulate, getScenario, SimulateError } from "../src/simulate.ts";
 import { findModelConfig, loadConfig } from "../src/config.ts";
@@ -42,6 +42,8 @@ import type { SwitchbackConfig } from "../src/types.ts";
 interface FakeEntry {
 	provider: string;
 	id: string;
+	/** Optional per-model thinking-level map, as the real catalog carries one. */
+	thinkingLevelMap?: Record<string, string | null>;
 }
 
 type ClassifyAnswer = {
@@ -62,6 +64,11 @@ interface FakeRegistryOpts {
 	unparseable?: boolean;
 	/** Auth status overrides per provider id. */
 	auth?: Record<string, boolean>;
+	/**
+	 * When set, the reasoning-level question is answered with this level. The
+	 * router asks it when a decision activates a model (see src/thinking.ts).
+	 */
+	levelAnswer?: string;
 }
 
 function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: (...args: unknown[]) => Promise<unknown> } {
@@ -73,7 +80,11 @@ function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: 
 			id: e.id,
 			api: "openai-completions",
 			baseUrl: "https://example.invalid",
-			reasoning: false,
+			// Faithful to the real catalog entries this router targets: they are
+			// reasoning models, so `clampThinkingLevel` has levels to choose from
+			// instead of collapsing everything to "off".
+			reasoning: true,
+			...(e.thinkingLevelMap ? { thinkingLevelMap: e.thinkingLevelMap } : {}),
 			input: ["text"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			contextWindow: 128_000,
@@ -85,7 +96,7 @@ function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: 
 	// returns. Tests that want the classifier path to be exercisable must set
 	// answer / throw / hang / unparseable; tests that want the no-classifier path
 	// leave those unset and findOfType returns undefined.
-	const classifierConfigured = opts.answer !== undefined || opts.throw !== undefined || opts.hang === true || opts.unparseable === true;
+	const classifierConfigured = opts.answer !== undefined || opts.throw !== undefined || opts.hang === true || opts.unparseable === true || opts.levelAnswer !== undefined;
 	const fakeClassifierHandle = classifierConfigured
 		? { provider: "typesafe", id: "jev-latest", api: "classifier" as const, input: ["text" as const] }
 		: undefined;
@@ -103,7 +114,17 @@ function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: 
 			const configured = opts.auth?.[provider] ?? providers.has(provider);
 			return { configured, source: configured ? "environment" : undefined, label: configured ? "fake-credentials" : "no-credentials" };
 		},
-		classify: async () => {
+		classify: async (_model: unknown, context: unknown) => {
+			const questions = (context as { questions?: Record<string, unknown> } | undefined)?.questions ?? {};
+			// The reasoning-level question is a separate prompt from the error
+			// classification; answer it independently so both paths are testable.
+			if ("level" in questions) {
+				if (opts.levelAnswer === undefined) return null;
+				return {
+					stopReason: "stop" as const,
+					answers: { level: { type: "choice" as const, choice: opts.levelAnswer, probabilities: {}, confidence: 1 } },
+				};
+			}
 			if (opts.hang === true) return new Promise(() => {});
 			if (opts.throw !== undefined) throw opts.throw;
 			if (opts.unparseable === true) {
@@ -147,6 +168,15 @@ afterEach(() => {
 	if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
 });
 
+/**
+ * A real provider overload, captured 2026-10-05 during daily use. Kept verbatim:
+ * the router must treat an overloaded cluster as transient, and consecutive failures
+ * must walk forward through the fallback list instead of bouncing between the first
+ * two entries.
+ */
+const OVERLOADED_529_MESSAGE =
+	'Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"The server cluster is currently under high load. Please retry after a short wait and thank you for your patience. (2064) (529)"},"request_id":"0712991643802d84011aceea62a4c207"}';
+
 const FALLBACKS: SwitchbackConfig = {
 	id: "switchback/auto",
 	name: "Auto (Switchback)",
@@ -168,7 +198,8 @@ function buildFakeRequest(overrides: {
 	failed?: { provider: string; id: string; errorMessage: string; stopReason?: "error" | "length" | "aborted" | "stop" | "toolUse" | "deferred" | "pending" };
 	stateCurrent?: string;
 	transientRetries?: number;
-	lastSwitchAtMs?: number;
+	/** When true the branch has no router state yet (first request of a session). */
+	noState?: boolean;
 }) {
 	const firstEntry = FALLBACKS.fallbacks[0]!.split("/");
 	const firstModel = { provider: firstEntry[0]!, id: firstEntry[1]! };
@@ -212,11 +243,14 @@ function buildFakeRequest(overrides: {
 				}
 			: {}),
 		messages: [],
-		state: {
-			current: overrides.stateCurrent ?? FALLBACKS.fallbacks[0]!,
-			transientRetries: overrides.transientRetries ?? 0,
-			...(overrides.lastSwitchAtMs !== undefined ? { lastSwitchAtMs: overrides.lastSwitchAtMs } : {}),
-		},
+		...(overrides.noState
+			? {}
+			: {
+					state: {
+						current: overrides.stateCurrent ?? FALLBACKS.fallbacks[0]!,
+						transientRetries: overrides.transientRetries ?? 0,
+					},
+				}),
 	};
 }
 
@@ -252,8 +286,8 @@ describe("router — user reason", () => {
 	});
 });
 
-describe("router — minimum dwell (MIN_DWELL_MS)", () => {
-	it("stays on the current model within MIN_DWELL_MS even though a preferred model is available", async () => {
+describe("router — session stickiness (user/direct)", () => {
+	it("stays on the session's current model even when a preferred model is available", async () => {
 		const registry = makeFakeRegistry({
 			entries: [
 				{ provider: "zai", id: "glm-4.7" },
@@ -261,38 +295,50 @@ describe("router — minimum dwell (MIN_DWELL_MS)", () => {
 			],
 		});
 		const now = 1_000_000;
-		const request = buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro", lastSwitchAtMs: now - 1_000 });
+		const request = buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro" });
+		const result = await decide("user", request, FALLBACKS, registry, { now, blocked: {} });
+		expect(result.decision.kind).toBe("stick");
+		expect(result.decision.kind === "stick" ? result.decision.modelId : "").toBe("ollama-cloud/pro");
+		expect(result.decision.kind === "stick" ? result.decision.reason : "").toBe("session-sticky");
+	});
+
+	it("still sticks long after the switch (no return to the head of the list)", async () => {
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			],
+		});
+		// Hours later: the old dwell implementation would have gone back to zai/glm-4.7.
+		const now = 9_999_999;
+		const request = buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro" });
 		const result = await decide("user", request, FALLBACKS, registry, { now, blocked: {} });
 		expect(result.decision.kind).toBe("stick");
 		expect(result.decision.kind === "stick" ? result.decision.modelId : "").toBe("ollama-cloud/pro");
 	});
 
-	it("switches once the dwell window has elapsed", async () => {
+	it("leaves a blocked current model and continues forward from its position", async () => {
 		const registry = makeFakeRegistry({
 			entries: [
 				{ provider: "zai", id: "glm-4.7" },
 				{ provider: "ollama-cloud", id: "pro" },
+				{ provider: "minimax", id: "plus" },
 			],
 		});
 		const now = 1_000_000;
-		const request = buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro", lastSwitchAtMs: now - MIN_DWELL_MS });
-		const result = await decide("user", request, FALLBACKS, registry, { now, blocked: {} });
-		expect(result.decision.kind).toBe("switch");
-		expect(result.decision.kind === "switch" ? result.decision.modelId : "").toBe("zai/glm-4.7");
-	});
-
-	it("does not hold a blocked current model (dwell yields to a quota block)", async () => {
-		const registry = makeFakeRegistry({
-			entries: [
-				{ provider: "zai", id: "glm-4.7" },
-				{ provider: "ollama-cloud", id: "pro" },
-			],
-		});
-		const now = 1_000_000;
+		// Session sits on the SECOND entry; that one is now blocked, so the walk must
+		// continue to the third, not restart at the head.
 		const blocked = { "ollama-cloud/pro": now + 60_000 };
-		const request = buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro", lastSwitchAtMs: now - 1_000 });
+		const request = buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro" });
 		const result = await decide("user", request, FALLBACKS, registry, { now, blocked });
 		expect(result.decision.kind).toBe("switch");
+		expect(result.decision.kind === "switch" ? result.decision.modelId : "").toBe("minimax/plus");
+	});
+
+	it("starts at the head of the list when the branch has no state", async () => {
+		const registry = makeFakeRegistry({ entries: [{ provider: "zai", id: "glm-4.7" }] });
+		const request = buildFakeRequest({ reason: "user", noState: true });
+		const result = await decide("user", request, FALLBACKS, registry, { now: 1_000_000, blocked: {} });
 		expect(result.decision.kind === "switch" ? result.decision.modelId : "").toBe("zai/glm-4.7");
 	});
 });
@@ -964,8 +1010,178 @@ describe("config loader", () => {
 	});
 });
 
+describe("router — multi-model failover walk", () => {
+	// The reported bug: after two models failed the router went back to the first
+	// instead of reaching the third. Transient failures never block, so "advance" has
+	// to move FORWARD through the configured order rather than restart at the head.
+	it("walks forward through the list across consecutive transient failures", async () => {
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+				{ provider: "minimax", id: "plus" },
+			],
+			answer: { class: "transient", scope: "account" },
+		});
+		const now = 1_000_000;
+		const failed = (provider: string, id: string) => ({
+			reason: "retry" as const,
+			failed: { provider, id, errorMessage: OVERLOADED_529_MESSAGE },
+		});
+
+		// First transient failure on the head model: retry the same model.
+		const first = await decide(
+			"retry",
+			buildFakeRequest({ ...failed("zai", "glm-4.7"), stateCurrent: "zai/glm-4.7", transientRetries: 0 }),
+			FALLBACKS,
+			registry,
+			{ now, blocked: {} },
+		);
+		expect(first.decision.kind === "stick" ? first.decision.modelId : "").toBe("zai/glm-4.7");
+
+		// Retry exhausted on the head: advance to the second entry.
+		const second = await decide(
+			"retry",
+			buildFakeRequest({ ...failed("zai", "glm-4.7"), stateCurrent: "zai/glm-4.7", transientRetries: 1 }),
+			FALLBACKS,
+			registry,
+			{ now, blocked: {} },
+		);
+		expect(second.decision.kind === "switch" ? second.decision.modelId : "").toBe("ollama-cloud/pro");
+
+		// Retry exhausted on the second entry: must reach the THIRD, not bounce back.
+		const third = await decide(
+			"retry",
+			buildFakeRequest({ ...failed("ollama-cloud", "pro"), stateCurrent: "ollama-cloud/pro", transientRetries: 1 }),
+			FALLBACKS,
+			registry,
+			{ now, blocked: {} },
+		);
+		expect(third.decision.kind === "switch" ? third.decision.modelId : "").toBe("minimax/plus");
+	});
+
+	it("walks forward across consecutive quota blocks and then reports exhaustion", async () => {
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+				{ provider: "minimax", id: "plus" },
+				{ provider: "opencode-go", id: "pro" },
+			],
+			answer: { class: "quota", scope: "account" },
+		});
+		const now = 1_000_000;
+		const failed = (provider: string, id: string) => ({
+			reason: "retry" as const,
+			failed: { provider, id, errorMessage: "429 quota exceeded" },
+		});
+
+		const first = await decide(
+			"retry",
+			buildFakeRequest({ ...failed("zai", "glm-4.7"), stateCurrent: "zai/glm-4.7" }),
+			FALLBACKS,
+			registry,
+			{ now, blocked: {} },
+		);
+		expect(first.decision.kind === "switch" ? first.decision.modelId : "").toBe("ollama-cloud/pro");
+
+		const blocked = { "zai/glm-4.7": now + 60_000 };
+		const second = await decide(
+			"retry",
+			buildFakeRequest({ ...failed("ollama-cloud", "pro"), stateCurrent: "ollama-cloud/pro" }),
+			FALLBACKS,
+			registry,
+			{ now, blocked },
+		);
+		expect(second.decision.kind === "switch" ? second.decision.modelId : "").toBe("minimax/plus");
+
+		const third = await decide(
+			"retry",
+			buildFakeRequest({ ...failed("minimax", "plus"), stateCurrent: "minimax/plus" }),
+			FALLBACKS,
+			registry,
+			{ now, blocked: { ...blocked, "ollama-cloud/pro": now + 60_000 } },
+		);
+		expect(third.decision.kind === "switch" ? third.decision.modelId : "").toBe("opencode-go/pro");
+
+		const exhausted = await decide(
+			"retry",
+			buildFakeRequest({ ...failed("opencode-go", "pro"), stateCurrent: "opencode-go/pro" }),
+			FALLBACKS,
+			registry,
+			{
+				now,
+				blocked: {
+					"zai/glm-4.7": now + 60_000,
+					"ollama-cloud/pro": now + 60_000,
+					"minimax/plus": now + 60_000,
+				},
+			},
+		);
+		expect(exhausted.decision.kind).toBe("exhausted");
+	});
+});
+
 describe("constants", () => {
-	it("exports the minimum dwell time", () => {
-		expect(MIN_DWELL_MS).toBe(30_000);
+	it("caps transient retries at one retry before moving on", () => {
+		expect(MAX_TRANSIENT_RETRIES).toBe(1);
+	});
+});
+
+describe("router — thinking level", () => {
+	// The reported symptom: changing reasoning effort appeared to do nothing, because
+	// the virtual level was handed to a physical model that does not implement it and
+	// the provider fell back to its default. zai/glm-5.3 really is such a model.
+	it("clamps a level the routed model does not implement (zai has no medium)", async () => {
+		const registry = makeFakeRegistry({
+			entries: [{ provider: "zai", id: "glm-4.7", thinkingLevelMap: { off: null, medium: null } }],
+		});
+		const request = buildFakeRequest({ reason: "user", noState: true });
+		const result = await decide("user", request, FALLBACKS, registry, { now: 1_000_000, blocked: {} });
+		const route = buildRoute(registry, result.decision, result.thinkingLevel, result.nextState);
+		expect(route.thinkingLevel).toBe("high");
+	});
+
+	it("passes a supported level through unchanged", async () => {
+		const registry = makeFakeRegistry({ entries: [{ provider: "zai", id: "glm-4.7" }] });
+		const request = buildFakeRequest({ reason: "user", noState: true });
+		const result = await decide("user", request, FALLBACKS, registry, { now: 1_000_000, blocked: {} });
+		const route = buildRoute(registry, result.decision, result.thinkingLevel, result.nextState);
+		expect(route.thinkingLevel).toBe("medium");
+	});
+
+	it("dispatches the level the classifier recommends for the activated model", async () => {
+		// zai/glm-4.7 has no thinkingLevelMap here, so it supports off/minimal/medium/high;
+		// the classifier is asked to resolve the user's ``medium`` against that set.
+		const registry = makeFakeRegistry({
+			entries: [{ provider: "zai", id: "glm-4.7" }],
+			levelAnswer: "high",
+		});
+		const request = buildFakeRequest({ reason: "user", noState: true });
+		const result = await decide("user", request, FALLBACKS, registry, { now: 1_000_000, blocked: {} });
+		expect(result.thinkingLevel).toBe("high");
+		expect(result.thinkingSource).toBe("classifier");
+	});
+
+	it("clamps the requested level when the classifier has no answer for it", async () => {
+		const registry = makeFakeRegistry({
+			entries: [{ provider: "zai", id: "glm-4.7", thinkingLevelMap: { off: null, medium: null } }],
+		});
+		const request = buildFakeRequest({ reason: "user", noState: true });
+		const result = await decide("user", request, FALLBACKS, registry, { now: 1_000_000, blocked: {} });
+		expect(result.thinkingLevel).toBe("high");
+		expect(result.thinkingSource).toBe("requested");
+	});
+
+	it("keeps the requested level on a sticky route (no classifier call)", async () => {
+		const registry = makeFakeRegistry({
+			entries: [{ provider: "zai", id: "glm-4.7" }],
+			levelAnswer: "high",
+		});
+		const request = buildFakeRequest({ reason: "user", stateCurrent: "zai/glm-4.7" });
+		const result = await decide("user", request, FALLBACKS, registry, { now: 1_000_000, blocked: {} });
+		expect(result.decision.kind).toBe("stick");
+		expect(result.thinkingLevel).toBe("medium");
+		expect(result.thinkingSource).toBeUndefined();
 	});
 });

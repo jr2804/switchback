@@ -22,6 +22,7 @@ import { SWITCHBACK_PROVIDER, SWITCHBACK_VIRTUAL_ID, findModelConfig, loadConfig
 import { buildRoute, decide, ConfigInvalidError, type RouterRegistry } from "./src/routing.ts";
 import { loadSimulate, getScenario, simulateRetry, type SimulateResult } from "./src/simulate.ts";
 import { registerLocalClassifier } from "./src/local-classifier.ts";
+import { SWITCHBACK_THINKING_LEVELS } from "./src/thinking.ts";
 import { isBlocked, readBlockedMap } from "./src/state.ts";
 import { annotateCrash, isValidAnnotationClass, readCrashMap, shortHash } from "./src/crashes.ts";
 import type { ErrorClass } from "./src/types.ts";
@@ -29,52 +30,68 @@ import type { ModelId, SwitchbackState } from "./src/types.ts";
 
 export default function (pi: ExtensionAPI) {
 	const { config, source: configSource } = loadConfig();
-	const modelConfig = findModelConfig(config, `${SWITCHBACK_PROVIDER}/${SWITCHBACK_VIRTUAL_ID}`);
+	// Every entry in the user config becomes a virtual model. The config is the source
+	// of truth for which virtual models exist (e.g. switchback/auto and
+	// switchback/auto-flash), not a single hard-coded id.
+	const modelConfigs = config.models;
 
 	// A classifier that names its own endpoint (jev.baseUrl) is registered here, so
 	// switchback can classify through a local System One server (e.g. Ollama
-	// v0.35+) without a pi provider for it. No-op for catalog classifiers.
-	registerLocalClassifier(pi, modelConfig.jev);
+	// v0.35+) without a pi provider for it. No-op for catalog classifiers. Registered
+	// once per distinct endpoint, since several virtual models may share one.
+	const registeredEndpoints = new Set<string>();
+	for (const modelConfig of modelConfigs) {
+		const jev = modelConfig.jev;
+		if (jev?.baseUrl === undefined) continue;
+		const key = `${jev.provider}|${jev.baseUrl}`;
+		if (registeredEndpoints.has(key)) continue;
+		registeredEndpoints.add(key);
+		registerLocalClassifier(pi, jev);
+	}
 
-	pi.registerVirtualModel<SwitchbackState>({
-		provider: SWITCHBACK_PROVIDER,
-		id: SWITCHBACK_VIRTUAL_ID,
-		name: modelConfig.name,
-		thinkingLevels: ["off", "low", "medium", "high"],
-		async route(request, ctx) {
-			const now = Date.now();
-			const blocked = readBlockedMap(now);
-			// Wire the no-classifier report to ctx.ui.notify when pi is running
-			// in a UI-capable mode (TUI / RPC). In non-UI modes (print, RPC-no-ui)
-			// the call is a no-op so simulate/replay and headless runs are silent.
-			const notify: import("./src/routing.ts").NotifyFn = ctx.hasUI
-				? (message, type) => ctx.ui.notify(message, type)
-				: () => {};
-			const result = await decide(request.reason, request, modelConfig, ctx.modelRegistry, {
-				now,
-				blocked,
-				notify,
-			});
-			return buildRoute(ctx.modelRegistry, result.decision, result.thinkingLevel, result.nextState);
-		},
-	});
+	for (const modelConfig of modelConfigs) {
+		pi.registerVirtualModel<SwitchbackState>({
+			provider: virtualProvider(modelConfig.id),
+			id: virtualId(modelConfig.id),
+			name: modelConfig.name,
+			// One fixed category scale for every switchback model. The concrete model's
+			// own level map is resolved at activation time by the classifier, so the
+			// offered set does not have to be the intersection of the fallbacks' maps.
+			thinkingLevels: SWITCHBACK_THINKING_LEVELS,
+			async route(request, ctx) {
+				const now = Date.now();
+				const blocked = readBlockedMap(now);
+				// Wire the no-classifier report to ctx.ui.notify when pi is running
+				// in a UI-capable mode (TUI / RPC). In non-UI modes (print, RPC-no-ui)
+				// the call is a no-op so simulate/replay and headless runs are silent.
+				const notify: import("./src/routing.ts").NotifyFn = ctx.hasUI
+					? (message, type) => ctx.ui.notify(message, type)
+					: () => {};
+				const result = await decide(request.reason, request, modelConfig, ctx.modelRegistry, {
+					now,
+					blocked,
+					notify,
+				});
+				return buildRoute(ctx.modelRegistry, result.decision, result.thinkingLevel, result.nextState);
+			},
+		});
+	}
 
 	// `/switchback-config` surfaces the active config source for the user.
 	pi.registerCommand("switchback-config", {
-		description: "Show the active switchback config source and fallback list",
+		description: "Show the active switchback config source and fallback lists",
 		handler: async (_args, ctx) => {
-			const resolved = resolveFallbacks(modelConfig.fallbacks, ctx.modelRegistry as AvailabilityRegistry);
-			const lines: string[] = [
-				`config source: ${configSource}`,
-				`fallbacks (in order, with availability):`,
-				...modelConfig.fallbacks.map((f: ModelId, i: number) => {
+			const lines: string[] = [`config source: ${configSource}`];
+			for (const modelConfig of modelConfigs) {
+				const resolved = resolveFallbacks(modelConfig.fallbacks, ctx.modelRegistry as AvailabilityRegistry);
+				lines.push(`${modelConfig.id}  (${resolved.effectiveCount} effective / ${resolved.greyedCount} greyed)`);
+				modelConfig.fallbacks.forEach((f: ModelId, i: number) => {
 					const r = resolved.entries[i];
 					const suffix = r && r.availability !== "effective" ? `  [greyed: ${r.reason ?? r.availability}]` : "";
-					return `  ${i + 1}. ${f}${suffix}`;
-				}),
-				`effective: ${resolved.effectiveCount} / greyed: ${resolved.greyedCount}`,
-				`classifier: ${modelConfig.jev ? `${modelConfig.jev.provider}/${modelConfig.jev.id}` : "(none; cycling on any failure)"}`,
-			];
+					lines.push(`  ${i + 1}. ${f}${suffix}`);
+				});
+				lines.push(`  classifier: ${modelConfig.jev ? `${modelConfig.jev.provider}/${modelConfig.jev.id}` : "(none; cycling on any failure)"}`);
+			}
 			await ctx.ui.notify(lines.join("\n"), "info");
 		},
 	});
@@ -100,26 +117,27 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	// `/switchback` — comprehensive status (current model, effective vs greyed,
-	// active blocks with expiry, dwell state).
+	// `/switchback` — comprehensive status (every configured virtual model,
+	// effective vs greyed, active blocks with expiry).
 	pi.registerCommand("switchback", {
-		description: "Show switchback status: current model, fallbacks (effective/greyed), active blocks",
+		description: "Show switchback status: configured models, fallbacks (effective/greyed), active blocks",
 		handler: async (_args, ctx) => {
-			const resolved = resolveFallbacks(modelConfig.fallbacks, ctx.modelRegistry as AvailabilityRegistry);
 			const now = Date.now();
 			const blocked = readBlockedMap(now);
-			const lines: string[] = [];
-			lines.push(`switchback config: ${configSource}`);
-			lines.push(`fallbacks (${resolved.effectiveCount} effective, ${resolved.greyedCount} greyed):`);
-			for (const entry of resolved.entries) {
-				if (entry.availability === "effective") {
-					const isBlockedNow = isBlocked(entry.id, now, blocked);
-					const blockNote = isBlockedNow
-						? `  [blocked, resets in ${Math.ceil((blocked[entry.id]! - now) / 60_000)} min]`
-						: "";
-					lines.push(`  ✓ ${entry.id}${blockNote}`);
-				} else {
-					lines.push(`  ✗ ${entry.id}  [${entry.availability}: ${entry.reason ?? ""}]`);
+			const lines: string[] = [`switchback config: ${configSource}`];
+			for (const modelConfig of modelConfigs) {
+				const resolved = resolveFallbacks(modelConfig.fallbacks, ctx.modelRegistry as AvailabilityRegistry);
+				lines.push(`${modelConfig.id} (${resolved.effectiveCount} effective, ${resolved.greyedCount} greyed):`);
+				for (const entry of resolved.entries) {
+					if (entry.availability === "effective") {
+						const isBlockedNow = isBlocked(entry.id, now, blocked);
+						const blockNote = isBlockedNow
+							? `  [blocked, resets in ${Math.ceil((blocked[entry.id]! - now) / 60_000)} min]`
+							: "";
+						lines.push(`  ✓ ${entry.id}${blockNote}`);
+					} else {
+						lines.push(`  ✗ ${entry.id}  [${entry.availability}: ${entry.reason ?? ""}]`);
+					}
 				}
 			}
 			const activeBlocks = Object.entries(blocked).filter(([, ts]) => ts > now);
@@ -153,7 +171,7 @@ export default function (pi: ExtensionAPI) {
 				await ctx.ui.notify(`unknown scenario "${scenario}"; known: ${known}`, "warning");
 				return;
 			}
-			const result = await runSimulate(modelConfig, message, ctx.modelRegistry);
+			const result = await runSimulate(modelConfigs[0]!, message, ctx.modelRegistry);
 			const picked: ModelId = result.decision.kind === "exhausted" || result.decision.kind === "config-invalid"
 				? "(none)"
 				: result.decision.modelId;
@@ -228,6 +246,18 @@ async function runSimulate(
 	const now = Date.now();
 	const blocked = readBlockedMap(now);
 	return simulateRetry(message, modelConfig, registry, { now, blocked });
+}
+
+/** Provider part of a configured virtual model id (`switchback/auto` -> `switchback`). */
+function virtualProvider(fullId: string): string {
+	const slash = fullId.indexOf("/");
+	return slash > 0 ? fullId.slice(0, slash) : SWITCHBACK_PROVIDER;
+}
+
+/** Id part of a configured virtual model id (`switchback/auto` -> `auto`). */
+function virtualId(fullId: string): string {
+	const slash = fullId.indexOf("/");
+	return slash >= 0 ? fullId.slice(slash + 1) : fullId;
 }
 
 /**

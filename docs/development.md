@@ -18,28 +18,32 @@ Build steps 1–8 are complete (per the design doc):
   [Classifier → Coverage matrix](classifier.md#coverage-matrix)).
 - [x] **Step 5** — `route()` reason dispatch (`user` / `continuation` / `retry` / `direct`) per design doc.
 - [x] **Step 6** — Simulate mode: `switchback.simulate.json` fixture + `/switchback-simulate` command.
-- [x] **Step 7** — Integration tests: **120 tests** covering all reasons, blind cycle, all five
+- [x] **Step 7** — Integration tests: **144 tests** covering all reasons, blind cycle, all five
   no-classifier reasons, classifier-mocked quota / auth / transient / unknown, F2
-  (`stopReason` short-circuit), exhaustion, state persistence + migration, crash store
+  (`stopReason` short-circuit), session stickiness + forward failover walk, exhaustion,
+  state persistence + migration, crash store
   (roundtrip, dedup, Tier 2b cache, validation, corrupt-file quarantine), command output
-  snapshots, config + `DEFAULT_CONFIG` and classifier-field validation. Plus **9 opt-in**
+  snapshots, config + `DEFAULT_CONFIG` and classifier-field validation. Plus **10 opt-in**
   live-classifier tests, skipped unless configured.
 - [x] **Step 8** — Catalog validity & degraded lists: per-route availability resolution, single-model warning, `/switchback` status command.
 
 ## Test layout
 
-**120** unit/integration tests across 7 files, plus **9 opt-in**
+**144** unit/integration tests across 10 files, plus **10 opt-in**
 live-classifier cases:
 
 | File | Tests | Covers |
 |---|---|---|
-| `tests/router.test.ts` | 54 | routing, blind cycle, classifier-mocked verdicts, dwell, catalog validity, exhaustion, state, buildRoute |
+| `tests/router.test.ts` | 62 | routing, blind cycle, classifier-mocked verdicts, session stickiness, forward failover walk, catalog validity, exhaustion, thinking-level resolution, state, buildRoute |
 | `tests/classify-inventory.test.ts` | 15 | corpus-preservation in `switchback.simulate.json` |
 | `tests/crashes.test.ts` | 25 | crash store, dedup, Tier 2b cache, annotation, corrupt-file quarantine |
 | `tests/state-migration.test.ts` | 5 | legacy `<cwd>/.pi/switchback.json` → new path migration |
 | `tests/commands.test.ts` | 6 | command-output snapshots + annotate-args parser |
 | `tests/config.test.ts` | 14 | `DEFAULT_CONFIG`, `findModelConfig`, lookup order, YAML-only, classifier-field validation |
-| `tests/integration-classifier.test.ts` | 10 (9 opt-in) | live classifier against the preserved corpus (gated on `SWITCHBACK_CLASSIFIER_*`) |
+| `tests/systemone.test.ts` | 5 | switchback's own System One transport (hermetic; injected fetch) |
+| `tests/thinking.test.ts` | 10 | reasoning-level categories, availability, and classifier resolution (hermetic) |
+| `tests/imports.test.ts` | 2 | shipped code never value-imports a host-package subpath (install-safe) |
+| `tests/integration-classifier.test.ts` | 11 (10 opt-in) | live classifier against the preserved corpus (gated on `SWITCHBACK_CLASSIFIER_*`) |
 
 ## From source
 

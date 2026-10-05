@@ -57,7 +57,7 @@
  * `crashes.json` so a future bump to v1.1 can invalidate stale verdicts.
  */
 
-import type { ClassifierApi, ClassifierContext, ClassifierModel, ClassifierResult, StopReason } from "@earendil-works/pi-ai";
+import type { ClassifierAnswer, ClassifierApi, ClassifierContext, ClassifierModel, ClassifierResult, StopReason } from "@earendil-works/pi-ai";
 import { hashSample, lookupCrash } from "./crashes.ts";
 import type { ClassifiedError, ErrorClass, ErrorScope } from "./types.ts";
 
@@ -148,7 +148,8 @@ const JEV_QUESTIONS = {
 	},
 } as const;
 
-const JEV_TIMEOUT_MS = 5_000;
+/** Timeout for one classifier call. */
+export const CLASSIFIER_TIMEOUT_MS = 5_000;
 
 function normaliseClass(value: unknown): ErrorClass {
 	if (typeof value !== "string") return "unknown";
@@ -236,6 +237,67 @@ export type ClassificationResult =
 	| { kind: "no-classifier"; reason: NoClassifierReason };
 
 /**
+ * The result of one classifier call, before any interpretation.
+ *
+ * `answer` is the transport's raw `ClassifierResult`; `no-classifier` names why no
+ * answer was obtained. Never a thrown error: every failure mode is a reason.
+ */
+export type ClassifierCallResult =
+	| { kind: "answer"; result: ClassifierResult }
+	| { kind: "no-classifier"; reason: NoClassifierReason };
+
+/**
+ * Resolve the configured classifier and ask it one set of questions.
+ *
+ * Shared by error classification and reasoning-level recommendation so both get
+ * the same resolver, timeout and failure handling. A null race result means the
+ * call exceeded `timeoutMs`; the timer is always cleared.
+ */
+export async function callClassifier(
+	registry: ClassifierRegistry,
+	jev: { provider: string; id: string } | undefined,
+	context: ClassifierContext,
+	timeoutMs: number = CLASSIFIER_TIMEOUT_MS,
+): Promise<ClassifierCallResult> {
+	if (jev === undefined) {
+		return { kind: "no-classifier", reason: "not-configured" };
+	}
+	const handle = findJev(registry, jev);
+	if (handle === undefined) {
+		return { kind: "no-classifier", reason: "unresolvable" };
+	}
+	let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+	try {
+		const result = await Promise.race([
+			registry.classify(handle, context),
+			new Promise<null>((resolve) => {
+				timeoutHandle = setTimeout(() => resolve(null), timeoutMs);
+			}),
+		]);
+		if (result === null) return { kind: "no-classifier", reason: "timeout" };
+		return { kind: "answer", result };
+	} catch {
+		return { kind: "no-classifier", reason: "threw" };
+	} finally {
+		if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+	}
+}
+
+/**
+ * Read a `choice` answer out of a classifier result. Returns undefined when the
+ * result carries no `answers` object, no answer for `questionId`, or an answer
+ * that is not a choice - the transport is an external payload, so a malformed
+ * result is a missing answer rather than an exception.
+ */
+export function readChoice(result: ClassifierResult, questionId: string): string | undefined {
+	const answers: Record<string, ClassifierAnswer | undefined> | undefined = result.answers;
+	if (answers === undefined) return undefined;
+	const answer = answers[questionId];
+	if (answer === undefined || answer.type !== "choice") return undefined;
+	return answer.choice;
+}
+
+/**
  * Classify one failed request's error message.
  *
  * Returns a tagged `ClassificationResult` so the caller can distinguish a
@@ -282,36 +344,16 @@ export async function classifyError(
 
 	// Branch 2: classifier. Any failure (not configured, unresolvable,
 	// timeout, threw, unparseable) falls through to "no-classifier".
-	if (jev === undefined) {
-		return { kind: "no-classifier", reason: "not-configured" };
+	const call = await callClassifier(registry, jev, {
+		state: { prompt: message.slice(0, 16_000) },
+		questions: JEV_QUESTIONS,
+	});
+	if (call.kind === "no-classifier") {
+		return call;
 	}
-	const handle = findJev(registry, jev);
-	if (handle === undefined) {
-		return { kind: "no-classifier", reason: "unresolvable" };
+	const classified = fromJevResult(message, call.result, now);
+	if (classified === null) {
+		return { kind: "no-classifier", reason: "unparseable" };
 	}
-
-	let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-	try {
-		const result = await Promise.race([
-			registry.classify(handle, {
-				state: { prompt: message.slice(0, 16_000) },
-				questions: JEV_QUESTIONS,
-			}),
-			new Promise<null>((resolve) => {
-				timeoutHandle = setTimeout(() => resolve(null), JEV_TIMEOUT_MS);
-			}),
-		]);
-		if (result === null) {
-			return { kind: "no-classifier", reason: "timeout" };
-		}
-		const classified = fromJevResult(message, result, now);
-		if (classified === null) {
-			return { kind: "no-classifier", reason: "unparseable" };
-		}
-		return { kind: "classified", classified };
-	} catch {
-		return { kind: "no-classifier", reason: "threw" };
-	} finally {
-		if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
-	}
+	return { kind: "classified", classified };
 }

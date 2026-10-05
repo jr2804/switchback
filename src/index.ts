@@ -4,10 +4,12 @@
  * can `import { decide, ... } from "..//src/index.ts"` without enumerating modules.
  */
 
-export { decide, buildRoute, ConfigInvalidError, MAX_TRANSIENT_RETRIES, MIN_DWELL_MS } from "./routing.ts";
-export type { Decision, NotifyFn, RouteInputs, RouterRegistry } from "./routing.ts";
-export { classifyError, PROMPT_VERSION } from "./classify.ts";
-export type { ClassificationResult, NoClassifierReason } from "./classify.ts";
+export { decide, buildRoute, ConfigInvalidError, MAX_TRANSIENT_RETRIES } from "./routing.ts";
+export type { Decision, DecisionOutcome, NotifyFn, RouteInputs, RouterRegistry } from "./routing.ts";
+export { classifyError, PROMPT_VERSION, callClassifier, readChoice, CLASSIFIER_TIMEOUT_MS } from "./classify.ts";
+export type { ClassificationResult, NoClassifierReason, ClassifierCallResult, ClassifierRegistry } from "./classify.ts";
+export { chooseThinkingLevel, availableCategories, supportedLevels, SWITCHBACK_THINKING_LEVELS, THINKING_PROMPT_VERSION } from "./thinking.ts";
+export type { ThinkingLevelChoice, ThinkingLevelContext, ThinkingLevelSource } from "./thinking.ts";
 export { blockModel, isBlocked, readBlockedMap, unblockModel, stateFilePath } from "./state.ts";
 export {
 	readCrashMap,

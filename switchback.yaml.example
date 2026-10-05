@@ -1,8 +1,12 @@
 # switchback example config
 #
-# Copy to one of these locations (first match wins):
-#   <cwd>/switchback.yaml
-#   ~/.pi/agent/switchback.yaml
+# switchback user config. Copy to ONE of these locations (first match wins):
+#   <project>/.pi/switchback.yaml    per-project override (gitignored, never committed)
+#   ~/.pi/agent/switchback.yaml      your global copy
+#
+# The project-local slot is `.pi/` on purpose: git ignores it, so the real
+# config can never end up in a repository. This repository ships only this
+# example file.
 #
 # User config is YAML only - a .json config is rejected.
 #

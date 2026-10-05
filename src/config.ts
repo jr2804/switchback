@@ -2,9 +2,14 @@
  * User-facing switchback config loader.
  *
  * Lookup order:
- *   1. <cwd>/switchback.yaml
- *   2. <piConfigDir>/switchback.yaml     (piConfigDir = ~/.pi/agent by default)
+ *   1. <cwd>/.pi/switchback.yaml            (per-project override)
+ *   2. <piConfigDir>/switchback.yaml        (piConfigDir = ~/.pi/agent by default)
  *   3. built-in DEFAULT_CONFIG
+ *
+ * The project-local slot lives under `.pi/` deliberately: `.pi/` is ignored by
+ * git (pi's own convention), so a per-project override can never be committed
+ * into a repository the way a repo-root `switchback.yaml` would be. The repo
+ * ships only `switchback.yaml.example` as the template.
  *
  * The first match that parses and validates wins. Errors in the chosen config
  * throw - they should be surfaced immediately, not silently fallen through to a
@@ -13,9 +18,9 @@
  * DEFAULT_CONFIG ships with `fallbacks: []` (no provider hardcoded) so a configless
  * user gets a clear, actionable error instead of a silently-broken router. The
  * fail-fast happens at extension load: `findModelConfig()` throws ConfigError
- * from index.ts:24 (module top level) before route()/decide() ever runs. The
- * message names the two known fixes ("Ship switchback.yaml or set the agent-dir
- * copy at ~/.pi/agent/switchback.yaml and re-launch."). Until the user does
+ * from index.ts (module top level) before route()/decide() ever runs. The
+ * message names the two known fixes ("Configure fallbacks in <cwd>/.pi/switchback.yaml
+ * or ~/.pi/agent/switchback.yaml and re-launch."). Until the user does
  * that, the extension is unavailable and `/switchback` diagnostics are not
  * registered; with `defaultModel=switchback/auto` in pi's settings.json, every
  * new session also starts with an invalid default. Trade-off accepted: prefer
@@ -47,8 +52,8 @@ const SUPPORTED_LOCAL_CLASSIFIER_APIS: readonly string[] = ["typesafe-system-one
  *
  * Empty by design: an empty fallback list routes to the `config-invalid`
  * decision path so the user gets a clear, actionable error instead of a
- * silently-broken router. The shipped `switchback.yaml` (or a per-project
- * override) is what fills this in.
+ * silently-broken router. A project-local `.pi/switchback.yaml` or the
+ * agent-dir copy is what fills this in.
  */
 export const DEFAULT_CONFIG: SwitchbackFileConfig = {
 	models: [
@@ -94,8 +99,10 @@ function candidatePaths(): string[] {
 	// dropped from the candidate list - the only JSON files that ship in this
 	// project are machine-managed (`<piConfigDir>/switchback/blocks.json` runtime
 	// state, the simulate fixture `switchback.simulate.json`).
+	// The project-local slot is `.pi/`, which git ignores, so a per-project
+	// override never lands in a repository.
 	return [
-		join(cwd, `${CONFIG_BASENAME}.yaml`),
+		join(cwd, ".pi", `${CONFIG_BASENAME}.yaml`),
 		join(cfg, `${CONFIG_BASENAME}.yaml`),
 	];
 }
@@ -239,7 +246,7 @@ export function findModelConfig(config: SwitchbackFileConfig, virtualId: string)
 	if (!entry) throw new ConfigError(`no config entry for virtual model "${virtualId}"`, "<config>");
 	if (entry.fallbacks.length === 0) {
 		throw new ConfigError(
-			`switchback has no fallbacks configured (source: ${entry.id}). Ship switchback.yaml or set the agent-dir copy at ~/.pi/agent/switchback.yaml and re-launch.`,
+			`switchback has no fallbacks configured (source: ${entry.id}). Configure fallbacks in <cwd>/.pi/switchback.yaml or ~/.pi/agent/switchback.yaml and re-launch.`,
 			"<default>",
 		);
 	}

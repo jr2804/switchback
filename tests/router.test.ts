@@ -1000,8 +1000,9 @@ describe("config loader", () => {
 	it("finds a config entry for switchback/auto", () => {
 		// Write an explicit config so the test does not depend on a machine-local
 		// config that happens to exist (isolated by PI_CODING_AGENT_DIR now).
+		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
 		writeFileSync(
-			join(tmpDir, "switchback.yaml"),
+			join(tmpDir, ".pi", "switchback.yaml"),
 			"models:\n  - id: switchback/auto\n    name: Auto (Switchback)\n    fallbacks:\n      - zai/glm-4.7\n",
 		);
 		const { config } = loadConfig();

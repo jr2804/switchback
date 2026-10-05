@@ -1,7 +1,7 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
 exports[`command output capture > /switchback (status) renders fallback list + active blocks 1`] = `
-"switchback config: <cwd>/switchback.yaml
+"switchback config: <cwd>/.pi/switchback.yaml
 fallbacks (4 effective, 0 greyed):
   ✓ zai/glm-5.3
   ✓ ollama-cloud/glm-5.3-flash
@@ -13,7 +13,7 @@ active blocks: (none)"
 exports[`command output capture > /switchback-blocked renders empty list when nothing is blocked 1`] = `"(no models currently blocked)"`;
 
 exports[`command output capture > /switchback-config renders fallback list with availability markers 1`] = `
-"config source: <cwd>/switchback.yaml
+"config source: <cwd>/.pi/switchback.yaml
 fallbacks (in order, with availability):
   1. zai/glm-5.3
   2. ollama-cloud/glm-5.3-flash

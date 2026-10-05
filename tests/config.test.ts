@@ -57,39 +57,47 @@ describe("DEFAULT_CONFIG", () => {
 });
 
 describe("loadConfig - precedence and override semantics", () => {
-	it("cwd switchback.yaml wins over the agent-dir copy", () => {
-		// Ship a cwd switchback.yaml with 1 fallback, and an agent-dir copy with a different one.
-		writeFileSync(join(tmpDir, "switchback.yaml"), `models:
+	it("project-local .pi/switchback.yaml wins over the agent-dir copy", () => {
+		// A project-local override in <cwd>/.pi/, and a separate agent-dir copy
+		// under a distinct PI_CODING_AGENT_DIR so the two candidates differ.
+		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+		mkdirSync(join(tmpDir, "agent"), { recursive: true });
+		writeFileSync(join(tmpDir, ".pi", "switchback.yaml"), `models:
   - id: switchback/auto
-    name: cwd override
+    name: project override
     fallbacks: ["zai/glm-5.3"]
 `);
-		// Make a fake pi config dir under tmp so the test is portable.
-		process.env["PI_CODING_AGENT_DIR"] = tmpDir;
-		writeFileSync(join(tmpDir, "switchback.yaml"), `models:
+		process.env["PI_CODING_AGENT_DIR"] = join(tmpDir, "agent");
+		writeFileSync(join(tmpDir, "agent", "switchback.yaml"), `models:
   - id: switchback/auto
     name: agent-dir copy
     fallbacks: ["ollama-cloud/glm-5.3-flash"]
 `);
-		// Reset to write the cwd file explicitly (env override path won the slot for the
-		// agent-dir). Now write a proper cwd file at the second slot and re-test.
-		// Simpler: write the cwd yaml last so it occupies the cwd slot.
-		writeFileSync(join(tmpDir, "switchback.yaml"), `models:
+		const { config, source } = loadConfig();
+		expect(config.models[0]?.name).toBe("project override");
+		expect(source).toContain(join(tmpDir, ".pi", "switchback.yaml"));
+	});
+
+	it("agent-dir copy is used when no project-local override exists", () => {
+		mkdirSync(join(tmpDir, "agent"), { recursive: true });
+		process.env["PI_CODING_AGENT_DIR"] = join(tmpDir, "agent");
+		writeFileSync(join(tmpDir, "agent", "switchback.yaml"), `models:
   - id: switchback/auto
-    name: cwd override
-    fallbacks: ["zai/glm-5.3"]
+    name: agent-dir copy
+    fallbacks: ["ollama-cloud/glm-5.3-flash"]
 `);
 		const { config, source } = loadConfig();
-		expect(config.models[0]?.name).toBe("cwd override");
-		expect(source).toContain("switchback.yaml");
+		expect(config.models[0]?.name).toBe("agent-dir copy");
+		expect(source).toContain(join(tmpDir, "agent", "switchback.yaml"));
 	});
 });
 
 describe("loadConfig - yaml-only lookup (no JSON user config)", () => {
 	it("does not consider switchback.json in the candidate list", () => {
-		// Ship a switchback.json with a valid file-config in the cwd. The loader
+		// Ship a switchback.json next to the project-local yaml slot. The loader
 		// should NOT pick it up - user config is YAML only.
-		writeFileSync(join(tmpDir, "switchback.json"), JSON.stringify({
+		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+		writeFileSync(join(tmpDir, ".pi", "switchback.json"), JSON.stringify({
 			models: [{ id: "switchback/auto", name: "should be ignored", fallbacks: ["zai/glm-5.3"] }],
 		}));
 		const { config, source } = loadConfig();
@@ -101,8 +109,9 @@ describe("loadConfig - yaml-only lookup (no JSON user config)", () => {
 
 describe("loadConfig - classifier endpoint fields (jev.baseUrl)", () => {
 	const writeConfig = (jevLines: string): void => {
+		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
 		writeFileSync(
-			join(tmpDir, "switchback.yaml"),
+			join(tmpDir, ".pi", "switchback.yaml"),
 			`models:\n  - id: switchback/auto\n    name: Auto (Switchback)\n    fallbacks: ["zai/glm-5.3"]\n    jev:\n${jevLines}`,
 		);
 	};

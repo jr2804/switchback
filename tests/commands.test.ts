@@ -60,10 +60,12 @@ describe("command output capture", () => {
 		originalAgentDir = process.env["PI_CODING_AGENT_DIR"];
 		tmpDir = join(tmpdir(), `switchback-commands-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 		mkdirSync(tmpDir, { recursive: true });
-		// Copy the user config and the simulate fixture so the test exercises the
+		// Copy the example config as the project-local override (the repo ships no
+		// real switchback.yaml) and the simulate fixture, so the test exercises the
 		// shipped 4-provider list rather than DEFAULT_CONFIG.
 		copyFileSync(join(originalCwd, "switchback.simulate.json"), join(tmpDir, "switchback.simulate.json"));
-		copyFileSync(join(originalCwd, "switchback.yaml"), join(tmpDir, "switchback.yaml"));
+		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+		copyFileSync(join(originalCwd, "switchback.yaml.example"), join(tmpDir, ".pi", "switchback.yaml"));
 		// Isolate state by chdir to a tmp dir AND pointing the agent config
 		// dir at the same tmp (state.ts reads from <agentDir>/switchback/blocks.json).
 		process.env["PI_CODING_AGENT_DIR"] = tmpDir;
@@ -94,7 +96,7 @@ describe("command output capture", () => {
 		const now = Date.now();
 		const blocked = readBlockedMap(now);
 		const lines: string[] = [];
-		lines.push(`switchback config: <cwd>/switchback.yaml`);
+		lines.push(`switchback config: <cwd>/.pi/switchback.yaml`);
 		lines.push(`fallbacks (${resolved.effectiveCount} effective, ${resolved.greyedCount} greyed):`);
 		for (const entry of resolved.entries) {
 			if (entry.availability === "effective") {
@@ -125,7 +127,7 @@ describe("command output capture", () => {
 		const { config, source } = loadConfig();
 		const modelConfig = config.models[0]!;
 		// Normalize the source path so the dynamic tmp dir doesn't bias the snapshot.
-		const normalizedSource = source.replace(/\\/g, "/").includes("/switchback.yaml") ? "<cwd>/switchback.yaml" : source;
+		const normalizedSource = source.replace(/\\/g, "/").includes("/switchback.yaml") ? "<cwd>/.pi/switchback.yaml" : source;
 		const lines: string[] = [
 			`config source: ${normalizedSource}`,
 			`fallbacks (in order, with availability):`,

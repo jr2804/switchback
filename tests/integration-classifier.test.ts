@@ -141,6 +141,7 @@ const CORPUS: readonly CorpusCase[] = [
 	{ scenario: "auth-zai-token-expired", expected: "auth" },
 	{ scenario: "transient-5xx", expected: "transient" },
 	{ scenario: "transient-timeout", expected: "transient" },
+	{ scenario: "transient-overloaded", expected: "transient" },
 ];
 
 const FIXTURE_PATH = fileURLToPath(new URL("../switchback.simulate.json", import.meta.url));

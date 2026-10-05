@@ -7,6 +7,7 @@
     "auth-failure": "401 Unauthorized: invalid API key for provider.",
     "transient-5xx": "502 Bad Gateway: upstream timeout.",
     "transient-timeout": "Request timed out after 30s.",
+    "transient-overloaded": "Error: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"The server cluster is currently under high load. Please retry after a short wait and thank you for your patience. (2064) (529)\"},\"request_id\":\"0712991643802d84011aceea62a4c207\"}",
     "unknown-html": "<html><body>500 Internal Server Error</body></html>",
     "auth-account-suspended": "403 Forbidden: account is suspended. Contact support.",
     "auth-zai-token-expired": "401: {\"error\":{\"code\":\"401\",\"message\":\"token expired or incorrect\"}}"

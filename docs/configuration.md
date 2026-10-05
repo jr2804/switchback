@@ -20,22 +20,33 @@ The YAML-only rule applies to **user config** only. JSON stays for files that
 are written by the runtime or used as read-only fixtures; switchback never
 parses a user-supplied JSON config.
 
-## Lookup order (first valid match wins)
+## Config layers and aggregation
 
-1. `<cwd>/.pi/switchback.yaml` (per-project override)
-2. `~/.pi/agent/switchback.yaml`
-3. Built-in `DEFAULT_CONFIG` (empty fallback list — surfaces a `ConfigError`
-   pointing the user at this section; see below).
+Two optional user layers exist:
+
+1. `<cwd>/.pi/switchback.yaml` (per-project layer)
+2. `~/.pi/agent/switchback.yaml` (global layer)
+
+With neither present, the built-in `DEFAULT_CONFIG` (empty fallback list —
+surfaces a `ConfigError` pointing the user at this section; see below) applies.
+
+The layers are **aggregated**, not first-match-wins: the merged model list is
+the global list with per-project entries overriding same-id entries **in
+place**, and project-only models appended after the global ones in project
+order. A duplicated model id therefore means the project entry wins wholesale
+— fallbacks, name and classifier — with no field-level merging.
 
 The project-local slot lives under `.pi/` deliberately: git ignores that
 directory (pi's own convention), so a per-project override can never be
 committed into a repository the way a repo-root `switchback.yaml` would be.
 The repo ships only `switchback.yaml.example` as the template. Practically:
 
-- **Inside a project with an override** (`<project>/.pi/switchback.yaml`):
-  that file is loaded.
-- **Anywhere else** (no override): the agent-dir copy at
-  `~/.pi/agent/switchback.yaml` is loaded.
+- **Inside a project with a `.pi/switchback.yaml`**: that layer is merged on
+  top of the global one (or stands alone if no global copy exists).
+- **Anywhere else**: the global copy is used verbatim.
+
+A layer that exists but fails to parse or validate throws immediately — a
+broken layer is surfaced, never silently dropped in favour of the other.
 
 ## `DEFAULT_CONFIG` and the empty-fallbacks design
 

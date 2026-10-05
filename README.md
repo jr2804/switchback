@@ -46,13 +46,18 @@ pi --model switchback/auto -p "ping" --no-tools   # -> pong
 
 ## Configuration
 
-`switchback.yaml` is the single user config format (YAML only). Lookup order:
+`switchback.yaml` is the single user config format (YAML only). Two optional layers,
+**aggregated** on startup (not first-match-wins):
 
-1. `<cwd>/.pi/switchback.yaml` (per-project override; `.pi/` is gitignored, so it never lands in a repo)
-2. `~/.pi/agent/switchback.yaml`
-3. Built-in `DEFAULT_CONFIG` (empty `fallbacks: []` — surfaces a `ConfigError`).
+1. `<cwd>/.pi/switchback.yaml` — per-project layer (`.pi/` is gitignored, so it never lands in a repo)
+2. `~/.pi/agent/switchback.yaml` — global layer
+3. Neither present → built-in `DEFAULT_CONFIG` (empty `fallbacks: []` — surfaces a `ConfigError`).
 
-The repo ships only `switchback.yaml.example` as the template.
+The merged model list is the global list with per-project entries overriding
+same-id entries **in place** (a duplicated model id means the project entry wins
+wholesale) and project-only models appended. A layer that exists but is invalid
+fails startup loudly instead of being skipped. The repo ships only
+`switchback.yaml.example` as the template.
 
 The optional `jev:` entry names a classifier (SystemOne); with `baseUrl` set, switchback
 registers a local endpoint itself (e.g. an Ollama v0.35+ decision model) — see

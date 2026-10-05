@@ -48,9 +48,11 @@ pi --model switchback/auto -p "ping" --no-tools   # -> pong
 
 `switchback.yaml` is the single user config format (YAML only). Lookup order:
 
-1. `<cwd>/switchback.yaml`
+1. `<cwd>/.pi/switchback.yaml` (per-project override; `.pi/` is gitignored, so it never lands in a repo)
 2. `~/.pi/agent/switchback.yaml`
 3. Built-in `DEFAULT_CONFIG` (empty `fallbacks: []` — surfaces a `ConfigError`).
+
+The repo ships only `switchback.yaml.example` as the template.
 
 The optional `jev:` entry names a classifier (SystemOne); with `baseUrl` set, switchback
 registers a local endpoint itself (e.g. an Ollama v0.35+ decision model) — see

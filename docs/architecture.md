@@ -21,7 +21,7 @@
 | `tests/commands.test.ts` | 6 snapshot + parser tests of the six command outputs and the annotate-args parser. |
 | `tests/config.test.ts` | 14 tests covering DEFAULT_CONFIG, findModelConfig errors, cwd-first precedence, the YAML-only lookup, and the classifier-field validation (baseUrl / api / apiKey). |
 | `tests/integration-classifier.test.ts` | 11 opt-in tests (10 skipped by default) that drive the real `classifyError` through a real SystemOne transport against the corpus. Gated on `SWITCHBACK_CLASSIFIER_*` env vars — see [Classifier](classifier.md#live-classifier-validation-opt-in). |
-| `switchback.yaml` / `.example` | User config (default 4-provider fallback list). |
+| `switchback.yaml.example` | Config template. The real user config lives at `<cwd>/.pi/switchback.yaml` or `~/.pi/agent/switchback.yaml` and is never shipped. |
 | `switchback.simulate.json` | Synthetic error scenarios for `/switchback-simulate`. |
 
 ## Routing flow

@@ -11,7 +11,7 @@ timestamp wins) and then deleted.
 
 | File | Format | Role | Owned by | Location |
 |---|---|---|---|---|
-| `switchback.yaml` | YAML | Human config: fallback list, optional Jev classifier. Ship in your repo or `~/.pi/agent/`. | user | cwd or agent dir |
+| `switchback.yaml` | YAML | Human config: fallback list, optional Jev classifier. Per-project override or `~/.pi/agent/`. | user | `<cwd>/.pi/` or agent dir |
 | `blocks.json` | JSON | Runtime blocked-until map (atomic write, lazy prune). Created on first block. Migrated from the legacy `<cwd>/.pi/switchback.json` path on first read. | switchback | `<piConfigDir>/switchback/` |
 | `crashes.json` | JSON | Runtime crash dedup store: sha256(raw) → entry. Created on first failure. User annotations become the Tier 2b cache. | switchback | `<piConfigDir>/switchback/` |
 | `switchback.simulate.json` | JSON | Synthetic error scenarios for `/switchback-simulate`. | user (shipped) | repo (cwd) |
@@ -22,33 +22,33 @@ parses a user-supplied JSON config.
 
 ## Lookup order (first valid match wins)
 
-1. `<cwd>/switchback.yaml`
+1. `<cwd>/.pi/switchback.yaml` (per-project override)
 2. `~/.pi/agent/switchback.yaml`
 3. Built-in `DEFAULT_CONFIG` (empty fallback list — surfaces a `ConfigError`
    pointing the user at this section; see below).
 
-The cwd slot takes priority over the agent-dir slot. Practically:
+The project-local slot lives under `.pi/` deliberately: git ignores that
+directory (pi's own convention), so a per-project override can never be
+committed into a repository the way a repo-root `switchback.yaml` would be.
+The repo ships only `switchback.yaml.example` as the template. Practically:
 
-- **Inside the project directory** (e.g. `cd <repo>`): the project's own
-  `switchback.yaml` is loaded.
-- **Anywhere else** (e.g. from `~`, or from any unrelated project): the
-  agent-dir copy at `~/.pi/agent/switchback.yaml` is loaded.
-
-The agent-dir copy is what the daily-driver Path B install creates; the
-project copy is what contributors and CI use. The lookup is cwd-first so
-per-project overrides always win.
+- **Inside a project with an override** (`<project>/.pi/switchback.yaml`):
+  that file is loaded.
+- **Anywhere else** (no override): the agent-dir copy at
+  `~/.pi/agent/switchback.yaml` is loaded.
 
 ## `DEFAULT_CONFIG` and the empty-fallbacks design
 
 `DEFAULT_CONFIG` ships with `fallbacks: []`. This is intentional: if a user
-has neither a cwd copy nor an agent-dir copy, the router should fail loudly
+has neither a project-local copy nor an agent-dir copy, the router should fail loudly
 with a clear `ConfigError` ("no fallbacks configured") rather than silently
 fall through to a placeholder that may or may not exist in the catalog at
 any given moment.
 
-The shipped `switchback.yaml` (and its `.example` twin) carries the
-4-provider fallback list and is what fills `DEFAULT_CONFIG` in practice. Both
-files contain only model ids and a classifier reference — no API keys, no
+`switchback.yaml.example` carries the 4-provider fallback list as the
+template; a copy of it at `<project>/.pi/switchback.yaml` or
+`~/.pi/agent/switchback.yaml` is what fills `DEFAULT_CONFIG` in practice. It
+contains only model ids and a classifier reference — no API keys, no
 tokens, no account identifiers. Credentials are read from environment
 variables by pi itself, not by switchback.
 

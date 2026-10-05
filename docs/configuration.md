@@ -48,6 +48,29 @@ The repo ships only `switchback.yaml.example` as the template. Practically:
 A layer that exists but fails to parse or validate throws immediately — a
 broken layer is surfaced, never silently dropped in favour of the other.
 
+## Diagnostics (`debug`)
+
+A top-level boolean emits one notification per model switch, so a live session
+shows what the router did instead of only the (quiet) success cases:
+
+```yaml
+debug: true
+```
+
+Each switch line names the models involved, the decision reason (which for a
+blocked path includes the classifier's verdict and its reset window) and how
+the requested reasoning category resolved against the model that is about to
+serve the request - including the classifier's confidence and the levels that
+model supports. The `SWITCHBACK_DEBUG=1` environment variable overrides the
+config entry, so a session can be diagnosed without a config edit:
+
+```bash
+SWITCHBACK_DEBUG=1 pi --model switchback/auto
+```
+
+With the flag off (the default) switches are silent; the no-classifier warning
+is always shown, regardless of this flag.
+
 ## `DEFAULT_CONFIG` and the empty-fallbacks design
 
 `DEFAULT_CONFIG` ships with `fallbacks: []`. This is intentional: if a user

@@ -59,7 +59,7 @@ import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import type { Api, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { pickNextEffective, resolveFallbacks, type AvailabilityRegistry } from "./availability.ts";
 import { classifyError, PROMPT_VERSION, type NoClassifierReason } from "./classify.ts";
-import { chooseThinkingLevel, type ThinkingLevelContext, type ThinkingLevelSource } from "./thinking.ts";
+import { availableCategories, chooseThinkingLevel, type ThinkingLevelContext, type ThinkingLevelSource } from "./thinking.ts";
 import { blockModel, unblockModel } from "./state.ts";
 import { recordCrash, type CrashAction } from "./crashes.ts";
 import type { BlockedMap, ModelId, SwitchbackConfig, SwitchbackState } from "./types.ts";
@@ -100,6 +100,8 @@ export interface RouteInputs {
 	simulateErrorMessage?: string;
 	/** When provided, the router surfaces no-classifier conditions via this sink. */
 	notify?: NotifyFn;
+	/** When true, emit one diagnostics line per model switch (see `debug:` in the config). */
+	debug?: boolean;
 }
 
 function lookupModel(registry: RouterRegistry, modelId: ModelId): Model<Api> | undefined {
@@ -242,7 +244,7 @@ export async function decide(
 
 	if (reason === "retry") {
 		const retry = await decideRetry(request, modelConfig, registry, resolved, inputs);
-		return withActivationLevel(retry, request, modelConfig, registry);
+		return resolveDispatchLevel(retry, request, modelConfig, registry, inputs);
 	}
 
 	// "user" or "direct": the session stays where it is. Stickiness is the fix for the
@@ -277,7 +279,7 @@ export async function decide(
 	if (pick.degraded && resolved.effectiveCount === 1 && !nextState.degradedWarned) {
 		nextState.degradedWarned = true;
 	}
-	return withActivationLevel(
+	return resolveDispatchLevel(
 		{
 			decision: {
 				kind: stateCurrent === pick.modelId ? "stick" : "switch",
@@ -290,6 +292,7 @@ export async function decide(
 		request,
 		modelConfig,
 		registry,
+		inputs,
 	);
 }
 
@@ -417,7 +420,7 @@ async function decideRetry(
 			nextState.degradedWarned = true;
 		}
 		return {
-			decision: { kind: "switch", modelId: pick.modelId, reason: pick.degraded ? `${classified.class}-fallback-degraded` : `${classified.class}-fallback` },
+			decision: { kind: "switch", modelId: pick.modelId, reason: (pick.degraded ? `${classified.class}-fallback-degraded` : `${classified.class}-fallback`) + resetSuffix(classified.resetAtMs, now) },
 			nextState,
 			thinkingLevel: request.thinkingLevel,
 		};
@@ -425,36 +428,76 @@ async function decideRetry(
 	return { decision: { kind: "exhausted", reason: `${classified.class}-no-fallback` }, thinkingLevel: request.thinkingLevel };
 }
 
+/** Human suffix for the reset window a blocked model got, empty when there is none. */
+function resetSuffix(resetAtMs: number | undefined, now: number): string {
+	if (resetAtMs === undefined) return "";
+	return ` (reset in ${Math.max(1, Math.round((resetAtMs - now) / 60_000))} min)`;
+}
+
 /**
- * Resolve the dispatched reasoning level for a decision that activates a model.
+ * Resolve the dispatched reasoning level for a decision.
  *
- * A `switch` decision sends the request to a model the session was not on, so the
- * user's reasoning category is resolved against that concrete model (see
- * `src/thinking.ts`): switchback's categories are fixed, the models' level maps
- * are not, and the classifier is the only decision source. Sticky decisions
- * (session-sticky, continuation, same-model retry, overflow) keep their level, so
- * the provider's thinking signature and prompt cache stay valid.
+ * - A `switch` decision sends the request to a model the session was not on, so the
+ *   user's reasoning category is resolved against that concrete model (see
+ *   `src/thinking.ts`): switchback's categories are fixed, the models' level maps
+ *   are not, and the classifier is the only decision source.
+ * - A sticky `user`/`direct` decision stays on the current model, which is when a
+ *   manual reasoning change lands. The category passes through untouched when the
+ *   staying model supports it (zero cost); when it names a category the model
+ *   cannot express, it is resolved by the classifier instead of being clamped
+ *   silently at dispatch.
+ * - Sticky *internal* routes (continuation, same-model transient retry, overflow)
+ *   keep their level in all cases: it is part of the provider's thinking
+ *   signature and prompt cache.
  */
-async function withActivationLevel(
+async function resolveDispatchLevel(
 	outcome: DecisionOutcome,
 	request: ModelRouteRequest<SwitchbackState>,
 	modelConfig: SwitchbackConfig,
 	registry: AvailabilityRegistry & RouterRegistry,
+	inputs: RouteInputs,
 ): Promise<DecisionOutcome> {
-	if (outcome.decision.kind !== "switch") return outcome;
+	const kind = outcome.decision.kind;
+	if (kind !== "switch" && kind !== "stick") return outcome;
 	const model = lookupModel(registry, outcome.decision.modelId);
 	if (model === undefined) return outcome;
+	// A manual change (sticky `user`/`direct`) only needs resolution when the staying
+	// model cannot express the requested category at all; every other sticky route is
+	// left untouched (the level is part of the thinking signature / prompt cache).
+	const isStickyManualChange =
+		kind === "stick" && (request.reason === "user" || request.reason === "direct");
+	if (!isStickyManualChange && kind === "stick") return outcome;
+	const requested = outcome.thinkingLevel;
 	const context: ThinkingLevelContext = {
 		routeReason: request.reason,
 		failover: request.failed !== undefined,
 	};
+
+	// A manual change that the staying model can express verbatim: pass it through.
+	if (isStickyManualChange && availableCategories(model).includes(requested)) {
+		return outcome;
+	}
 	const choice = await chooseThinkingLevel({
 		registry,
 		jev: modelConfig.jev,
 		model,
-		requested: outcome.thinkingLevel,
+		requested,
 		context,
 	});
+	if (inputs.debug === true) {
+		// One line per switch or unsupported manual change: what decided the route and
+		// how the requested category resolved against the model about to serve it.
+		const from = request.state?.current ?? "(new session)";
+		const head = isStickyManualChange
+			? `stays on ${outcome.decision.modelId}`
+			: `switch ${from} → ${outcome.decision.modelId}`;
+		const conf = choice.confidence === undefined ? "" : `, confidence ${choice.confidence.toFixed(2)}`;
+		const source = choice.source === "classifier" ? `classifier${conf}` : choice.reason === undefined ? "clamp" : `clamp (${choice.reason})`;
+		inputs.notify?.(
+			`switchback: ${head} [${outcome.decision.reason}] · level ${requested} → ${choice.level} (${source}; model offers: ${availableCategories(model).join(", ")})`,
+			"info",
+		);
+	}
 	return { ...outcome, thinkingLevel: choice.level, thinkingSource: choice.source };
 }
 

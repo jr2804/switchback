@@ -14,6 +14,12 @@
 #
 # User config is YAML only - a .json config is rejected.
 #
+# Diagnostics: one notification per model switch (classifier verdict, reset
+# window, and how the reasoning category resolved against the activated model).
+# The SWITCHBACK_DEBUG=1 environment variable overrides this.
+#
+# debug: true
+#
 # The `fallbacks` list below is the ordered preference. Each id was verified to
 # resolve in the catalog at the time of writing (2026-10-04) using a credentialed
 # session. Re-run `pi --list-models <provider>` to confirm before relying on any

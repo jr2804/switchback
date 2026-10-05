@@ -36,7 +36,7 @@
 
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { Api, ClassifierContext, ClassifierQuestion, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { callClassifier, readChoice, type ClassifierRegistry, type NoClassifierReason } from "./classify.ts";
+import { callClassifier, readChoice, readConfidence, type ClassifierRegistry, type NoClassifierReason } from "./classify.ts";
 
 /**
  * The reasoning levels every switchback virtual model offers, independent of
@@ -101,6 +101,8 @@ export interface ThinkingLevelChoice {
 	source: ThinkingLevelSource;
 	/** Set when the classifier could not decide and the category was clamped instead. */
 	reason?: NoClassifierReason;
+	/** The classifier's confidence in its level answer (classifier-sourced decisions only). */
+	confidence?: number;
 }
 
 /**
@@ -154,5 +156,6 @@ export async function chooseThinkingLevel(opts: {
 		// not implement, so it is treated as unparseable rather than trusted.
 		return { level: fallback, source: "requested", reason: "unparseable" };
 	}
-	return { level: answer as ModelThinkingLevel, source: "classifier" };
+	const confidence = readConfidence(call.result, "level");
+	return { level: answer as ModelThinkingLevel, source: "classifier", ...(confidence !== undefined ? { confidence } : {}) };
 }

@@ -34,6 +34,9 @@ export default function (pi: ExtensionAPI) {
 	// of truth for which virtual models exist (e.g. switchback/auto and
 	// switchback/auto-flash), not a single hard-coded id.
 	const modelConfigs = config.models;
+	// Diagnostic switch notifications: the config's `debug: true`, overridden by the
+	// SWITCHBACK_DEBUG environment variable for quick toggling without a config edit.
+	const debug = debugFlag(process.env["SWITCHBACK_DEBUG"]) ?? config.debug ?? false;
 
 	// A classifier that names its own endpoint (jev.baseUrl) is registered here, so
 	// switchback can classify through a local System One server (e.g. Ollama
@@ -71,6 +74,7 @@ export default function (pi: ExtensionAPI) {
 					now,
 					blocked,
 					notify,
+					debug,
 				});
 				return buildRoute(ctx.modelRegistry, result.decision, result.thinkingLevel, result.nextState);
 			},
@@ -258,6 +262,13 @@ function virtualProvider(fullId: string): string {
 function virtualId(fullId: string): string {
 	const slash = fullId.indexOf("/");
 	return slash >= 0 ? fullId.slice(slash + 1) : fullId;
+}
+
+/** Parse an on/off environment variable; undefined when it does not carry a flag. */
+function debugFlag(value: string | undefined): boolean | undefined {
+	const v = value?.trim().toLowerCase();
+	if (v === undefined || v === "") return undefined;
+	return !(v === "0" || v === "false" || v === "off" || v === "no");
 }
 
 /**

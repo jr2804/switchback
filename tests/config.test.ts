@@ -148,6 +148,33 @@ describe("loadConfig - yaml-only lookup (no JSON user config)", () => {
 	});
 });
 
+describe("loadConfig - debug flag", () => {
+	const writeWith = (yaml: string): void => {
+		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+		writeFileSync(join(tmpDir, ".pi", "switchback.yaml"), yaml);
+	};
+
+	it("parses a top-level debug flag", () => {
+		writeWith("debug: true\nmodels:\n  - id: switchback/auto\n    name: A\n    fallbacks: [\"zai/glm-5.3\"]\n");
+		const { config } = loadConfig();
+		expect(config.debug).toBe(true);
+	});
+
+	it("rejects a non-boolean debug value", () => {
+		writeWith("debug: verbose\nmodels:\n  - id: switchback/auto\n    name: A\n    fallbacks: [\"zai/glm-5.3\"]\n");
+		expect(() => loadConfig()).toThrow(/debug must be a boolean/);
+	});
+
+	it("the project layer's debug flag wins over the global layer's", () => {
+		writeWith("debug: false\nmodels:\n  - id: switchback/auto\n    name: A\n    fallbacks: [\"zai/glm-5.3\"]\n");
+		mkdirSync(join(tmpDir, "agent"), { recursive: true });
+		process.env["PI_CODING_AGENT_DIR"] = join(tmpDir, "agent");
+		writeFileSync(join(tmpDir, "agent", "switchback.yaml"), "debug: true\nmodels:\n  - id: switchback/auto\n    name: B\n    fallbacks: [\"zai/glm-5.3\"]\n");
+		const { config } = loadConfig();
+		expect(config.debug).toBe(false);
+	});
+});
+
 describe("loadConfig - classifier endpoint fields (jev.baseUrl)", () => {
 	const writeConfig = (jevLines: string): void => {
 		mkdirSync(join(tmpDir, ".pi"), { recursive: true });

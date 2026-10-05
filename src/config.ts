@@ -225,7 +225,11 @@ function parseFileConfig(value: unknown, path: string): SwitchbackFileConfig {
 		}
 		seen.add(entry.id);
 	}
-	return { models: parsed };
+	const rawDebug = value["debug"];
+	if (rawDebug !== undefined && typeof rawDebug !== "boolean") {
+		throw new ConfigError("debug must be a boolean", path);
+	}
+	return { models: parsed, ...(rawDebug !== undefined ? { debug: rawDebug } : {}) };
 }
 
 function readAndParse(path: string): SwitchbackFileConfig {
@@ -266,7 +270,10 @@ function aggregateConfigs(global: SwitchbackFileConfig, project: SwitchbackFileC
 		if (index === -1) merged.push(projectEntry);
 		else merged[index] = projectEntry;
 	}
-	return { models: merged };
+	return {
+		models: merged,
+		...(project.debug !== undefined ? { debug: project.debug } : global.debug !== undefined ? { debug: global.debug } : {}),
+	};
 }
 
 /**

@@ -40,6 +40,12 @@ export interface SwitchbackConfig {
 /** Top-level switchback configuration. */
 export interface SwitchbackFileConfig {
 	models: SwitchbackConfig[];
+	/**
+	 * Emit one diagnostics notification per model switch (the classifier's verdict
+	 * and how the requested reasoning category resolved against the activated
+	 * model). The `SWITCHBACK_DEBUG=1` environment variable overrides this.
+	 */
+	debug?: boolean;
 }
 
 /** Classification of a failed request's error message. */

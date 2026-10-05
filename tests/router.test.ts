@@ -1186,3 +1186,84 @@ describe("router — thinking level", () => {
 		expect(result.thinkingSource).toBeUndefined();
 	});
 });
+
+describe("router — debug diagnostics on a switch", () => {
+	const messages: { text: string; type: string }[] = [];
+	const notify = (text: string, type: "info" | "warning" | "error"): void => {
+		messages.push({ text, type });
+	};
+	beforeEach(() => {
+		messages.length = 0;
+	});
+
+	it("emits one line per switch with the verdict and the level resolution", async () => {
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			],
+			answer: { class: "quota", scope: "account" },
+			levelAnswer: "high",
+		});
+		const request = buildFakeRequest({
+			reason: "retry",
+			failed: { provider: "zai", id: "glm-4.7", errorMessage: "429 quota exceeded" },
+			stateCurrent: "zai/glm-4.7",
+		});
+		await decide("retry", request, FALLBACKS, registry, { now: 1_000_000, blocked: {}, notify, debug: true });
+		expect(messages).toHaveLength(1);
+		expect(messages[0]?.type).toBe("info");
+		// from -> to, decision reason, requested -> dispatched level and its source
+		expect(messages[0]?.text).toMatch(/switchback: switch zai\/glm-4\.7 → ollama-cloud\/pro \[quota-fallback\]/);
+		expect(messages[0]?.text).toMatch(/level medium → high \(classifier, confidence/);
+	});
+
+	it("emits the reset window a blocked model received", async () => {
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			],
+			answer: { class: "quota", scope: "account", resetScore: 55 },
+			levelAnswer: "high",
+		});
+		const request = buildFakeRequest({
+			reason: "retry",
+			failed: { provider: "zai", id: "glm-4.7", errorMessage: "429 quota exceeded" },
+			stateCurrent: "zai/glm-4.7",
+		});
+		await decide("retry", request, FALLBACKS, registry, { now: 1_000_000, blocked: {}, notify, debug: true });
+		expect(messages[0]?.text).toMatch(/\[quota-fallback \(reset in \d+ min\)\]/);
+	});
+
+	it("does not emit when the decision is a sticky same-model route", async () => {
+		const sticky = makeFakeRegistry({ entries: [{ provider: "zai", id: "glm-4.7" }], levelAnswer: "high" });
+		await decide(
+			"user",
+			buildFakeRequest({ reason: "user", stateCurrent: "zai/glm-4.7" }),
+			FALLBACKS,
+			sticky,
+			{ now: 1_000_000, blocked: {}, notify, debug: true },
+		);
+		expect(messages).toHaveLength(0);
+	});
+
+	it("stays silent without the debug flag even on a switch", async () => {
+		const switching = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			],
+			answer: { class: "quota", scope: "account" },
+			levelAnswer: "high",
+		});
+		await decide(
+			"retry",
+			buildFakeRequest({ reason: "retry", failed: { provider: "zai", id: "glm-4.7", errorMessage: "429" }, stateCurrent: "zai/glm-4.7" }),
+			FALLBACKS,
+			switching,
+			{ now: 1_000_000, blocked: {}, notify },
+		);
+		expect(messages).toHaveLength(0);
+	});
+});

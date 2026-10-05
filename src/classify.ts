@@ -298,6 +298,19 @@ export function readChoice(result: ClassifierResult, questionId: string): string
 }
 
 /**
+ * The confidence a classifier reported for one answer, or undefined when the
+ * result carries no usable confidence. Mirrors `readChoice`'s tolerance.
+ */
+export function readConfidence(result: ClassifierResult, questionId: string): number | undefined {
+	const answers: Record<string, ClassifierAnswer | undefined> | undefined = result.answers;
+	if (answers === undefined) return undefined;
+	const answer = answers[questionId];
+	if (answer === undefined) return undefined;
+	const value = "confidence" in answer ? answer.confidence : undefined;
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
  * Classify one failed request's error message.
  *
  * Returns a tagged `ClassificationResult` so the caller can distinguish a

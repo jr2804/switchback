@@ -1,0 +1,30 @@
+{
+  "name": "pi-extension-switchback",
+  "private": true,
+  "version": "2026.10.1",
+  "type": "module",
+  "description": "Quota-aware graceful model fallback for pi via the native pi.registerVirtualModel() API.",
+  "scripts": {
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "echo 'nothing to check'"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.0.2",
+    "@earendil-works/pi-coding-agent": "1.0.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
+  }
+}

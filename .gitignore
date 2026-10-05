@@ -1,0 +1,65 @@
+# Dependencies
+node_modules/
+
+# Runtime state (machine-local, never committed)
+.pi/
+
+# Atomic-write temp files from src/state.ts (rename-over pattern)
+*.tmp
+
+# TypeScript incremental build artifacts
+*.tsbuildinfo
+
+# Coverage
+coverage/
+
+# Distribution builds (we ship source-only; pi loads via jiti)
+dist/
+
+# Local config overrides - shipped switchback.yaml is committed (no secrets).
+# A machine-specific override can use switchback.local.yaml (gitignored).
+switchback.local.yaml
+
+# Editor / OS noise
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# API keys, tokens, and secrets must NEVER be committed. switchback.yaml
+# contains only model ids and provider names - none of those are secrets.
+# If you need to embed credentials, use environment variables:
+#   export ZAI_API_KEY=...; export OLLAMA_API_KEY=...
+# then reference them in your provider configuration (handled by pi itself,
+# not by switchback).
+
+# Local link/junction from the README Path B (home-dir installation). The
+# junction target is the project; the link itself lives outside the repo and
+# is not committed here, but if a user symlinks inside the project, this
+# catches it.
+switchback.link
+skills-lock.json
+
+.agents/skills/
+
+# Keep .agents/ DOX files tracked (override existing ignore)
+/.agents/*
+!/.agents/*.md
+!/.agents/history/
+!/.agents/history/**
+
+# Implementation plans — mutable working artifacts, never committed
+/.agents/plans/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*
+CLAUDE.md
+.claude/
+.codex/
+.cursor/
+/mise.local.toml

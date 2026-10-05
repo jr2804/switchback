@@ -1,0 +1,14 @@
+{
+  "scenarios": {
+    "quota-5h-zai": "429 Too Many Requests: z.ai GLM 5h window exceeded. Resets at 2026-10-04T15:30:00Z.",
+    "quota-weekly-ollama": "429: weekly token limit exhausted for ollama-cloud. Try again in 1d 2h.",
+    "quota-monthly-opencode": "Rate limit reached: opencode-go monthly cap. Retry after 30s.",
+    "quota-minimax-token-plan": "Error: 429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"Token Plan usage limit reached: Upgrade your Token Plan or purchase Credits for more usage. (2056)\"},\"request_id\":\"0711d862231417e81e99774da2dfb342\"}",
+    "auth-failure": "401 Unauthorized: invalid API key for provider.",
+    "transient-5xx": "502 Bad Gateway: upstream timeout.",
+    "transient-timeout": "Request timed out after 30s.",
+    "unknown-html": "<html><body>500 Internal Server Error</body></html>",
+    "auth-account-suspended": "403 Forbidden: account is suspended. Contact support.",
+    "auth-zai-token-expired": "401: {\"error\":{\"code\":\"401\",\"message\":\"token expired or incorrect\"}}"
+  }
+}

@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="100%" role="img" aria-label="switchback — a pi extension that routes requests through a fallback list and classifies provider failures with a SystemOne classifier">
+  <title>switchback — quota-aware model fallback for pi</title>
+  <desc>A terminal window showing the switchback flow: a request to zai/glm-5.3 returns a 429 quota error, the classifier returns class=quota with a reset time, and the router switches to ollama-cloud/glm-5.3-flash.</desc>
+
+  <!-- Window frame -->
+  <rect x="40" y="40" width="1120" height="240" rx="16" ry="16" fill="#0f172a" stroke="#1e293b" stroke-width="1.5"/>
+
+  <!-- Title bar separator -->
+  <line x1="40" y1="80" x2="1160" y2="80" stroke="#1e293b" stroke-width="1"/>
+
+  <!-- Traffic dots -->
+  <circle cx="62" cy="60" r="5.5" fill="#ef4444"/>
+  <circle cx="82" cy="60" r="5.5" fill="#f59e0b"/>
+  <circle cx="102" cy="60" r="5.5" fill="#10b981"/>
+
+  <!-- Title bar text -->
+  <text x="124" y="66" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#94a3b8">switchback — quota-aware fallback for pi</text>
+
+  <!-- Body line 1: command -->
+  <text x="80" y="128" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="26" font-weight="500" fill="#e2e8f0">pi --model switchback/auto</text>
+
+  <!-- Body line 2: failure observed -->
+  <text x="80" y="174" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="24" fill="#cbd5e1">▸ zai/glm-5.3 → 429 Usage limit reached</text>
+
+  <!-- Verdict pill -->
+  <rect x="80" y="196" width="196" height="36" rx="18" ry="18" fill="#451a03" stroke="#b45309" stroke-width="1.5"/>
+  <text x="178" y="221" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="22" font-weight="600" fill="#fcd34d">class: quota</text>
+
+  <!-- Reset continuation -->
+  <text x="294" y="221" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="22" fill="#cbd5e1">· reset in 2h 14m</text>
+
+  <!-- Body line 4: switch action -->
+  <text x="80" y="266" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="24" font-weight="500" fill="#34d399">→ switching to ollama-cloud/glm-5.3-flash</text>
+</svg>

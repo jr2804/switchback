@@ -1,0 +1,10 @@
+[tools]
+bun = "latest"
+uv = "latest"
+"rumdl" = "latest"
+
+[settings.npm]
+package_manager = "bun"
+
+[settings.pipx]
+uvx = true

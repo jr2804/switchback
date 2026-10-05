@@ -1,0 +1,3 @@
+[tasks.format-md]
+description = "Lint and reformat Markdown files with rumdl"
+run = "rumdl fmt --config .config/rumdl.toml ./"

@@ -1,0 +1,49 @@
+# switchback example config
+#
+# Copy to one of these locations (first match wins):
+#   <cwd>/switchback.yaml
+#   ~/.pi/agent/switchback.yaml
+#
+# User config is YAML only - a .json config is rejected.
+#
+# The `fallbacks` list below is the ordered preference. Each id was verified to
+# resolve in the catalog at the time of writing (2026-10-04) using a credentialed
+# session. Re-run `pi --list-models <provider>` to confirm before relying on any
+# of them. If a configured id stops resolving, switchback greys it out at route
+# time and reports it via `/switchback` - the config is left untouched so a
+# transient catalog churn does not silently delete a fallback the user wants.
+#
+# All four providers and the preferred model ids below match the corpus the
+# classification prompts were validated against. They are not invented.
+#
+#   z.ai GLM         - 5h window (12+ real samples in the classification corpus).
+#   Ollama Cloud Pro - weekly + session windows (8 real samples).
+#   MiniMax Plus     - 5h window via "Token Plan usage limit reached" (4 real samples).
+#   OpenCode-Go      - transient-only corpus (no quota samples). Region constraint
+#                      is account-specific; if you hit it, see /switchback status.
+
+models:
+  - id: switchback/auto
+    name: Auto (Switchback)
+    fallbacks:
+      - zai/glm-5.3              # 1M context, current z.ai GLM coding plan
+      - ollama-cloud/glm-5.3-flash # 1M context, vision-capable fallback
+      - minimax/MiniMax-M3       # 1M context, minimax Plus default
+      - opencode-go/glm-5.3-flash # 1M context, opencode-go fallback
+    # Classifier. Two forms:
+    #
+    # 1. A classifier from pi's catalog - provider + id only:
+    jev:
+      provider: typesafe
+      id: jev-latest
+    #
+    # 2. A local System One endpoint, registered by switchback itself so no pi
+    #    provider is needed. `baseUrl` is the switch. Works with Ollama v0.35+
+    #    decision models: `ollama show <model>` must list the "decision"
+    #    capability (e.g. tev1:0.8b). A plain chat GGUF is rejected by Ollama.
+    #
+    # jev:
+    #   provider: ollama-systemone
+    #   id: tev1:0.8b
+    #   baseUrl: http://localhost:11434/v1
+    #   apiKey: ollama        # local servers ignore it; the transport needs a non-empty value

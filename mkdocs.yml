@@ -1,0 +1,71 @@
+site_name: switchback
+site_description: Quota-aware graceful model fallback for pi
+site_url: https://jr2804.github.io/switchback/
+repo_url: https://github.com/jr2804/switchback
+repo_name: jr2804/switchback
+edit_uri: edit/main/docs/
+docs_dir: docs
+
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: emerald
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: emerald
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+
+nav:
+  - User guide:
+      - Home: index.md
+      - Configuration: configuration.md
+      - Classifier: classifier.md
+      - License: license.md
+  - Development:
+      - Overview: development.md
+      - Architecture: architecture.md
+      - Crash collection: crash-collection.md
+      - Versioning: versioning.md
+      - Issue tracking: issue-tracking.md
+      - Contributing: contributing.md
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - attr_list
+  - md_in_html
+  - def_list
+
+plugins:
+  - search

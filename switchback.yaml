@@ -1,0 +1,16 @@
+# switchback active config for development.
+#
+# Same shape as switchback.yaml.example, kept in sync. See that file for the
+# rationale on each id and for the per-provider coverage matrix.
+
+models:
+  - id: switchback/auto
+    name: Auto (Switchback)
+    fallbacks:
+      - zai/glm-5.3
+      - ollama-cloud/glm-5.3-flash
+      - minimax/MiniMax-M3
+      - opencode-go/glm-5.3-flash
+    jev:
+      provider: typesafe
+      id: jev-latest

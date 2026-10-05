@@ -1,0 +1,87 @@
+name: calver-release
+
+# CalVer release workflow (calver.org YYYY.0M.MICRO convention).
+#
+# On every push to main:
+#   - Compute the current calver month prefix (YYYY.0M, zero-padded).
+#   - Find existing tags matching that prefix, take the max numeric suffix,
+#     increment by 1. If no tags for this month, start at 1.
+#   - Tag HEAD with the new tag, push the tag, create a GitHub release.
+#
+# The workflow NEVER creates commits, so it cannot retrigger itself.
+# Branch filter is [main]; tag pushes are not retried because push events
+# for refs/tags/* are not branches.
+#
+# Tag-push race tolerance: an exists-check on the remote tag handles the
+# case where two pushes land in the same month and the workflow runs
+# twice in parallel. The losing run exits 0 silently.
+
+on:
+  push:
+    branches:
+      - main
+    # Exclude tag pushes explicitly so a tag-push event from a previous
+    # run cannot loop. Belt + suspenders alongside the branches filter.
+    tags-ignore:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute and tag CalVer release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # 1. If HEAD already has a vX tag, this is a tag-push replay (race).
+          #    Skip and exit cleanly.
+          if git tag --points-at HEAD | grep -q '^v'; then
+            echo "HEAD already has a vX tag; nothing to do."
+            exit 0
+          fi
+
+          # 2. Compute the current calver month prefix.
+          YM="$(date -u +%Y.%m)"
+
+          # 3. Find existing tags for this month, take the max numeric suffix.
+          MAX=0
+          for tag in $(git tag --list "v${YM}.*"); do
+            suffix="${tag#v${YM}.}"
+            if [[ "${suffix}" =~ ^[0-9]+$ ]]; then
+              n="${suffix}"
+              if (( n > MAX )); then
+                MAX="${n}"
+              fi
+            fi
+          done
+          N=$((MAX + 1))
+          NEW_TAG="v${YM}.${N}"
+          echo "Computed tag: ${NEW_TAG} (MAX was ${MAX})"
+
+          # 4. Race tolerance: if a concurrent run already pushed this tag,
+          #    exit 0 silently rather than failing the workflow.
+          if git ls-remote --tags origin "${NEW_TAG}" | grep -q "${NEW_TAG}"; then
+            echo "Tag ${NEW_TAG} already exists on remote; exiting cleanly."
+            exit 0
+          fi
+
+          # 5. Tag and push.
+          git config user.name "switchback"
+          git config user.email "switchback-bot@local"
+          git tag "${NEW_TAG}" "${GITHUB_SHA}"
+          git push origin "${NEW_TAG}"
+
+          # 6. Create the GitHub release with auto-generated notes.
+          gh release create "${NEW_TAG}" \
+            --generate-notes \
+            --title "switchback ${NEW_TAG}"

@@ -1,0 +1,7 @@
+category,tool,tool_value,mcp_command,mcp_name,skill_repo,skill
+codebase,npm:@colbymchenry/codegraph,latest,codegraph serve --mcp,codegraph,https://codeberg.org/jr2804/copier-uv-plus.git,cli-codegraph
+codebase,github:1broseidon/ketch,latest,ketch mcp serve,ketch,1broseidon/ketch,ketch
+tracking,github:gastownhall/beads,latest,,,gastownhall/beads,
+tracking,github:dolthub/dolt,latest,,,,
+tracking,pypi:beads-mcp,latest,mise x --command beads-mcp,beads,,
+general,npm:@jkudish/jev-mcp,latest,mise x --command jev-mcp,jev,jkudish/jev-mcp

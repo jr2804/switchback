@@ -1,8 +1,12 @@
 # switchback example config
 #
-# switchback user config. Copy to ONE of these locations (first match wins):
-#   <project>/.pi/switchback.yaml    per-project override (gitignored, never committed)
-#   ~/.pi/agent/switchback.yaml      your global copy
+# switchback user config. Place copies at EITHER or BOTH of these locations:
+#   <project>/.pi/switchback.yaml    per-project layer (gitignored, never committed)
+#   ~/.pi/agent/switchback.yaml      your global layer
+#
+# The two layers are AGGREGATED: the merged model list is the global list with
+# per-project entries overriding same-id entries in place (a duplicated model id
+# means the project entry wins wholesale) and project-only models appended.
 #
 # The project-local slot is `.pi/` on purpose: git ignores it, so the real
 # config can never end up in a repository. This repository ships only this

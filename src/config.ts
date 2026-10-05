@@ -1,19 +1,21 @@
 /**
  * User-facing switchback config loader.
  *
- * Lookup order:
- *   1. <cwd>/.pi/switchback.yaml            (per-project override)
- *   2. <piConfigDir>/switchback.yaml        (piConfigDir = ~/.pi/agent by default)
- *   3. built-in DEFAULT_CONFIG
+ * Config layers (all YAML, all optional):
+ *   1. <cwd>/.pi/switchback.yaml            (per-project layer)
+ *   2. <piConfigDir>/switchback.yaml        (global layer; piConfigDir = ~/.pi/agent)
+ *   3. built-in DEFAULT_CONFIG              (only when neither file exists)
+ *
+ * The two user layers are AGGREGATED, not first-match-wins: the merged model
+ * list is the global list with project entries overriding same-id entries in
+ * place and project-only entries appended. A layer that exists but fails to
+ * parse or validate throws immediately - a broken layer is surfaced, never
+ * silently dropped in favour of the other.
  *
  * The project-local slot lives under `.pi/` deliberately: `.pi/` is ignored by
  * git (pi's own convention), so a per-project override can never be committed
  * into a repository the way a repo-root `switchback.yaml` would be. The repo
  * ships only `switchback.yaml.example` as the template.
- *
- * The first match that parses and validates wins. Errors in the chosen config
- * throw - they should be surfaced immediately, not silently fallen through to a
- * default.
  *
  * DEFAULT_CONFIG ships with `fallbacks: []` (no provider hardcoded) so a configless
  * user gets a clear, actionable error instead of a silently-broken router. The
@@ -211,31 +213,90 @@ function parseFileConfig(value: unknown, path: string): SwitchbackFileConfig {
 		throw new ConfigError("models must be a non-empty array", path);
 	}
 	const parsed = models.map((entry, i) => parseSwitchbackModel(entry, i));
-	// Require the auto virtual model to be present.
-	const autoId = `${PROVIDER}/${VIRTUAL_ID}`;
-	if (!parsed.some((m) => m.id === autoId)) {
-		throw new ConfigError(`models must include an entry with id "${autoId}"`, path);
+	// Any set of virtual model ids is valid - `switchback/auto` is the conventional
+	// first entry, not a requirement. An unknown virtual id is already surfaced by
+	// findModelConfig() at extension load, and index.ts registers one virtual model
+	// per configured entry. A duplicated id WITHIN a file is rejected here: layers
+	// may legitimately override each other, but one file must not contradict itself.
+	const seen = new Set<string>();
+	for (const entry of parsed) {
+		if (seen.has(entry.id)) {
+			throw new ConfigError(`models contains the id "${entry.id}" more than once`, path);
+		}
+		seen.add(entry.id);
 	}
 	return { models: parsed };
 }
 
 function readAndParse(path: string): SwitchbackFileConfig {
-	// YAML-only user config. The .json extension is rejected up here defensively
-	// so a stray user.json file (e.g. left over from an earlier version) is not
-	// silently parsed as JSON; instead the parse layer raises a clear error.
+	// The only .json file in this project's surface is the simulate fixture;
+	// anything else ending in .json is a user config mistake.
 	if (path.endsWith(".json")) {
 		throw new ConfigError("switchback user config is YAML only; rename to switchback.yaml", path);
 	}
 	const text = readFileSync(path, "utf8");
-	const raw: unknown = parseYaml(text);
+	let raw: unknown;
+	try {
+		raw = parseYaml(text);
+	} catch (error) {
+		// Surface a malformed layer as a typed, path-carrying error instead of the
+		// parser's raw stack - a broken layer must stop startup loudly either way.
+		throw new ConfigError(
+			`switchback config is not valid YAML: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`,
+			path,
+		);
+	}
 	return parseFileConfig(raw, path);
 }
 
-/** Load the active switchback configuration. Resolves the first valid match against the lookup order. */
+/**
+ * Merge a per-project config on top of the agent-dir (global) config.
+ *
+ * Aggregation unit is the virtual-model entry: the merged list keeps the global
+ * order as its base, a project entry with the same id replaces the global entry
+ * in place (the project entry wins wholesale - fallbacks, name and classifier -
+ * there is no field-level merging), and project-only models are appended after
+ * the global ones in project order. With no global config the project config
+ * stands alone, and vice versa.
+ */
+function aggregateConfigs(global: SwitchbackFileConfig, project: SwitchbackFileConfig): SwitchbackFileConfig {
+	const merged = [...global.models];
+	for (const projectEntry of project.models) {
+		const index = merged.findIndex((m) => m.id === projectEntry.id);
+		if (index === -1) merged.push(projectEntry);
+		else merged[index] = projectEntry;
+	}
+	return { models: merged };
+}
+
+/**
+ * Load the active switchback configuration.
+ *
+ * The per-project file (`<cwd>/.pi/switchback.yaml`) and the agent-dir copy
+ * (`<piConfigDir>/switchback.yaml`) are AGGREGATED, not first-match-wins: the
+ * merged model list is the global list with project entries overriding
+ * same-id entries in place and project-only entries appended. A file that
+ * exists but fails to parse or validate throws immediately - a broken layer is
+ * surfaced, never silently dropped. With neither file present, DEFAULT_CONFIG
+ * (empty fallbacks, fail-fast) applies.
+ */
 export function loadConfig(): { config: SwitchbackFileConfig; source: string } {
-	for (const path of candidatePaths()) {
-		if (!existsSync(path)) continue;
-		return { config: readAndParse(path), source: resolve(path) };
+	const [projectPath, agentPath] = candidatePaths() as [string, string];
+	const projectExists = existsSync(projectPath);
+	const agentExists = existsSync(agentPath);
+	if (projectExists) {
+		const project = readAndParse(projectPath);
+		if (agentExists) {
+			const agent = readAndParse(agentPath);
+			return {
+				config: aggregateConfigs(agent, project),
+				source: `${resolve(projectPath)} + ${resolve(agentPath)}`,
+			};
+		}
+		return { config: project, source: resolve(projectPath) };
+	}
+	if (agentExists) {
+		return { config: readAndParse(agentPath), source: resolve(agentPath) };
 	}
 	return { config: DEFAULT_CONFIG, source: "<default>" };
 }

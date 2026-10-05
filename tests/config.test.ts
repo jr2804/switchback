@@ -6,7 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { DEFAULT_CONFIG, findModelConfig, loadConfig, ConfigError, SWITCHBACK_PROVIDER, SWITCHBACK_VIRTUAL_ID } from "../src/config.ts";
 import { registerLocalClassifier } from "../src/local-classifier.ts";
@@ -56,39 +56,80 @@ describe("DEFAULT_CONFIG", () => {
 	});
 });
 
-describe("loadConfig - precedence and override semantics", () => {
-	it("project-local .pi/switchback.yaml wins over the agent-dir copy", () => {
-		// A project-local override in <cwd>/.pi/, and a separate agent-dir copy
-		// under a distinct PI_CODING_AGENT_DIR so the two candidates differ.
+describe("loadConfig - layer aggregation", () => {
+	const writeProject = (yaml: string): void => {
 		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+		writeFileSync(join(tmpDir, ".pi", "switchback.yaml"), yaml);
+	};
+	const writeAgent = (yaml: string): void => {
 		mkdirSync(join(tmpDir, "agent"), { recursive: true });
-		writeFileSync(join(tmpDir, ".pi", "switchback.yaml"), `models:
+		process.env["PI_CODING_AGENT_DIR"] = join(tmpDir, "agent");
+		writeFileSync(join(tmpDir, "agent", "switchback.yaml"), yaml);
+	};
+
+	it("a duplicated model id means the project entry wins wholesale", () => {
+		writeProject(`models:
   - id: switchback/auto
     name: project override
     fallbacks: ["zai/glm-5.3"]
 `);
-		process.env["PI_CODING_AGENT_DIR"] = join(tmpDir, "agent");
-		writeFileSync(join(tmpDir, "agent", "switchback.yaml"), `models:
+		writeAgent(`models:
   - id: switchback/auto
     name: agent-dir copy
     fallbacks: ["ollama-cloud/glm-5.3-flash"]
 `);
 		const { config, source } = loadConfig();
+		expect(config.models).toHaveLength(1);
 		expect(config.models[0]?.name).toBe("project override");
+		expect(config.models[0]?.fallbacks).toEqual(["zai/glm-5.3"]);
 		expect(source).toContain(join(tmpDir, ".pi", "switchback.yaml"));
+		expect(source).toContain(join(tmpDir, "agent", "switchback.yaml"));
 	});
 
-	it("agent-dir copy is used when no project-local override exists", () => {
-		mkdirSync(join(tmpDir, "agent"), { recursive: true });
-		process.env["PI_CODING_AGENT_DIR"] = join(tmpDir, "agent");
-		writeFileSync(join(tmpDir, "agent", "switchback.yaml"), `models:
+	it("keeps global order, overrides in place, appends project-only models", () => {
+		writeProject(`models:
+  - id: switchback/local
+    name: Project Only
+    fallbacks: ["minimax/MiniMax-M3"]
+  - id: switchback/auto
+    name: project override
+    fallbacks: ["zai/glm-5.3"]
+`);
+		writeAgent(`models:
+  - id: switchback/auto
+    name: agent auto
+    fallbacks: ["zai/glm-5.3"]
+  - id: switchback/auto-flash
+    name: agent flash
+    fallbacks: ["zai/glm-5.3-flash"]
+`);
+		const { config } = loadConfig();
+		expect(config.models.map((m) => `${m.id}:${m.name}`)).toEqual([
+			"switchback/auto:project override",
+			"switchback/auto-flash:agent flash",
+			"switchback/local:Project Only",
+		]);
+	});
+
+	it("agent-dir copy is used verbatim when no project layer exists", () => {
+		writeAgent(`models:
   - id: switchback/auto
     name: agent-dir copy
     fallbacks: ["ollama-cloud/glm-5.3-flash"]
 `);
 		const { config, source } = loadConfig();
 		expect(config.models[0]?.name).toBe("agent-dir copy");
-		expect(source).toContain(join(tmpDir, "agent", "switchback.yaml"));
+		expect(source).toBe(resolve(join(tmpDir, "agent", "switchback.yaml")));
+	});
+
+	it("a broken project layer throws even when the global layer is valid", () => {
+		writeProject("models: definitely: not: a: list\n");
+		writeAgent(`models:
+  - id: switchback/auto
+    name: agent-dir copy
+    fallbacks: ["ollama-cloud/glm-5.3-flash"]
+`);
+		expect(() => loadConfig()).toThrow(ConfigError);
 	});
 });
 

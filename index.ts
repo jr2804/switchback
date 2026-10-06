@@ -1,16 +1,24 @@
 /**
  * switchback - quota-aware graceful model fallback for pi.
  *
- * Registers a virtual model `switchback/auto` that picks a physical model for each
- * request. Error classification goes through the configured SystemOne classifier
- * (Jev / von / whatever `ctx.modelRegistry.findOfType("classifier", ...)` returns).
- * When the classifier is missing, unresolvable, or its call fails, the router
- * reports the condition visibly (`ctx.ui.notify` when `ctx.hasUI`) and cycles to
- * the next model in the config list without writing to `.pi/switchback.json`.
- * Cross-session blocked-until state is only ever written from a classifier-given
- * class + reset, never from the cycle path.
+ * Registers one virtual model per entry in the user config (so `switchback/auto`
+ * and `switchback/auto-flash` both appear in `/model`). Each request is routed
+ * through the configured SystemOne classifier (Jev / von / whatever
+ * `ctx.modelRegistry.findOfType("classifier", ...)` returns). When the classifier is
+ * missing, unresolvable, or its call fails, the router reports the condition
+ * visibly (`ctx.ui.notify` when `ctx.hasUI`) and cycles to the next model in the
+ * config list without writing to `.pi/switchback.json`. Cross-session blocked-until
+ * state is only ever written from a classifier-given class + reset, never from the
+ * cycle path.
  *
  * Usage: pi -e ./index.ts --model switchback/auto
+ *
+ * Configuration: the user config is aggregated from two YAML layers
+ * (`<cwd>/.pi/switchback.yaml` on top of `~/.pi/agent/switchback.yaml`), each entry
+ * a virtual model. Bare ids (`auto`) are normalized to the provider prefix
+ * (`switchback/auto`). Edits to the file are picked up on the next request: the
+ * router reloads the config per route, surfaces a warning when a reload fails, and
+ * falls back to the last good config so a broken edit never kills the session.
  *
  * The full design lives in the design doc (see the project's task notes for the
  * canonical reference).
@@ -18,25 +26,26 @@
 
 import type { ExtensionAPI, ExtensionContext, ModelRoute } from "@earendil-works/pi-coding-agent";
 import { resolveFallbacks, type AvailabilityRegistry } from "./src/availability.ts";
-import { SWITCHBACK_PROVIDER, SWITCHBACK_VIRTUAL_ID, findModelConfig, loadConfig } from "./src/config.ts";
+import { SWITCHBACK_PROVIDER, findModelConfig, loadConfig } from "./src/config.ts";
+import { createSecretStore } from "./src/secrets.ts";
 import { buildRoute, decide, ConfigInvalidError, type RouterRegistry } from "./src/routing.ts";
-import { loadSimulate, getScenario, simulateRetry, type SimulateResult } from "./src/simulate.ts";
 import { registerLocalClassifier } from "./src/local-classifier.ts";
 import { SWITCHBACK_THINKING_LEVELS } from "./src/thinking.ts";
-import { isBlocked, readBlockedMap } from "./src/state.ts";
+import { getPinnedModel, isBlocked, readBlockedMap, readPinMap, setPinnedModel } from "./src/state.ts";
 import { annotateCrash, isValidAnnotationClass, readCrashMap, shortHash } from "./src/crashes.ts";
-import type { ErrorClass } from "./src/types.ts";
-import type { ModelId, SwitchbackState } from "./src/types.ts";
+import type { ErrorClass, ModelId, ResolvedSwitchbackConfig, ResolvedSwitchbackFileConfig, SwitchbackState } from "./src/types.ts";
 
 export default function (pi: ExtensionAPI) {
-	const { config, source: configSource } = loadConfig();
-	// Every entry in the user config becomes a virtual model. The config is the source
-	// of truth for which virtual models exist (e.g. switchback/auto and
-	// switchback/auto-flash), not a single hard-coded id.
-	const modelConfigs = config.models;
+	// Secrets: `apiKey: secret:<name>` references in the config are resolved to
+	// plaintext here (never written back to the YAML). One store instance for the
+	// whole extension lifetime - a DPAPI round-trip is not free.
+	const secrets = createSecretStore();
+	const initial = safeLoad(pi, secrets);
+	const modelConfigs = initial.config.models;
+	const configSource = initial.source;
 	// Diagnostic switch notifications: the config's `debug: true`, overridden by the
 	// SWITCHBACK_DEBUG environment variable for quick toggling without a config edit.
-	const debug = debugFlag(process.env["SWITCHBACK_DEBUG"]) ?? config.debug ?? false;
+	const debug = debugFlag(process.env["SWITCHBACK_DEBUG"]) ?? initial.config.debug ?? false;
 
 	// A classifier that names its own endpoint (jev.baseUrl) is registered here, so
 	// switchback can classify through a local System One server (e.g. Ollama
@@ -52,10 +61,16 @@ export default function (pi: ExtensionAPI) {
 		registerLocalClassifier(pi, jev);
 	}
 
+	// Last successfully loaded config; reloaded on every route so edits to
+	// switchback.yaml are picked up live. A broken edit fails loudly on the first
+	// affected route but does not kill the session.
+	let lastGoodConfig: ResolvedSwitchbackFileConfig = initial.config;
+
 	for (const modelConfig of modelConfigs) {
+		const fullVirtualId = modelConfig.id;
 		pi.registerVirtualModel<SwitchbackState>({
-			provider: virtualProvider(modelConfig.id),
-			id: virtualId(modelConfig.id),
+			provider: virtualProvider(fullVirtualId),
+			id: virtualId(fullVirtualId),
 			name: modelConfig.name,
 			// One fixed category scale for every switchback model. The concrete model's
 			// own level map is resolved at activation time by the classifier, so the
@@ -64,39 +79,127 @@ export default function (pi: ExtensionAPI) {
 			async route(request, ctx) {
 				const now = Date.now();
 				const blocked = readBlockedMap(now);
+				const pinned = getPinnedModel(fullVirtualId);
 				// Wire the no-classifier report to ctx.ui.notify when pi is running
 				// in a UI-capable mode (TUI / RPC). In non-UI modes (print, RPC-no-ui)
 				// the call is a no-op so simulate/replay and headless runs are silent.
 				const notify: import("./src/routing.ts").NotifyFn = ctx.hasUI
 					? (message, type) => ctx.ui.notify(message, type)
 					: () => {};
+				// Live-reload the config so edits to switchback.yaml are picked up without
+				// a restart. On parse/validation failure, keep the last good config and
+				// warn once; the broken edit does not break the session.
+				let activeConfig: ResolvedSwitchbackFileConfig;
+				try {
+					const reloaded = loadConfig(secrets);
+					lastGoodConfig = reloaded.config;
+					activeConfig = reloaded.config;
+				} catch (error) {
+					notify(
+						`switchback config reload failed (using last good): ${error instanceof Error ? error.message : String(error)}`,
+						"warning",
+					);
+					activeConfig = lastGoodConfig;
+				}
+				const modelConfig: ResolvedSwitchbackConfig = findModelConfig(activeConfig, fullVirtualId);
 				const result = await decide(request.reason, request, modelConfig, ctx.modelRegistry, {
 					now,
 					blocked,
 					notify,
 					debug,
+					...(pinned !== null && pinned !== undefined ? { pinned } : {}),
 				});
 				return buildRoute(ctx.modelRegistry, result.decision, result.thinkingLevel, result.nextState);
 			},
 		});
 	}
 
-	// `/switchback-config` surfaces the active config source for the user.
-	pi.registerCommand("switchback-config", {
-		description: "Show the active switchback config source and fallback lists",
+	// `/switchback` — single overview: config source, debug, per-model pin +
+	// fallbacks (effective / greyed + blocks + reset), active blocks.
+	pi.registerCommand("switchback", {
+		description: "Show switchback config: source, debug, per-model pin, fallbacks (effective/greyed/blocks)",
 		handler: async (_args, ctx) => {
-			const lines: string[] = [`config source: ${configSource}`];
-			for (const modelConfig of modelConfigs) {
+			const now = Date.now();
+			const reloaded = safeLoadForCommand(pi, secrets);
+			const config = reloaded.config;
+			const blocked = readBlockedMap(now);
+			const pinMap = readPinMap();
+			const lines: string[] = [];
+			lines.push(`switchback config: ${reloaded.source}${debug ? "  [debug on]" : ""}`);
+			if (config.debug === true) lines.push("debug: true");
+			if (Object.keys(pinMap).length > 0) {
+				const pinLines = Object.entries(pinMap)
+					.filter(([, p]) => p !== null)
+					.map(([v, p]) => `  ${v} -> ${p}`);
+				if (pinLines.length > 0) lines.push(`pin:\n${pinLines.join("\n")}`);
+			}
+			for (const modelConfig of config.models) {
 				const resolved = resolveFallbacks(modelConfig.fallbacks, ctx.modelRegistry as AvailabilityRegistry);
-				lines.push(`${modelConfig.id}  (${resolved.effectiveCount} effective / ${resolved.greyedCount} greyed)`);
-				modelConfig.fallbacks.forEach((f: ModelId, i: number) => {
-					const r = resolved.entries[i];
-					const suffix = r && r.availability !== "effective" ? `  [greyed: ${r.reason ?? r.availability}]` : "";
-					lines.push(`  ${i + 1}. ${f}${suffix}`);
-				});
-				lines.push(`  classifier: ${modelConfig.jev ? `${modelConfig.jev.provider}/${modelConfig.jev.id}` : "(none; cycling on any failure)"}`);
+				lines.push(`${modelConfig.id} (${resolved.effectiveCount} effective, ${resolved.greyedCount} greyed):`);
+				for (const entry of resolved.entries) {
+					if (entry.availability === "effective") {
+						const isBlockedNow = isBlocked(entry.id, now, blocked);
+						const blockNote = isBlockedNow
+							? `  [blocked, resets in ${Math.ceil((blocked[entry.id]! - now) / 60_000)} min]`
+							: "";
+						lines.push(`  ✓ ${entry.id}${blockNote}`);
+					} else {
+						lines.push(`  ✗ ${entry.id}  [${entry.availability}: ${entry.reason ?? ""}]`);
+					}
+				}
+			}
+			const activeBlocks = Object.entries(blocked).filter(([, ts]) => ts > now);
+			if (activeBlocks.length > 0) {
+				lines.push("active blocks:");
+				for (const [id, ts] of activeBlocks) {
+					lines.push(`  ${id}  (resets in ${Math.ceil((ts - now) / 60_000)} min)`);
+				}
+			} else {
+				lines.push("active blocks: (none)");
 			}
 			await ctx.ui.notify(lines.join("\n"), "info");
+		},
+	});
+
+	// `/switchback-next` — cycle the session's virtual-model pin through its fallback
+	// list (including "off" between the last fallback and the first). The pin is the
+	// user's explicit "route here" override: it wins over both stickiness and the
+	// preference list for as long as the pinned model is usable. A blocked or greyed
+	// pin is ignored, and the status command shows why.
+	pi.registerCommand("switchback-next", {
+		description: "Cycle the pin to the next fallback of the current switchback model (pin off to start)",
+		handler: async (_args, ctx) => {
+			if (!ctx.hasUI) {
+				await ctx.ui.notify("/switchback-next needs a UI-capable context (TUI or RPC)", "warning");
+				return;
+			}
+			const current = ctx.model;
+			if (current === undefined) {
+				await ctx.ui.notify("no active model in this session", "warning");
+				return;
+			}
+			if (current.provider !== SWITCHBACK_PROVIDER) {
+				await ctx.ui.notify(
+					`switchback-next only cycles switchback models; current is "${current.provider}/${current.id}"`,
+					"warning",
+				);
+				return;
+			}
+			const virtualId = `${current.provider}/${current.id}`;
+			const reloaded = safeLoadForCommand(pi, secrets);
+			const modelConfig = findModelConfig(reloaded.config, virtualId);
+			const choices: ReadonlyArray<ModelId | null> = [null, ...modelConfig.fallbacks];
+			const currentPin = getPinnedModel(virtualId);
+			const currentIdx = currentPin === undefined ? -1 : choices.indexOf(currentPin);
+			const nextIdx = currentIdx < 0 ? 0 : (currentIdx + 1) % choices.length;
+			const next = choices[nextIdx] ?? null;
+			setPinnedModel(virtualId, next);
+			await ctx.ui.notify(
+				next === null
+					? `${virtualId}: pin cleared (router falls through to stickiness + preference)`
+					: `${virtualId}: pinned to ${next}${nextIdx === 0 ? " (cycled)" : ""}`,
+				"info",
+			);
 		},
 	});
 
@@ -118,74 +221,6 @@ export default function (pi: ExtensionAPI) {
 				return `  ${modelId}  (resets in ${mins} min)`;
 			});
 			await ctx.ui.notify(`blocked models:\n${lines.join("\n")}`, "info");
-		},
-	});
-
-	// `/switchback` — comprehensive status (every configured virtual model,
-	// effective vs greyed, active blocks with expiry).
-	pi.registerCommand("switchback", {
-		description: "Show switchback status: configured models, fallbacks (effective/greyed), active blocks",
-		handler: async (_args, ctx) => {
-			const now = Date.now();
-			const blocked = readBlockedMap(now);
-			const lines: string[] = [`switchback config: ${configSource}`];
-			for (const modelConfig of modelConfigs) {
-				const resolved = resolveFallbacks(modelConfig.fallbacks, ctx.modelRegistry as AvailabilityRegistry);
-				lines.push(`${modelConfig.id} (${resolved.effectiveCount} effective, ${resolved.greyedCount} greyed):`);
-				for (const entry of resolved.entries) {
-					if (entry.availability === "effective") {
-						const isBlockedNow = isBlocked(entry.id, now, blocked);
-						const blockNote = isBlockedNow
-							? `  [blocked, resets in ${Math.ceil((blocked[entry.id]! - now) / 60_000)} min]`
-							: "";
-						lines.push(`  ✓ ${entry.id}${blockNote}`);
-					} else {
-						lines.push(`  ✗ ${entry.id}  [${entry.availability}: ${entry.reason ?? ""}]`);
-					}
-				}
-			}
-			const activeBlocks = Object.entries(blocked).filter(([, ts]) => ts > now);
-			if (activeBlocks.length > 0) {
-				lines.push(`active blocks:`);
-				for (const [id, ts] of activeBlocks) {
-					lines.push(`  ${id}  (resets in ${Math.ceil((ts - now) / 60_000)} min)`);
-				}
-			} else {
-				lines.push(`active blocks: (none)`);
-			}
-			await ctx.ui.notify(lines.join("\n"), "info");
-		},
-	});
-
-	// `/switchback-simulate` is a test-only command: it triggers a one-shot retry on
-	// the first fallback with a synthetic error message from the configured simulate
-	// fixture. Useful for manual smoke tests when no real provider is quota-exhausted.
-	pi.registerCommand("switchback-simulate", {
-		description: "Simulate a failed request with a synthetic error from the fixture file",
-		handler: async (args, ctx) => {
-			const scenario = args.trim();
-			if (scenario.length === 0) {
-				await ctx.ui.notify("usage: /switchback-simulate <scenario-name>", "warning");
-				return;
-			}
-			const simulateConfig = loadSimulate(true);
-			const message = getScenario(simulateConfig, scenario);
-			if (message === undefined) {
-				const known = Object.keys(simulateConfig.scenarios).join(", ");
-				await ctx.ui.notify(`unknown scenario "${scenario}"; known: ${known}`, "warning");
-				return;
-			}
-			const result = await runSimulate(modelConfigs[0]!, message, ctx.modelRegistry);
-			const picked: ModelId = result.decision.kind === "exhausted" || result.decision.kind === "config-invalid"
-				? "(none)"
-				: result.decision.modelId;
-			const reason = result.decision.kind === "exhausted" || result.decision.kind === "config-invalid"
-				? result.decision.reason
-				: result.decision.reason;
-			await ctx.ui.notify(
-				`simulate scenario: ${message.slice(0, 80)}...\ndecision: ${result.decision.kind} -> ${picked} (${reason})`,
-				"info",
-			);
 		},
 	});
 
@@ -227,38 +262,52 @@ export default function (pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const parsed = parseAnnotateArgs(args);
 			if (parsed === undefined) {
-				await ctx.ui.notify("usage: /switchback-annotate <hash> <quota|auth|transient|overflow|unknown> [note...]", "warning");
+				await ctx.ui.notify("usage: /switchback-annotate <hash-prefix> <class> [note...]", "warning");
 				return;
 			}
-			const { hash, klass, note } = parsed;
-			try {
-				annotateCrash(hash, klass, note);
-				await ctx.ui.notify(`annotated ${hash} as ${klass}${note ? ` (${note})` : ""}`, "info");
-			} catch (e) {
-				const message = e instanceof Error ? e.message : String(e);
-				await ctx.ui.notify(message, "warning");
+			const map = readCrashMap();
+			const matches = Object.entries(map).filter(([hash]) => hash.startsWith(parsed.hash));
+			if (matches.length === 0) {
+				await ctx.ui.notify(`no crash matches hash prefix "${parsed.hash}"`, "warning");
+				return;
 			}
+			if (matches.length > 1 && !parsed.hash.match(/^[0-9a-f]{8}$/)) {
+				const list = matches.map(([h]) => `  ${shortHash(h)}  ${map[h]?.provider}/${map[h]?.model}`).join("\n");
+				await ctx.ui.notify(`ambiguous hash prefix; matches:\n${list}\nuse a longer prefix`, "warning");
+				return;
+			}
+			if (!isValidAnnotationClass(parsed.class)) {
+				await ctx.ui.notify(`class must be one of: ${["quota","auth","transient","overflow","unknown"].join(", ")}`, "warning");
+				return;
+			}
+			const first = matches[0];
+			if (first === undefined) return;
+			const hash = first[0];
+			const crash = first[1];
+			const updated = annotateCrash(hash, parsed.class as ErrorClass, parsed.note ?? "");
+			if (!updated) {
+				await ctx.ui.notify(`annotation failed for ${shortHash(hash)}`, "error");
+				return;
+			}
+			await ctx.ui.notify(
+				`annotated ${shortHash(hash)} (${crash.provider}/${crash.model}) as ${parsed.class}${parsed.note !== undefined ? ` — note: ${parsed.note}` : ""}`,
+				"info",
+			);
 		},
 	});
 }
 
-async function runSimulate(
-	modelConfig: { id: string; name: string; fallbacks: ModelId[] },
-	message: string,
-	registry: ExtensionContext["modelRegistry"],
-): Promise<SimulateResult> {
-	const now = Date.now();
-	const blocked = readBlockedMap(now);
-	return simulateRetry(message, modelConfig, registry, { now, blocked });
-}
-
-/** Provider part of a configured virtual model id (`switchback/auto` -> `switchback`). */
+/**
+ * Provider part of a configured virtual model id (`switchback/auto` -> `switchback`).
+ */
 function virtualProvider(fullId: string): string {
 	const slash = fullId.indexOf("/");
 	return slash > 0 ? fullId.slice(0, slash) : SWITCHBACK_PROVIDER;
 }
 
-/** Id part of a configured virtual model id (`switchback/auto` -> `auto`). */
+/**
+ * Id part of a configured virtual model id (`switchback/auto` -> `auto`).
+ */
 function virtualId(fullId: string): string {
 	const slash = fullId.indexOf("/");
 	return slash >= 0 ? fullId.slice(slash + 1) : fullId;
@@ -272,45 +321,68 @@ function debugFlag(value: string | undefined): boolean | undefined {
 }
 
 /**
- * Parse the [n] argument for `/switchback-crashes`. Returns undefined when the
- * argument is non-numeric; returns a positive integer otherwise. An empty
- * argument returns the default.
+ * Load the config; surfaces a no-config warning when no file is found rather than
+ * throwing (commands run at any time, not just during routing).
  */
-function parseCount(args: string, defaultValue: number): number | undefined {
+function safeLoad(pi: ExtensionAPI, secrets?: { get(name: string): string | undefined }): {
+	config: ResolvedSwitchbackFileConfig;
+	source: string;
+} {
+	try {
+		return loadConfig(secrets);
+	} catch (error) {
+		const message = error instanceof ConfigInvalidError
+			? error.message
+			: error instanceof Error
+				? error.message
+				: String(error);
+		// Best-effort notify: commands only exist after this factory completes, so
+		// this path is only hit on a truly broken config. Fall back to stderr so the
+		// extension is at least visible in the host log.
+		console.warn(`switchback: failed to load config (using defaults): ${message}`);
+		return {
+			config: {
+				models: [{ id: `${SWITCHBACK_PROVIDER}/auto`, name: "Auto (Switchback) - defaults", fallbacks: [] }],
+			},
+			source: "<default - load failed>",
+		};
+	}
+}
+
+function safeLoadForCommand(pi: ExtensionAPI, secrets?: { get(name: string): string | undefined }): {
+	config: ResolvedSwitchbackFileConfig;
+	source: string;
+} {
+	return safeLoad(pi, secrets);
+}
+
+export { ConfigInvalidError };
+
+// The following parse helpers are tiny, so they live here rather than in a
+// dedicated utility module; they are tested via tests/commands.test.ts.
+function parseCount(args: string, fallback: number): number | undefined {
 	const trimmed = args.trim();
-	if (trimmed.length === 0) return defaultValue;
-	const n = Number.parseInt(trimmed, 10);
-	if (!Number.isFinite(n) || n <= 0) return undefined;
+	if (trimmed.length === 0) return fallback;
+	const n = Number(trimmed);
+	if (!Number.isInteger(n) || n < 1) return undefined;
 	return n;
 }
 
-/**
- * Parse the args for `/switchback-annotate <hash> <class> [note...]`. Returns
- * undefined on parse failure (so the handler can emit the usage line).
- */
-function parseAnnotateArgs(args: string): { hash: string; klass: ErrorClass; note: string } | undefined {
-	const tokens = args.trim().split(/\s+/);
-	if (tokens.length < 2) return undefined;
-	const [hash, klassToken, ...noteTokens] = tokens as [string, string, ...string[]];
-	if (hash.length < 4) return undefined;
-	if (!isValidAnnotationClass(klassToken)) return undefined;
-	return { hash, klass: klassToken, note: noteTokens.join(" ").trim() };
+interface ParsedAnnotateArgs {
+	hash: string;
+	class: string;
+	note?: string;
 }
 
-// Re-export the routing types and helpers for tests and other extensions.
-export {
-	decide,
-	buildRoute,
-	ConfigInvalidError,
-	loadConfig,
-	findModelConfig,
-	loadSimulate,
-	getScenario,
-	readBlockedMap,
-	simulateRetry,
-	resolveFallbacks,
-} from "./src/index.ts";
-export type { SimulateResult, SwitchbackState } from "./src/index.ts";
-export type { ModelRoute } from "@earendil-works/pi-coding-agent";
-export type { AvailabilityRegistry } from "./src/availability.ts";
-export type { RouterRegistry } from "./src/routing.ts";
+function parseAnnotateArgs(args: string): ParsedAnnotateArgs | undefined {
+	const parts = args.trim().split(/\s+/u).filter((p) => p.length > 0);
+	if (parts.length < 2) return undefined;
+	const [maybeHash, maybeClass, ...rest] = parts;
+	if (maybeHash === undefined || maybeClass === undefined) return undefined;
+	const hashOk = /^[0-9a-f]{4,}$/u.test(maybeHash);
+	if (!hashOk) return undefined;
+	const note = rest.length > 0 ? rest.join(" ") : undefined;
+	return note === undefined
+		? { hash: maybeHash, class: maybeClass }
+		: { hash: maybeHash, class: maybeClass, note };
+}

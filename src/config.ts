@@ -40,14 +40,24 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { ModelId, SwitchbackConfig, SwitchbackFileConfig } from "./types.ts";
+import type {
+	DecisionModelEntry,
+	JevConfig,
+	JevRef,
+	ModelId,
+	ResolvedSwitchbackConfig,
+	ResolvedSwitchbackFileConfig,
+	SwitchbackConfig,
+	SwitchbackFileConfig,
+} from "./types.ts";
 
 const PROVIDER = "switchback";
 const VIRTUAL_ID = "auto";
 const CONFIG_BASENAME = "switchback";
 
 /** Classifier wire APIs switchback can drive from a direct endpoint. */
-const SUPPORTED_LOCAL_CLASSIFIER_APIS: readonly string[] = ["typesafe-system-one"];
+export const LOCAL_CLASSIFIER_APIS: readonly string[] = ["typesafe-system-one"];
+const SUPPORTED_LOCAL_CLASSIFIER_APIS = LOCAL_CLASSIFIER_APIS;
 
 /**
  * Built-in default used when no user config is present.
@@ -57,7 +67,7 @@ const SUPPORTED_LOCAL_CLASSIFIER_APIS: readonly string[] = ["typesafe-system-one
  * silently-broken router. A project-local `.pi/switchback.yaml` or the
  * agent-dir copy is what fills this in.
  */
-export const DEFAULT_CONFIG: SwitchbackFileConfig = {
+export const DEFAULT_CONFIG: ResolvedSwitchbackFileConfig = {
 	models: [
 		{
 			id: `${PROVIDER}/${VIRTUAL_ID}`,
@@ -119,9 +129,30 @@ function parseModelId(value: unknown, where: string): ModelId {
 	return value;
 }
 
-function parseJev(value: unknown, where: string): SwitchbackConfig["jev"] {
+function parseJev(value: unknown, where: string): JevRef | undefined {
 	if (value === undefined) return undefined;
 	if (!isRecord(value)) throw new ConfigError(`${where}.jev must be an object`, where);
+	// Reference form: { decisionModel: <name> }. Must not mix with inline fields.
+	const ref = value["decisionModel"];
+	if (ref !== undefined) {
+		if (typeof ref !== "string" || ref.length === 0) {
+			throw new ConfigError(`${where}.jev.decisionModel must be a non-empty string`, where);
+		}
+		for (const key of Object.keys(value)) {
+			if (key !== "decisionModel") {
+				throw new ConfigError(
+					`${where}.jev mixes decisionModel with "${key}" - use either the reference or the inline form`,
+					where,
+				);
+			}
+		}
+		return { decisionModel: ref };
+	}
+	return parseJevInline(value, where);
+}
+
+/** Parse the inline JevConfig fields (shared by models[].jev and decisionModels[] entries). */
+function parseJevInline(value: Record<string, unknown>, where: string): JevConfig {
 	const provider = value["provider"];
 	const id = value["id"];
 	if (typeof provider !== "string" || provider.length === 0) {
@@ -197,13 +228,129 @@ function parseSwitchbackModel(value: unknown, index: number): SwitchbackConfig {
 	const name = value["name"];
 	const fallbacks = value["fallbacks"];
 	if (typeof id !== "string" || id.length === 0) throw new ConfigError(`${where}.id must be a non-empty string`, where);
+	// Bare ids are shorthand: `auto` normalises to `switchback/auto`. Physical
+	// fallbacks always stay full "provider/id" - they name other providers' models.
+	const fullId = id.includes("/") ? id : `${PROVIDER}/${id}`;
 	if (typeof name !== "string" || name.length === 0) throw new ConfigError(`${where}.name must be a non-empty string`, where);
 	if (!Array.isArray(fallbacks) || fallbacks.length === 0) {
 		throw new ConfigError(`${where}.fallbacks must be a non-empty array of "provider/id" strings`, where);
 	}
 	const parsedFallbacks = fallbacks.map((entry, i) => parseModelId(entry, `${where}.fallbacks[${i}]`));
 	const jev = parseJev(value["jev"], where);
-	return { id, name, fallbacks: parsedFallbacks, ...(jev ? { jev } : {}) };
+	return { id: fullId, name, fallbacks: parsedFallbacks, ...(jev ? { jev } : {}) };
+}
+
+/** Parse the top-level `decisionModels:` list. Names must be unique. */
+function parseDecisionModels(value: unknown, path: string): DecisionModelEntry[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value)) throw new ConfigError("decisionModels must be an array", path);
+	const entries: DecisionModelEntry[] = [];
+	const seen = new Set<string>();
+	value.forEach((entry, i) => {
+		const where = `decisionModels[${i}]`;
+		if (!isRecord(entry)) throw new ConfigError(`${where} must be an object`, path);
+		const name = entry["name"];
+		if (typeof name !== "string" || name.length === 0) {
+			throw new ConfigError(`${where}.name must be a non-empty string`, path);
+		}
+		if (seen.has(name)) throw new ConfigError(`decisionModels contains the name "${name}" more than once`, path);
+		seen.add(name);
+		const inline = parseJevInline(entry, where);
+		entries.push({ name, ...inline });
+	});
+	return entries;
+}
+
+/**
+ * Resolve a model's `jev` to an inline config. A `decisionModel:` reference is
+ * looked up in the given decision-model list; an unknown name is an actionable
+ * load-time error, not a silent fall-through to no classifier.
+ */
+export function resolveJevConfig(
+	decisionModels: readonly DecisionModelEntry[] | undefined,
+	jev: JevRef | undefined,
+): JevConfig | undefined {
+	if (jev === undefined) return undefined;
+	if (!("decisionModel" in jev)) return jev;
+	const name = jev.decisionModel;
+	const found = decisionModels?.find((d) => d.name === name);
+	if (found === undefined) {
+		throw new ConfigError(
+			`jev.decisionModel "${name}" is not defined in decisionModels (known: ${(decisionModels ?? []).map((d) => d.name).join(", ") || "none"})`,
+			"<config>",
+		);
+	}
+	const { name: _ignored, ...inline } = found;
+	return inline;
+}
+
+const SECRETS_PREFIX = "secret:";
+
+/**
+ * Resolve a `secret:<ref>` apiKey value against a secret store. Anything else
+ * (the literal string `ollama`, a real token, etc.) passes through unchanged.
+ * A missing reference throws `SecretsError` (re-raised by the caller) - a secret
+ * reference that does not resolve is a user error, not a silent default.
+ */
+export function resolveSecretApiKey(
+	apiKey: string | undefined,
+	secrets: { get(name: string): string | undefined } | undefined,
+): string | undefined {
+	if (apiKey === undefined) return undefined;
+	if (!apiKey.startsWith(SECRETS_PREFIX)) return apiKey;
+	if (secrets === undefined) {
+		throw new ConfigError(
+			`apiKey starts with "${SECRETS_PREFIX}" but no secret store was provided - pass one to loadConfig() or define the key in the secret store first.`,
+			"<config>",
+		);
+	}
+	const name = apiKey.slice(SECRETS_PREFIX.length);
+	if (name.length === 0) {
+		throw new ConfigError(`apiKey "${SECRETS_PREFIX}" is missing a name`, "<config>");
+	}
+	const value = secrets.get(name);
+	if (value === undefined) {
+		throw new ConfigError(
+			`apiKey "${apiKey}" does not resolve (secret "${name}" is not in the store)`,
+			"<config>",
+		);
+	}
+	return value;
+}
+
+/** Resolve every model's jev reference against the decision-model list. */
+function resolveAllJevs(
+	file: SwitchbackFileConfig,
+	secrets: { get(name: string): string | undefined } | undefined = undefined,
+): ResolvedSwitchbackFileConfig {
+	const resolvedDecisionModels =
+		file.decisionModels === undefined
+			? undefined
+			: file.decisionModels.map((entry) => {
+					const { apiKey, ...rest } = entry;
+					const resolvedApiKey = resolveSecretApiKey(apiKey, secrets);
+					return resolvedApiKey === undefined ? entry : { ...rest, apiKey: resolvedApiKey };
+				});
+	return {
+		models: file.models.map((model) => {
+			const { jev, ...rest } = model;
+			const inline = resolveJevConfig(
+				file.decisionModels === undefined ? undefined : resolvedDecisionModels,
+				jev,
+			);
+			if (inline === undefined) return rest;
+			const resolvedInline: JevConfig = (() => {
+				const apiKey = inline.apiKey;
+				const resolvedApiKey = resolveSecretApiKey(apiKey, secrets);
+				return resolvedApiKey === undefined ? inline : { ...inline, apiKey: resolvedApiKey };
+			})();
+			return { ...rest, jev: resolvedInline };
+		}),
+		...(file.decisionModels !== undefined && file.decisionModels.length > 0 && resolvedDecisionModels !== undefined
+			? { decisionModels: resolvedDecisionModels }
+			: {}),
+		...(file.debug !== undefined ? { debug: file.debug } : {}),
+	};
 }
 
 function parseFileConfig(value: unknown, path: string): SwitchbackFileConfig {
@@ -229,7 +376,12 @@ function parseFileConfig(value: unknown, path: string): SwitchbackFileConfig {
 	if (rawDebug !== undefined && typeof rawDebug !== "boolean") {
 		throw new ConfigError("debug must be a boolean", path);
 	}
-	return { models: parsed, ...(rawDebug !== undefined ? { debug: rawDebug } : {}) };
+	const decisionModels = parseDecisionModels(value["decisionModels"], path);
+	return {
+		models: parsed,
+		...(decisionModels.length > 0 ? { decisionModels } : {}),
+		...(rawDebug !== undefined ? { debug: rawDebug } : {}),
+	};
 }
 
 function readAndParse(path: string): SwitchbackFileConfig {
@@ -272,6 +424,10 @@ function aggregateConfigs(global: SwitchbackFileConfig, project: SwitchbackFileC
 	}
 	return {
 		models: merged,
+		// Decision models follow the same layering rule as debug: the project list
+		// replaces the global list when present, so references resolve against one
+		// predictable set. (A project layer without decisionModels keeps the global set.)
+		...(project.decisionModels !== undefined ? { decisionModels: project.decisionModels } : global.decisionModels !== undefined ? { decisionModels: global.decisionModels } : {}),
 		...(project.debug !== undefined ? { debug: project.debug } : global.debug !== undefined ? { debug: global.debug } : {}),
 	};
 }
@@ -287,7 +443,20 @@ function aggregateConfigs(global: SwitchbackFileConfig, project: SwitchbackFileC
  * surfaced, never silently dropped. With neither file present, DEFAULT_CONFIG
  * (empty fallbacks, fail-fast) applies.
  */
-export function loadConfig(): { config: SwitchbackFileConfig; source: string } {
+/** A store capable of resolving `secret:<name>` apiKey references. */
+export interface SecretResolver {
+	get(name: string): string | undefined;
+}
+
+/**
+ * Load, aggregate and resolve the user config.
+ *
+ * `secrets` resolves `apiKey: secret:<name>` references to plaintext. It is
+ * injected rather than imported so this module stays free of the secrets store
+ * (which itself reads `piSwitchbackDir` from here) - production callers pass
+ * `createSecretStore()`; tests pass a fake or leave it undefined.
+ */
+export function loadConfig(secrets?: SecretResolver): { config: ResolvedSwitchbackFileConfig; source: string } {
 	const [projectPath, agentPath] = candidatePaths() as [string, string];
 	const projectExists = existsSync(projectPath);
 	const agentExists = existsSync(agentPath);
@@ -296,20 +465,29 @@ export function loadConfig(): { config: SwitchbackFileConfig; source: string } {
 		if (agentExists) {
 			const agent = readAndParse(agentPath);
 			return {
-				config: aggregateConfigs(agent, project),
+				config: resolveAllJevs(aggregateConfigs(agent, project), secrets),
 				source: `${resolve(projectPath)} + ${resolve(agentPath)}`,
 			};
 		}
-		return { config: project, source: resolve(projectPath) };
+		return { config: resolveAllJevs(project, secrets), source: resolve(projectPath) };
 	}
 	if (agentExists) {
-		return { config: readAndParse(agentPath), source: resolve(agentPath) };
+		return { config: resolveAllJevs(readAndParse(agentPath), secrets), source: resolve(agentPath) };
 	}
 	return { config: DEFAULT_CONFIG, source: "<default>" };
 }
 
+/**
+ * Validate a raw parsed YAML value against every config rule. The same gate the
+ * loader applies; exposed so the interactive config editor validates a mutated
+ * document at save time instead of maintaining a second rule set.
+ */
+export function validateFileConfig(raw: unknown, path: string): SwitchbackFileConfig {
+	return parseFileConfig(raw, path);
+}
+
 /** Look up the configuration entry for a given virtual model id. */
-export function findModelConfig(config: SwitchbackFileConfig, virtualId: string): SwitchbackConfig {
+export function findModelConfig(config: ResolvedSwitchbackFileConfig, virtualId: string): ResolvedSwitchbackConfig {
 	const entry = config.models.find((m) => m.id === virtualId);
 	if (!entry) throw new ConfigError(`no config entry for virtual model "${virtualId}"`, "<config>");
 	if (entry.fallbacks.length === 0) {

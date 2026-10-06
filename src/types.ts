@@ -21,8 +21,31 @@ export interface JevConfig {
 	baseUrl?: string;
 	/** Wire API for the direct endpoint. Only "typesafe-system-one" is supported today. */
 	api?: string;
-	/** Bearer token for the direct endpoint. A local server ignores it, but the transport requires a non-empty value. */
+	/** Bearer token for the direct endpoint, or `secret:<name>` referencing the encrypted store. */
 	apiKey?: string;
+}
+
+/** A named, reusable decision-model entry (`decisionModels:` in the config). */
+export interface DecisionModelEntry extends JevConfig {
+	/** Unique name `models[].jev.decisionModel` references. */
+	name: string;
+}
+
+/** A model's classifier: inline config, or a `decisionModel:` reference by name. */
+export type JevRef = JevConfig | { decisionModel: string };
+
+/**
+ * A config entry after reference resolution: `jev` is always the inline form.
+ * This is what the router and the extension consume; the reference form exists
+ * only in the YAML file and the config editor.
+ */
+export type ResolvedSwitchbackConfig = Omit<SwitchbackConfig, "jev"> & { jev?: JevConfig };
+
+/** A config file after aggregation and reference resolution. */
+export interface ResolvedSwitchbackFileConfig {
+	models: ResolvedSwitchbackConfig[];
+	decisionModels?: DecisionModelEntry[];
+	debug?: boolean;
 }
 
 /** A single switchback virtual-model definition. */
@@ -33,13 +56,15 @@ export interface SwitchbackConfig {
 	name: string;
 	/** Ordered preference of physical models ("provider/id"). First entry is the preferred model. */
 	fallbacks: ModelId[];
-	/** Jev classifier used for error classification. When absent, the router reports and blind-cycles (there is no heuristic fallback). */
-	jev?: JevConfig;
+	/** Inline classifier config or a `decisionModel:` name reference. Absent: report and blind-cycle. */
+	jev?: JevRef;
 }
 
 /** Top-level switchback configuration. */
 export interface SwitchbackFileConfig {
 	models: SwitchbackConfig[];
+	/** Named, reusable decision models; `models[].jev.decisionModel` references these. */
+	decisionModels?: DecisionModelEntry[];
 	/**
 	 * Emit one diagnostics notification per model switch (the classifier's verdict
 	 * and how the requested reasoning category resolved against the activated

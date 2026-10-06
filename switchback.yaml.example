@@ -20,6 +20,23 @@
 #
 # debug: true
 #
+# Pinning: `/switchback-next` (the per-virtual-model "cycle the fallback list"
+# command) writes its result to <piConfigDir>/switchback/pin.json. Setting
+# `debug: true` makes the resolution visible on every manual change too. A pin
+# is honored on `user`/`direct` routes as long as the pinned model is usable;
+# otherwise the session falls through to its current stickiness / preference.
+#
+# Thinking levels: the offered scale is fixed at off / minimal / medium / high
+# / max. When a configured fallback cannot express the requested category
+# (e.g. zai has no "medium" and cannot disable thinking), switchback asks the
+# configured SystemOne classifier to pick the nearest supported level, or
+# clamps when the classifier is unavailable.
+#
+# Decision models: name once in `decisionModels:` and reference by name from
+# `models[].jev.decisionModel:`. Inline (`provider` + `id`, optionally
+# `baseUrl` + `api` + `apiKey`) is also supported. For local System One
+# endpoints (Ollama v0.35+) prefer the inline form with a baseUrl.
+#
 # The `fallbacks` list below is the ordered preference. Each id was verified to
 # resolve in the catalog at the time of writing (2026-10-04) using a credentialed
 # session. Re-run `pi --list-models <provider>` to confirm before relying on any
@@ -37,7 +54,7 @@
 #                      is account-specific; if you hit it, see /switchback status.
 
 models:
-  - id: switchback/auto
+  - id: auto                          # bare id: normalised to "switchback/auto"
     name: Auto (Switchback)
     fallbacks:
       - zai/glm-5.3              # 1M context, current z.ai GLM coding plan
@@ -48,8 +65,7 @@ models:
     #
     # 1. A classifier from pi's catalog - provider + id only:
     jev:
-      provider: typesafe
-      id: jev-latest
+      decisionModel: main
     #
     # 2. A local System One endpoint, registered by switchback itself so no pi
     #    provider is needed. `baseUrl` is the switch. Works with Ollama v0.35+
@@ -61,3 +77,28 @@ models:
     #   id: tev1:0.8b
     #   baseUrl: http://localhost:11434/v1
     #   apiKey: ollama        # local servers ignore it; the transport needs a non-empty value
+    #                         # or "secret:<name>" referencing the encrypted store (see
+    #                         # `decisionModels:` below for the API key flow).
+  - id: auto-flash                    # bare id: normalised to "switchback/auto-flash"
+    name: Auto (Switchback) - Flash
+    fallbacks:
+      - zai/glm-5.3-flash
+      - minimax/MiniMax-M3
+      - ollama-cloud/glm-5.3-flash
+      - opencode-go/mimo-v2.6-flash
+
+decisionModels:
+  - name: main
+    provider: typesafe
+    id: jev-latest
+    # Optional baseUrl + api + apiKey for a local System One endpoint.
+    # baseUrl: http://localhost:11434/v1
+    # api: typesafe-system-one
+    # apiKey: ollama            # local; for a real key use secret:<name> below.
+  - name: remote-fallback
+    provider: typesafe
+    id: jev-1.13
+    # apiKey: secret:typesafe-fb   # stored encrypted under switchback/secrets.json
+    #                             #   (managed via the /switchback-config dialogue or
+    #                             #    the sb-3 secrets store directly).
+</content>

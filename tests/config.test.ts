@@ -148,6 +148,59 @@ describe("loadConfig - yaml-only lookup (no JSON user config)", () => {
 	});
 });
 
+describe("loadConfig - bare ids and decisionModel references", () => {
+	const writeWith = (modelsYaml: string, decisionModelsYaml = ""): void => {
+		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+		writeFileSync(
+			join(tmpDir, ".pi", "switchback.yaml"),
+			`models:\n  ${modelsYaml}\n${decisionModelsYaml}`,
+		);
+	};
+
+	it("normalises a bare model id (auto → switchback/auto)", () => {
+		writeWith(`- id: auto
+    name: Main
+    fallbacks: ["zai/glm-5.3"]`);
+		const { config } = loadConfig();
+		expect(config.models[0]?.id).toBe("switchback/auto");
+	});
+
+	it("resolves a decisionModel reference against the decisionModels list", () => {
+		writeWith(
+			`- id: auto
+    name: Main
+    fallbacks: ["zai/glm-5.3"]
+    jev:
+      decisionModel: main`,
+			`decisionModels:
+  - name: main
+    provider: typesafe
+    id: jev-latest
+    baseUrl: http://localhost:11434/v1
+    api: typesafe-system-one
+    apiKey: ollama
+`,
+		);
+		const { config } = loadConfig();
+		expect(config.models[0]?.jev).toEqual({
+			provider: "typesafe",
+			id: "jev-latest",
+			baseUrl: "http://localhost:11434/v1",
+			api: "typesafe-system-one",
+			apiKey: "ollama",
+		});
+	});
+
+	it("rejects a decisionModel reference to an unknown name", () => {
+		writeWith(`- id: auto
+    name: Main
+    fallbacks: ["zai/glm-5.3"]
+    jev:
+      decisionModel: does-not-exist`);
+		expect(() => loadConfig()).toThrow(/decisionModel "does-not-exist"/);
+	});
+});
+
 describe("loadConfig - debug flag", () => {
 	const writeWith = (yaml: string): void => {
 		mkdirSync(join(tmpDir, ".pi"), { recursive: true });

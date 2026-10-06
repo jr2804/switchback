@@ -59,6 +59,8 @@ import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import type { Api, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { pickNextEffective, resolveFallbacks, type AvailabilityRegistry } from "./availability.ts";
 import { classifyError, PROMPT_VERSION, type NoClassifierReason } from "./classify.ts";
+import { fitsContext } from "./context-fit.ts";
+import { decideIdleReset } from "./idle.ts";
 import { availableCategories, chooseThinkingLevel, type ThinkingLevelContext, type ThinkingLevelSource } from "./thinking.ts";
 import { blockModel, getPinnedModel, isBlocked, readBlockedMap, unblockModel } from "./state.ts";
 import { recordCrash, type CrashAction } from "./crashes.ts";
@@ -102,6 +104,12 @@ export interface RouteInputs {
 	notify?: NotifyFn;
 	/** When true, emit one diagnostics line per model switch (see `debug:` in the config). */
 	debug?: boolean;
+	/**
+	 * Current context size in tokens (from `ctx.getContextUsage()`), when pi can
+	 * report it. Used only to *prefer* a switch target that can hold the context -
+	 * never to make a model ineligible. See `src/context-fit.ts`.
+	 */
+	contextTokens?: number;
 }
 
 function lookupModel(registry: RouterRegistry, modelId: ModelId): Model<Api> | undefined {
@@ -133,6 +141,48 @@ function keepState(current: ModelId, prior: SwitchbackState | undefined, transie
 function physicalId(model: ModelRouteRequest<SwitchbackState>["model"] | undefined): ModelId | undefined {
 	if (!model) return undefined;
 	return `${model.provider}/${model.id}`;
+}
+
+/**
+ * Pick the next usable model, preferring one that can hold the current context.
+ *
+ * A preference, never a filter (see `src/context-fit.ts`): when the ordinary pick
+ * already fits, or nothing fits, or the context size is unknown, the ordinary
+ * pick is returned unchanged. Only when the ordinary pick would force compaction
+ * does the router look for the first candidate in preference order that can hold
+ * the context - and if none can, continuity wins and the ordinary pick stands.
+ */
+function pickWithContextFit(opts: {
+	resolved: ReturnType<typeof resolveFallbacks>;
+	skip: ModelId | undefined;
+	blocked: BlockedMap;
+	now: number;
+	startAfter: ModelId | undefined;
+	registry: RouterRegistry;
+	contextTokens: number | undefined;
+}): ReturnType<typeof pickNextEffective> {
+	const pick = pickNextEffective(opts.resolved, opts.skip, opts.blocked, opts.now, opts.startAfter);
+	const tokens = opts.contextTokens;
+	if (!pick || tokens === undefined || tokens <= 0) return pick;
+	if (fitsModel(opts.registry, pick.modelId, tokens)) return pick;
+	for (const entry of opts.resolved.entries) {
+		if (entry.id === pick.modelId || entry.id === opts.skip) continue;
+		if (entry.availability !== "effective" || isBlockedNow(entry.id, opts.blocked, opts.now)) continue;
+		if (!fitsModel(opts.registry, entry.id, tokens)) continue;
+		return { modelId: entry.id, degraded: false };
+	}
+	// Nothing can hold the context: keep the ordinary pick (continuity over a
+	// context drop) rather than failing the switch.
+	return pick;
+}
+
+/** Whether the named physical model can hold `tokens` of context (false when unknown). */
+function fitsModel(registry: RouterRegistry, modelId: ModelId, tokens: number): boolean {
+	const slash = modelId.indexOf("/");
+	if (slash <= 0) return false;
+	const model = registry.find(modelId.slice(0, slash), modelId.slice(slash + 1));
+	if (model === undefined) return false;
+	return fitsContext(model, tokens);
 }
 
 /**
@@ -273,11 +323,53 @@ export async function decide(
 		// apply and the status command shows why the pin is not being honoured.
 	}
 
+	const current = request.state?.current;
+
+	// Idle reset ("switch to initial"): after a long idle the provider's prompt cache
+	// is cold, so staying buys nothing, and a model with a short quota window and no
+	// weekly cap is worth preferring again. Configured per virtual model; the pin
+	// above still outranks it (it is the user's explicit override).
+	const idle = await decideIdleReset({
+		registry,
+		jev: modelConfig.jev,
+		option: modelConfig.idleReset,
+		messages: request.messages,
+		now,
+		currentModel: current,
+		candidates: resolved.entries.filter((e) => e.availability === "effective").map((e) => e.id),
+		blockedNotes: resolved.entries
+			.filter((e) => isBlockedNow(e.id, blocked, now))
+			.map((e) => `${e.id} (resets in ${Math.max(1, Math.round(((blocked[e.id] ?? now) - now) / 60_000))} min)`),
+	});
+	if (idle.reset) {
+		const pick = pickWithContextFit({ resolved, skip: undefined, blocked, now, startAfter: undefined, registry, contextTokens: inputs.contextTokens });
+		if (pick) {
+			const nextState = buildStateAfterSwitch(pick.modelId, request.state);
+			if (pick.degraded && resolved.effectiveCount === 1 && !nextState.degradedWarned) {
+				nextState.degradedWarned = true;
+			}
+			return resolveDispatchLevel(
+				{
+					decision: {
+						kind: current === pick.modelId ? "stick" : "switch",
+						modelId: pick.modelId,
+						reason: `idle-reset-${idle.source}: ${idle.reason}`,
+					},
+					nextState,
+					thinkingLevel: request.thinkingLevel,
+				},
+				request,
+				modelConfig,
+				registry,
+				inputs,
+			);
+		}
+	}
+
 	// Stickiness: the session stays where it is. Stickiness is the fix for the
 	// reported behaviour where every turn restarted at the head of the list, so a model
 	// that had just failed the session was preferred again. A blocked or unavailable
 	// current model is left behind, and the walk continues FORWARD from it.
-	const current = request.state?.current;
 	if (current !== undefined) {
 		const cur = resolved.entries.find((e) => e.id === current);
 		if (cur?.availability === "effective" && !isBlockedNow(current, blocked, now)) {
@@ -291,7 +383,7 @@ export async function decide(
 
 	// Nothing usable yet: continue forward from where the session was (wrapping), else
 	// start at the head of the configured list.
-	const pick = pickNextEffective(resolved, undefined, blocked, now, current);
+	const pick = pickWithContextFit({ resolved, skip: undefined, blocked, now, startAfter: current, registry, contextTokens: inputs.contextTokens });
 	if (!pick) {
 		// No non-blocked effective entry AND multiple effective entries exist: the user
 		// is quota-locked-out across all configured fallbacks. Surface "exhausted" rather
@@ -351,7 +443,7 @@ async function decideRetry(
 				thinkingLevel: request.thinkingLevel,
 			};
 		}
-		const pick = pickNextEffective(resolved, undefined, blocked, now, advanceFrom);
+		const pick = pickWithContextFit({ resolved, skip: undefined, blocked, now, startAfter: advanceFrom, registry, contextTokens: inputs.contextTokens });
 		if (!pick) {
 			return { decision: { kind: "exhausted", reason: "all-effective-blocked" }, thinkingLevel: request.thinkingLevel };
 		}
@@ -371,7 +463,7 @@ async function decideRetry(
 	if (result.kind === "no-classifier") {
 		const reasonText = describeNoClassifier(result.reason);
 		inputs.notify?.(`switchback: no classifier decision (${result.reason}) - cycling without classification`, "warning");
-		const pick = pickNextEffective(resolved, failedId, blocked, now, advanceFrom);
+		const pick = pickWithContextFit({ resolved, skip: failedId, blocked, now, startAfter: advanceFrom, registry, contextTokens: inputs.contextTokens });
 		recordDecideCrash(failedId, registry, errorMessage, now, null, result.reason, "blind-cycle");
 		if (pick) {
 			const nextState = buildStateAfterSwitch(pick.modelId, priorState);
@@ -419,7 +511,7 @@ async function decideRetry(
 				thinkingLevel: request.thinkingLevel,
 			};
 		}
-		const pick = pickNextEffective(resolved, failedId, blocked, now, advanceFrom);
+		const pick = pickWithContextFit({ resolved, skip: failedId, blocked, now, startAfter: advanceFrom, registry, contextTokens: inputs.contextTokens });
 		recordDecideCrash(failedId, registry, errorMessage, now, classified, undefined, pick ? "blocked+advanced" : "stuck-stayed");
 		if (pick) {
 			const nextState = buildStateAfterSwitch(pick.modelId, priorState);
@@ -438,7 +530,7 @@ async function decideRetry(
 	// Quota / auth / unknown: block the failed model with the classifier-supplied
 	// reset time and pick the next non-blocked.
 	blockModel(failedId, classified.resetAtMs, now);
-	const pick = pickNextEffective(resolved, failedId, blocked, now, advanceFrom);
+	const pick = pickWithContextFit({ resolved, skip: failedId, blocked, now, startAfter: advanceFrom, registry, contextTokens: inputs.contextTokens });
 	recordDecideCrash(failedId, registry, errorMessage, now, classified, undefined, pick ? "blocked+advanced" : "stuck-stayed");
 	if (pick) {
 		const nextState = buildStateAfterSwitch(pick.modelId, priorState);

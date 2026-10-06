@@ -10,6 +10,19 @@ export { classifyError, PROMPT_VERSION, callClassifier, readChoice, CLASSIFIER_T
 export type { ClassificationResult, NoClassifierReason, ClassifierCallResult, ClassifierRegistry } from "./classify.ts";
 export { chooseThinkingLevel, availableCategories, supportedLevels, SWITCHBACK_THINKING_LEVELS, THINKING_PROMPT_VERSION } from "./thinking.ts";
 export type { ThinkingLevelChoice, ThinkingLevelContext, ThinkingLevelSource } from "./thinking.ts";
+export {
+	decideIdleReset,
+	formatIdle,
+	idleMsSince,
+	idleResetThresholdMs,
+	isIdleResetDuration,
+	lastMessageTimestamp,
+	IDLE_CLASSIFIER_FLOOR_MS,
+	IDLE_RESET_OPTIONS,
+	IDLE_RESET_PROMPT_VERSION,
+} from "./idle.ts";
+export type { IdleResetDecision, IdleResetInput } from "./idle.ts";
+export { fitsContext, usableContextTokens, CONTEXT_FIT_RESERVE_TOKENS } from "./context-fit.ts";
 export { blockModel, isBlocked, readBlockedMap, unblockModel, stateFilePath } from "./state.ts";
 export {
 	readCrashMap,
@@ -26,8 +39,35 @@ export {
 export type { CrashEntry, CrashMap, CrashAction, CrashVerdict, CrashAnnotation, RecordCrashInput } from "./crashes.ts";
 export { createSecretStore, secretsFilePath, powershellDpapi, SecretsError } from "./secrets.ts";
 export type { SecretStore, Dpapi } from "./secrets.ts";
-export { loadConfig, findModelConfig, DEFAULT_CONFIG, SWITCHBACK_PROVIDER, SWITCHBACK_VIRTUAL_ID, ConfigError, piConfigDir, piSwitchbackDir } from "./config.ts";
-export type { SwitchbackConfig, SwitchbackFileConfig, JevConfig } from "./config.ts";
+export { loadConfig, findModelConfig, DEFAULT_CONFIG, SWITCHBACK_PROVIDER, SWITCHBACK_VIRTUAL_ID, ConfigError, piConfigDir, piSwitchbackDir, LOCAL_CLASSIFIER_APIS, resolveJevConfig, resolveSecretApiKey, validateFileConfig } from "./config.ts";
+export type { SwitchbackConfig, SwitchbackFileConfig, JevConfig, JevRef, DecisionModelEntry, ResolvedSwitchbackConfig, ResolvedSwitchbackFileConfig } from "./config.ts";
+export {
+	addDecisionModel,
+	addFallback,
+	addVirtualModel,
+	countDecisionModelReferences,
+	defaultLayer,
+	globalConfigPath,
+	layerPath,
+	loadLayer,
+	moveFallback,
+	projectConfigPath,
+	readLayerConfig,
+	removeDecisionModel,
+	removeFallback,
+	removeVirtualModel,
+	renameDecisionModel,
+	renameVirtualModel,
+	saveLayer,
+	setDecisionModel,
+	setDebug,
+	setFallbacks,
+	setVirtualModelName,
+	updateDecisionModel,
+} from "./config-editor.ts";
+export type { ConfigLayer, DecisionModelInput, DecisionModelPatch, LoadedLayer } from "./config-editor.ts";
+export { runDialogue, describeJev } from "./dialogue.ts";
+export type { DialogueContext, DialogueUi } from "./dialogue.ts";
 export { loadSimulate, getScenario, simulateRetry, SimulateError } from "./simulate.ts";
 export type { SimulateConfig, SimulateResult } from "./simulate.ts";
 export { resolveFallbacks, effectiveIds, pickNextEffective } from "./availability.ts";
@@ -38,6 +78,7 @@ export type {
 	ClassifiedError,
 	ErrorClass,
 	ErrorScope,
+	IdleResetConfig,
 	ModelId,
 	ResolvedEntry,
 	ResolvedFallbacks,

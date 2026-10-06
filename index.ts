@@ -27,6 +27,7 @@
 import type { ExtensionAPI, ExtensionContext, ModelRoute } from "@earendil-works/pi-coding-agent";
 import { resolveFallbacks, type AvailabilityRegistry } from "./src/availability.ts";
 import { SWITCHBACK_PROVIDER, findModelConfig, loadConfig } from "./src/config.ts";
+import { runDialogue } from "./src/dialogue.ts";
 import { createSecretStore } from "./src/secrets.ts";
 import { buildRoute, decide, ConfigInvalidError, type RouterRegistry } from "./src/routing.ts";
 import { registerLocalClassifier } from "./src/local-classifier.ts";
@@ -102,12 +103,17 @@ export default function (pi: ExtensionAPI) {
 					activeConfig = lastGoodConfig;
 				}
 				const modelConfig: ResolvedSwitchbackConfig = findModelConfig(activeConfig, fullVirtualId);
+				// The context size pi reports for the *routed* model. Only used to prefer a
+				// switch target that can hold the conversation (see src/context-fit.ts).
+				// pi reports null when no assistant has answered since the last compaction.
+				const contextTokens = ctx.getContextUsage()?.tokens ?? undefined;
 				const result = await decide(request.reason, request, modelConfig, ctx.modelRegistry, {
 					now,
 					blocked,
 					notify,
 					debug,
 					...(pinned !== null && pinned !== undefined ? { pinned } : {}),
+					...(contextTokens !== undefined ? { contextTokens } : {}),
 				});
 				return buildRoute(ctx.modelRegistry, result.decision, result.thinkingLevel, result.nextState);
 			},
@@ -158,6 +164,18 @@ export default function (pi: ExtensionAPI) {
 				lines.push("active blocks: (none)");
 			}
 			await ctx.ui.notify(lines.join("\n"), "info");
+		},
+	});
+
+	// `/switchback-config` — interactive editor for the switchback.yaml layers:
+	// virtual models, fallback order, decision models, encrypted API-key secrets
+	// and the debug flag. Each action is validated through the loader's single
+	// gate (validateFileConfig + resolveJevConfig) and saved immediately, so the
+	// file on disk always holds the last good config; a failed action reverts.
+	pi.registerCommand("switchback-config", {
+		description: "Interactively configure virtual models, fallbacks, decision models, API keys and debug",
+		handler: async (_args, ctx) => {
+			await runDialogue(ctx, secrets);
 		},
 	});
 

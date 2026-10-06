@@ -48,6 +48,13 @@ export interface ResolvedSwitchbackFileConfig {
 	debug?: boolean;
 }
 
+/**
+ * When a long-idle session should abandon its sticky model for the head of the
+ * list (`idleReset:`). `never` is the default; a duration is a fixed threshold;
+ * `classifier` asks the decision model (see `src/idle.ts`).
+ */
+export type IdleResetConfig = "never" | "30m" | "1h" | "2h" | "3h" | "5h" | "12h" | "24h" | "classifier";
+
 /** A single switchback virtual-model definition. */
 export interface SwitchbackConfig {
 	/** "provider/id" of the virtual model. Must be the same as the registered virtual model. */
@@ -58,6 +65,8 @@ export interface SwitchbackConfig {
 	fallbacks: ModelId[];
 	/** Inline classifier config or a `decisionModel:` name reference. Absent: report and blind-cycle. */
 	jev?: JevRef;
+	/** Return to the head of the list after this much idle time (default `never`). */
+	idleReset?: IdleResetConfig;
 }
 
 /** Top-level switchback configuration. */

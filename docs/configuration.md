@@ -1,5 +1,8 @@
 # Configuration
 
+Prefer not to hand-edit? `/switchback-config` walks the same file through menus
+and prompts — see the [configuration dialogue](configuration-dialogue.md).
+
 ## File format map
 
 The project uses four files with four distinct roles and formats. **The two
@@ -98,6 +101,78 @@ greyed entry reappears in the catalog (e.g. the user re-enables credentials
 or the provider comes back), it becomes effective again with no config edit.
 The `/switchback` status command shows which entries are greyed, with the
 reason.
+
+## Context window on a switch
+
+pi sizes the conversation against the model a request is routed to: for a
+virtual selection the compaction threshold is checked with the **routed**
+model's `contextWindow`, and the status bar follows it too. Moving to a model
+with a smaller window than the current context therefore triggers compaction
+right after the hop — the conversation gets summarized for no reason other than
+the switch.
+
+When a model fails and the router has to choose a replacement, it **prefers** a
+candidate that can hold the current context (the size pi reports, minus a
+response reserve) over one that cannot:
+
+- It is a **preference, never a filter**. A model is never made ineligible.
+- If **nothing** can hold the context, the ordinary preference order still wins —
+  keeping the session alive matters more than avoiding a context drop, and
+  compaction is pi's own, correct behaviour in that case.
+- It only runs while the router is **already looking for a new model**
+  (a failover switch or an idle reset). A sticky session is never re-routed,
+  however large its context.
+- When pi cannot report a context size, no preference is applied.
+
+The margin is `CONTEXT_FIT_RESERVE_TOKENS` (16k, pi's own default compaction
+reserve), so a model that only just fits is not treated as fitting — it would
+compact immediately after the switch.
+
+## Idle reset (`idleReset`)
+
+A session is sticky on purpose: staying on the model it is already using keeps
+the provider's prompt cache and thinking signature valid. After a long idle
+period that reasoning stops holding — the cache is gone, so staying costs the
+same as switching. And because a model with a short quota window and no weekly
+cap (z.ai's 5h window, for example) "respawns" quickly, going back to the first
+entry of the list can be the more efficient choice.
+
+`idleReset:` is set per virtual model and takes one of:
+
+| Value | Behaviour |
+|---|---|
+| `never` (default) | Always stay on the current model, however long the idle gap. |
+| `30m`, `1h`, `2h`, `3h`, `5h`, `12h`, `24h` | Once the session has been idle at least that long, the next `user`/`direct` request returns to the first usable entry of the fallback list. |
+| `classifier` | Ask the decision model whether returning is worthwhile. |
+
+```yaml
+models:
+  - id: auto
+    fallbacks: ["zai/glm-5.3", "ollama-cloud/glm-5.3-flash"]
+    idleReset: 5h        # spend the short-window quota first after a long gap
+```
+
+Details worth knowing:
+
+- **Idle time comes from the conversation.** It is measured from the newest
+  message in the request to now, so no state file or bookkeeping is involved.
+- **A pin outranks it.** `/switchback-next` is an explicit "route here" and is
+  honoured whatever `idleReset` says.
+- **`classifier` has a floor.** Below 30 minutes the decision model is not
+  asked at all — the answer would always be "stay" and the call would be pure
+  latency on a live session. When the classifier is unavailable (missing,
+  unresolvable, timeout, threw, unparseable) the session keeps its current
+  model: unlike error classification this is a preference, so the conservative
+  outcome is to change nothing.
+- **Only `user`/`direct` routes are affected.** Continuations, retries and
+  overflow stickiness keep their existing behaviour, which is what preserves the
+  cache while a conversation is actually running.
+- **Blocked entries are skipped.** The reset picks the first *usable* entry, so a
+  head model that is quota-blocked is passed over until its reset time.
+
+With `debug: true` the reset reports itself:
+`idle-reset-threshold: idle 6h >= 5h` or
+`idle-reset-classifier: idle 8h, classifier says return to zai/glm-5.3`.
 
 ## Classifier (`jev:`)
 

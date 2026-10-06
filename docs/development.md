@@ -29,21 +29,24 @@ Build steps 1–8 are complete (per the design doc):
 
 ## Test layout
 
-**153** unit/integration tests across 10 files, plus **10 opt-in**
-live-classifier cases:
+**238** unit/integration tests across 13 files, plus **11 opt-in**
+live cases (10 live-classifier, 1 live DPAPI store) that skip unless
+their environment gates are set:
 
 | File | Tests | Covers |
 |---|---|---|
-| `tests/router.test.ts` | 64 | routing, blind cycle, classifier-mocked verdicts, session stickiness, forward failover walk, catalog validity, exhaustion, thinking-level resolution, state, buildRoute |
-| `tests/classify-inventory.test.ts` | 15 | corpus-preservation in `switchback.simulate.json` |
+| `tests/router.test.ts` | 83 | routing, blind cycle, classifier-mocked verdicts, session stickiness, pin override, idle reset, context-window fit on a switch, forward failover walk, catalog validity, exhaustion, thinking-level resolution, state, buildRoute |
+| `tests/dialogue.test.ts` | 27 | config editor: comment-preserving round-trip, layers, decision models, secret references; dialogue flows (scripted UI, hermetic) |
 | `tests/crashes.test.ts` | 25 | crash store, dedup, Tier 2b cache, annotation, corrupt-file quarantine |
+| `tests/config.test.ts` | 23 | `DEFAULT_CONFIG`, `findModelConfig`, layer aggregation, YAML-only, classifier-field validation, debug flag |
+| `tests/secrets.test.ts` | 23 (1 opt-in) | encrypted DPAPI store: round-trip, corruption quarantine, version refuse; live DPAPI gated on `SWITCHBACK_SECRETS_LIVE` |
+| `tests/classify-inventory.test.ts` | 15 | corpus-preservation in `switchback.simulate.json` |
 | `tests/state-migration.test.ts` | 5 | legacy `<cwd>/.pi/switchback.json` → new path migration |
-| `tests/commands.test.ts` | 6 | command-output snapshots + annotate-args parser |
-| `tests/config.test.ts` | 20 | `DEFAULT_CONFIG`, `findModelConfig`, layer aggregation, YAML-only, classifier-field validation, debug flag |
 | `tests/systemone.test.ts` | 5 | switchback's own System One transport (hermetic; injected fetch) |
 | `tests/thinking.test.ts` | 10 | reasoning-level categories, availability, and classifier resolution (hermetic) |
+| `tests/idle.test.ts` | 15 | idle-reset thresholds, timestamp extraction, formatting, classifier contract (hermetic) |
 | `tests/imports.test.ts` | 2 | shipped code never value-imports a host-package subpath (install-safe) |
-| `tests/integration-classifier.test.ts` | 11 (10 opt-in) | live classifier against the preserved corpus (gated on `SWITCHBACK_CLASSIFIER_*`) |
+| `tests/integration-classifier.test.ts` | 1 (10 opt-in) | live classifier against the preserved corpus (gated on `SWITCHBACK_CLASSIFIER_*`) |
 
 ## From source
 
@@ -132,7 +135,7 @@ Before considering any task done:
 
 ```bash
 npx tsc --noEmit    # strict + noUncheckedIndexedAccess + exactOptionalPropertyTypes
-npx vitest run      # 120 + opt-in
+npx vitest run      # 210 + 11 opt-in
 ```
 
 Both must be clean. Do not report a milestone until both pass.

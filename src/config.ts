@@ -40,6 +40,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
+import { IDLE_RESET_OPTIONS } from "./idle.ts";
 import type {
 	DecisionModelEntry,
 	JevConfig,
@@ -49,6 +50,7 @@ import type {
 	ResolvedSwitchbackFileConfig,
 	SwitchbackConfig,
 	SwitchbackFileConfig,
+	IdleResetConfig,
 } from "./types.ts";
 
 const PROVIDER = "switchback";
@@ -237,7 +239,26 @@ function parseSwitchbackModel(value: unknown, index: number): SwitchbackConfig {
 	}
 	const parsedFallbacks = fallbacks.map((entry, i) => parseModelId(entry, `${where}.fallbacks[${i}]`));
 	const jev = parseJev(value["jev"], where);
-	return { id: fullId, name, fallbacks: parsedFallbacks, ...(jev ? { jev } : {}) };
+	const idleReset = parseIdleReset(value["idleReset"], where);
+	return {
+		id: fullId,
+		name,
+		fallbacks: parsedFallbacks,
+		...(jev ? { jev } : {}),
+		...(idleReset !== undefined ? { idleReset } : {}),
+	};
+}
+
+/** Parse and validate a model's `idleReset:` setting. */
+function parseIdleReset(value: unknown, where: string): IdleResetConfig | undefined {
+	if (value === undefined) return undefined;
+	if (typeof value !== "string" || !IDLE_RESET_OPTIONS.includes(value as IdleResetConfig)) {
+		throw new ConfigError(
+			`${where}.idleReset must be one of ${IDLE_RESET_OPTIONS.join(", ")}`,
+			where,
+		);
+	}
+	return value as IdleResetConfig;
 }
 
 /** Parse the top-level `decisionModels:` list. Names must be unique. */

@@ -26,6 +26,11 @@
 # is honored on `user`/`direct` routes as long as the pinned model is usable;
 # otherwise the session falls through to its current stickiness / preference.
 #
+# Idle reset: `idleReset:` returns a long-idle session to the first entry of the
+# list (the provider cache is cold anyway, and a short-window/no-weekly-cap model
+# is worth spending first). Values: never (default), 30m, 1h, 2h, 3h, 5h, 12h,
+# 24h, or `classifier` to let the decision model judge. A pin outranks it.
+#
 # Thinking levels: the offered scale is fixed at off / minimal / medium / high
 # / max. When a configured fallback cannot express the requested category
 # (e.g. zai has no "medium" and cannot disable thinking), switchback asks the
@@ -61,6 +66,8 @@ models:
       - ollama-cloud/glm-5.3-flash # 1M context, vision-capable fallback
       - minimax/MiniMax-M3       # 1M context, minimax Plus default
       - opencode-go/glm-5.3-flash # 1M context, opencode-go fallback
+    # Return to the first entry above after a long idle gap (default: never).
+    idleReset: 5h
     # Classifier. Two forms:
     #
     # 1. A classifier from pi's catalog - provider + id only:

@@ -44,6 +44,8 @@ interface FakeEntry {
 	id: string;
 	/** Optional per-model thinking-level map, as the real catalog carries one. */
 	thinkingLevelMap?: Record<string, string | null>;
+	/** Per-entry context window; defaults to 128k so most tests are unaffected. */
+	contextWindow?: number;
 }
 
 type ClassifyAnswer = {
@@ -69,6 +71,11 @@ interface FakeRegistryOpts {
 	 * router asks it when a decision activates a model (see src/thinking.ts).
 	 */
 	levelAnswer?: string;
+	/**
+	 * When set, the idle-reset question is answered with this choice. The router
+	 * asks it for `idleReset: classifier` (see src/idle.ts).
+	 */
+	idleAnswer?: "return_to_initial" | "keep_current";
 }
 
 function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: (...args: unknown[]) => Promise<unknown> } {
@@ -87,7 +94,7 @@ function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: 
 			...(e.thinkingLevelMap ? { thinkingLevelMap: e.thinkingLevelMap } : {}),
 			input: ["text"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			contextWindow: 128_000,
+			contextWindow: e.contextWindow ?? 128_000,
 			maxTokens: 16_000,
 		} as unknown as Model<Api>);
 		providers.add(e.provider);
@@ -96,7 +103,7 @@ function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: 
 	// returns. Tests that want the classifier path to be exercisable must set
 	// answer / throw / hang / unparseable; tests that want the no-classifier path
 	// leave those unset and findOfType returns undefined.
-	const classifierConfigured = opts.answer !== undefined || opts.throw !== undefined || opts.hang === true || opts.unparseable === true || opts.levelAnswer !== undefined;
+	const classifierConfigured = opts.answer !== undefined || opts.throw !== undefined || opts.hang === true || opts.unparseable === true || opts.levelAnswer !== undefined || opts.idleAnswer !== undefined;
 	const fakeClassifierHandle = classifierConfigured
 		? { provider: "typesafe", id: "jev-latest", api: "classifier" as const, input: ["text" as const] }
 		: undefined;
@@ -123,6 +130,17 @@ function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: 
 				return {
 					stopReason: "stop" as const,
 					answers: { level: { type: "choice" as const, choice: opts.levelAnswer, probabilities: {}, confidence: 1 } },
+				};
+			}
+			// The idle-reset question is its own prompt (src/idle.ts), answered
+			// independently so the sticky/preference paths stay testable.
+			if ("idle_reset" in questions) {
+				if (opts.idleAnswer === undefined) return null;
+				return {
+					stopReason: "stop" as const,
+					answers: {
+						idle_reset: { type: "choice" as const, choice: opts.idleAnswer, probabilities: {}, confidence: 1 },
+					},
 				};
 			}
 			if (opts.hang === true) return new Promise(() => {});
@@ -200,6 +218,8 @@ function buildFakeRequest(overrides: {
 	transientRetries?: number;
 	/** When true the branch has no router state yet (first request of a session). */
 	noState?: boolean;
+	/** Absolute timestamp for the single conversation message (idle-reset tests). */
+	lastMessageAt?: number;
 }) {
 	const firstEntry = FALLBACKS.fallbacks[0]!.split("/");
 	const firstModel = { provider: firstEntry[0]!, id: firstEntry[1]! };
@@ -242,7 +262,9 @@ function buildFakeRequest(overrides: {
 					},
 				}
 			: {}),
-		messages: [],
+		messages: overrides.lastMessageAt === undefined ? [] : [
+			{ role: "user" as const, content: "hello", timestamp: overrides.lastMessageAt },
+		],
 		...(overrides.noState
 			? {}
 			: {
@@ -1184,6 +1206,270 @@ describe("router — thinking level", () => {
 		expect(result.decision.kind).toBe("stick");
 		expect(result.thinkingLevel).toBe("medium");
 		expect(result.thinkingSource).toBeUndefined();
+	});
+});
+
+describe("router — context-window fit on a switch (preference, not a filter)", () => {
+	const BIG = 400_000;
+	const SMALL = 32_000;
+	// Enough to fit in a 400k window but not in a 32k one (16k reserve applies).
+	const TOKENS = 100_000;
+
+	it("prefers a candidate that can hold the context over the next one in list order", async () => {
+		const result = await decide(
+			"retry",
+			buildFakeRequest({
+				reason: "retry",
+				stateCurrent: "zai/glm-4.7",
+				failed: { provider: "zai", id: "glm-4.7", errorMessage: "quota exhausted" },
+			}),
+			FALLBACKS,
+			makeFakeRegistry({
+				entries: [
+					{ provider: "zai", id: "glm-4.7", contextWindow: BIG },
+					{ provider: "ollama-cloud", id: "pro", contextWindow: SMALL },
+					{ provider: "minimax", id: "plus", contextWindow: BIG },
+				],
+				answer: { class: "quota" },
+			}),
+			{ now: 1_000_000, blocked: {}, contextTokens: TOKENS },
+		);
+		// List order would pick ollama-cloud/pro (32k) and force compaction; the
+		// fitting minimax/plus is preferred instead.
+		expect(result.decision.kind).toBe("switch");
+		if (result.decision.kind === "switch") expect(result.decision.modelId).toBe("minimax/plus");
+	});
+
+	it("keeps the ordinary pick when nothing can hold the context (continuity wins)", async () => {
+		const result = await decide(
+			"retry",
+			buildFakeRequest({
+				reason: "retry",
+				stateCurrent: "zai/glm-4.7",
+				failed: { provider: "zai", id: "glm-4.7", errorMessage: "quota exhausted" },
+			}),
+			FALLBACKS,
+			makeFakeRegistry({
+				entries: [
+					{ provider: "zai", id: "glm-4.7", contextWindow: BIG },
+					{ provider: "ollama-cloud", id: "pro", contextWindow: SMALL },
+					{ provider: "minimax", id: "plus", contextWindow: SMALL },
+				],
+				answer: { class: "quota" },
+			}),
+			{ now: 1_000_000, blocked: {}, contextTokens: TOKENS },
+		);
+		expect(result.decision.kind).toBe("switch");
+		if (result.decision.kind === "switch") expect(result.decision.modelId).toBe("ollama-cloud/pro");
+	});
+
+	it("does nothing when the context size is unknown", async () => {
+		const result = await decide(
+			"retry",
+			buildFakeRequest({
+				reason: "retry",
+				stateCurrent: "zai/glm-4.7",
+				failed: { provider: "zai", id: "glm-4.7", errorMessage: "quota exhausted" },
+			}),
+			FALLBACKS,
+			makeFakeRegistry({
+				entries: [
+					{ provider: "zai", id: "glm-4.7", contextWindow: BIG },
+					{ provider: "ollama-cloud", id: "pro", contextWindow: SMALL },
+					{ provider: "minimax", id: "plus", contextWindow: BIG },
+				],
+				answer: { class: "quota" },
+			}),
+			{ now: 1_000_000, blocked: {} },
+		);
+		if (result.decision.kind === "switch") expect(result.decision.modelId).toBe("ollama-cloud/pro");
+	});
+
+	it("never re-routes a sticky session, however large the context", async () => {
+		const result = await decide(
+			"user",
+			buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro" }),
+			FALLBACKS,
+			makeFakeRegistry({
+				entries: [
+					{ provider: "zai", id: "glm-4.7", contextWindow: BIG },
+					{ provider: "ollama-cloud", id: "pro", contextWindow: SMALL },
+				],
+			}),
+			{ now: 1_000_000, blocked: {}, contextTokens: TOKENS },
+		);
+		expect(result.decision.kind).toBe("stick");
+		if (result.decision.kind === "stick") expect(result.decision.modelId).toBe("ollama-cloud/pro");
+	});
+});
+
+describe("router — idle reset (switch to initial)", () => {
+	const HOUR_MS = 3_600_000;
+	// A realistic epoch: the idle measurement ignores a 0/negative stamp as
+	// "unstamped", so the fake clock has to look like a real one.
+	const NOW = 1_700_000_000_000;
+	const withIdleReset = (idleReset: SwitchbackConfig["idleReset"]): SwitchbackConfig => ({ ...FALLBACKS, idleReset });
+	const sixHoursAgo = NOW - 6 * HOUR_MS;
+
+	it("stays sticky when idleReset is not configured (the default)", async () => {
+		const result = await decide(
+			"user",
+			buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro", lastMessageAt: sixHoursAgo }),
+			FALLBACKS,
+			makeFakeRegistry({ entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			] }),
+			{ now: NOW, blocked: {} },
+		);
+		expect(result.decision.kind).toBe("stick");
+		if (result.decision.kind === "stick") expect(result.decision.reason).toBe("session-sticky");
+	});
+
+	it("returns to the initial model once the fixed threshold is exceeded", async () => {
+		const result = await decide(
+			"user",
+			buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro", lastMessageAt: sixHoursAgo }),
+			withIdleReset("5h"),
+			makeFakeRegistry({ entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			] }),
+			{ now: NOW, blocked: {} },
+		);
+		expect(result.decision.kind).toBe("switch");
+		if (result.decision.kind === "switch") {
+			expect(result.decision.modelId).toBe("zai/glm-4.7");
+			expect(result.decision.reason).toMatch(/^idle-reset-threshold/);
+			expect(result.decision.reason).toMatch(/idle 6h >= 5h/);
+		}
+	});
+
+	it("stays sticky below the threshold", async () => {
+		const result = await decide(
+			"user",
+			buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro", lastMessageAt: NOW - 1 * HOUR_MS }),
+			withIdleReset("5h"),
+			makeFakeRegistry({ entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			] }),
+			{ now: NOW, blocked: {} },
+		);
+		expect(result.decision.kind).toBe("stick");
+	});
+
+	it("classifier mode returns to the initial model when the decision model says so", async () => {
+		const result = await decide(
+			"user",
+			buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro", lastMessageAt: sixHoursAgo }),
+			withIdleReset("classifier"),
+			makeFakeRegistry({
+				entries: [
+					{ provider: "zai", id: "glm-4.7" },
+					{ provider: "ollama-cloud", id: "pro" },
+				],
+				idleAnswer: "return_to_initial",
+			}),
+			{ now: NOW, blocked: {} },
+		);
+		expect(result.decision.kind).toBe("switch");
+		if (result.decision.kind === "switch") {
+			expect(result.decision.modelId).toBe("zai/glm-4.7");
+			expect(result.decision.reason).toMatch(/^idle-reset-classifier/);
+		}
+	});
+
+	it("classifier mode keeps the current model when the decision model says so", async () => {
+		const result = await decide(
+			"user",
+			buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro", lastMessageAt: sixHoursAgo }),
+			withIdleReset("classifier"),
+			makeFakeRegistry({
+				entries: [
+					{ provider: "zai", id: "glm-4.7" },
+					{ provider: "ollama-cloud", id: "pro" },
+				],
+				idleAnswer: "keep_current",
+			}),
+			{ now: NOW, blocked: {} },
+		);
+		expect(result.decision.kind).toBe("stick");
+		if (result.decision.kind === "stick") expect(result.decision.reason).toBe("session-sticky");
+	});
+
+	it("classifier mode is not asked below its floor (short idle stays sticky)", async () => {
+		// No idleAnswer: if the router asked, the fake would resolve null and the
+		// assertion below would not distinguish "not asked" from "asked". The floor
+		// is what keeps a live session from paying for the call.
+		const result = await decide(
+			"user",
+			buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro", lastMessageAt: NOW - 10 * 60_000 }),
+			withIdleReset("classifier"),
+			makeFakeRegistry({ entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			] }),
+			{ now: NOW, blocked: {} },
+		);
+		expect(result.decision.kind).toBe("stick");
+	});
+
+	it("a pin outranks the idle reset", async () => {
+		setPinnedModel("switchback/auto", "ollama-cloud/pro");
+		const result = await decide(
+			"user",
+			buildFakeRequest({ reason: "user", stateCurrent: "minimax/plus", lastMessageAt: sixHoursAgo }),
+			withIdleReset("5h"),
+			makeFakeRegistry({ entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+				{ provider: "minimax", id: "plus" },
+			] }),
+			{ now: NOW, blocked: {} },
+		);
+		expect(result.decision.kind).toBe("switch");
+		if (result.decision.kind === "switch") {
+			expect(result.decision.modelId).toBe("ollama-cloud/pro");
+			expect(result.decision.reason).toBe("pinned");
+		}
+		setPinnedModel("switchback/auto", null);
+	});
+
+	it("skips a blocked initial model and lands on the next usable one", async () => {
+		const result = await decide(
+			"user",
+			buildFakeRequest({ reason: "user", stateCurrent: "minimax/plus", lastMessageAt: sixHoursAgo }),
+			withIdleReset("5h"),
+			makeFakeRegistry({ entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+				{ provider: "minimax", id: "plus" },
+			] }),
+			{ now: NOW, blocked: { "zai/glm-4.7": NOW + HOUR_MS } },
+		);
+		expect(result.decision.kind).toBe("switch");
+		if (result.decision.kind === "switch") expect(result.decision.modelId).toBe("ollama-cloud/pro");
+	});
+
+	it("leaves continuation and retry routes alone", async () => {
+		const continuation = await decide(
+			"continuation",
+			buildFakeRequest({
+				reason: "continuation",
+				stateCurrent: "ollama-cloud/pro",
+				previous: { provider: "ollama-cloud", id: "pro" },
+				lastMessageAt: sixHoursAgo,
+			}),
+			withIdleReset("5h"),
+			makeFakeRegistry({ entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			] }),
+			{ now: NOW, blocked: {} },
+		);
+		expect(continuation.decision.kind).toBe("stick");
+		if (continuation.decision.kind === "stick") expect(continuation.decision.modelId).toBe("ollama-cloud/pro");
 	});
 });
 

@@ -17,6 +17,8 @@ errors with a single SystemOne classifier.
 - `src/state.ts` — `blocks.json` (account-scoped, atomic).
 - `src/crashes.ts` — `crashes.json`, Tier 2b annotation cache.
 - `src/simulate.ts` — `loadSimulate()`, `simulateRetry()`.
+- `src/secrets.ts` — encrypted API-key store; `createSecretStore()`,
+  `secretsFilePath()` (DPAPI via powershell, `secret:<name>` in YAML).
 - `switchback.yaml` — shipped 4-provider fallback list.
 
 ## Build / test

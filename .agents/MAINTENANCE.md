@@ -22,6 +22,7 @@
 - Before considering a task done: `npx tsc --noEmit` + `npx vitest run`.
 - Before proposing a release: also confirm the coverage matrix in `README.md`
   is honest (no aspirational checkmarks).
+- Docs-site changes: the docs gate lives in `docs/contributing.md` → Docs.
 
 ## Refreshing templates
 

@@ -49,5 +49,8 @@ before starting, close with a reason after verification.
   into **User guide** and **Development**.
 - Update `docs/` and `README.md` together when behavior or contracts
   change.
+- Docs gates — run before calling a docs change done:
+  `mkdocs build --strict` and `mise format-md` (rumdl). The build writes
+  `site/`, which is generated output and stays out of commits.
 - See `AGENTS.md` and `.agents/MAINTENANCE.md` at the repository root for
   the maintenance triggers and verification cadence.

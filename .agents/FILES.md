@@ -12,6 +12,7 @@
 | Shared types | `src/types.ts` |
 | Blocked-until store (atomic) | `src/state.ts` |
 | Crash store + Tier 2b annotation cache | `src/crashes.ts` |
+| Encrypted API-key store (DPAPI at rest) | `src/secrets.ts` |
 | Simulate mode (fixtures + replay) | `src/simulate.ts` |
 | Shipped fallback config | `switchback.yaml`, `switchback.yaml.example` |
 | Simulate fixtures | `switchback.simulate.json` |

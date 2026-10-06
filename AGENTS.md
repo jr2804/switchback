@@ -109,10 +109,19 @@ relevant child AGENTS.md.
 
 ### Child DOX Index
 
-This project is not yet indexed. Before continuing you must scan the project,
-build the DOX tree and replace this message with the actual index. Go deep
-and scan files recursively to properly evaluate complexity and create nested
-DOX files where needed.
+- `src/AGENTS.md` — extension core: contracts shared by every `src/` module
+  (install-safe imports, account-scoped stores, typed errors, barrel
+  discipline), the module table pointer (`.agents/FILES.md`), and the
+  `tsc`-graph nuance for not-yet-wired modules.
+- `tests/AGENTS.md` — vitest suites: hermetic-by-default temp
+  `PI_CODING_AGENT_DIR`, mock-by-default / opt-in-live tests, synthetic
+  values only, and the `tsc`-graph nuance for test files.
+
+Deliberately unindexed (conventions live where the work is described): the
+root `index.ts` entry, `docs/` (site conventions and docs gates in
+`docs/contributing.md` → Docs), `.github/`, `.config/`, `assets/`,
+`.beads/` (root project rules 6–7), `.agents/skills/` (machine-local,
+gitignored).
 
 ## .agents/ files — demand-loaded, not always injected
 

@@ -29,14 +29,17 @@ Build steps 1–8 are complete (per the design doc):
 
 ## Test layout
 
-**242** unit/integration tests across 13 files, plus **11 opt-in**
+**271** unit/integration tests across 16 files, plus **11 opt-in**
 live cases (10 live-classifier, 1 live DPAPI store) that skip unless
 their environment gates are set:
 
 | File | Tests | Covers |
 |---|---|---|
 | `tests/router.test.ts` | 83 | routing, blind cycle, classifier-mocked verdicts, session stickiness, pin override, idle reset, context-window fit on a switch, forward failover walk, catalog validity, exhaustion, thinking-level resolution, state, buildRoute |
-| `tests/dialogue.test.ts` | 31 | config editor: comment-preserving round-trip, layers, decision models, secret references; dialogue flows incl. the layer chooser (scripted UI, hermetic) |
+| `tests/dialogue.test.ts` | 35 | config editor: comment-preserving round-trip, layers, decision models, secret references; dialogue flows incl. the layer chooser, the searchable picker and the classifier test offer (scripted UI, hermetic) |
+| `tests/classifier-probe.test.ts` | 11 | the capability probe: prompt shape, answer validation, verdict and report, local endpoint path (injected fetch) |
+| `tests/model-picker.test.ts` | 8 | picker items and key routing: fuzzy filtering, Tab/Enter accept, exact typed reference, cancel |
+| `tests/classifier-catalog.test.ts` | 6 | provider choices, local endpoint env defaults, base URL normalization |
 | `tests/crashes.test.ts` | 25 | crash store, dedup, Tier 2b cache, annotation, corrupt-file quarantine |
 | `tests/config.test.ts` | 23 | `DEFAULT_CONFIG`, `findModelConfig`, layer aggregation, YAML-only, classifier-field validation, debug flag |
 | `tests/secrets.test.ts` | 23 (1 opt-in) | encrypted DPAPI store: round-trip, corruption quarantine, version refuse; live DPAPI gated on `SWITCHBACK_SECRETS_LIVE` |

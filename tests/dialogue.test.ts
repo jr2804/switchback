@@ -40,7 +40,10 @@ import {
 	setDebug,
 	type LoadedLayer,
 } from "../src/config-editor.ts";
-import { describeJev, layerOptionLabel, runDialogue, type DialogueContext, type DialogueUi } from "../src/dialogue.ts";
+import { describeJev, layerOptionLabel, runDialogue, secretNameFor, type DialogueContext, type DialogueUi } from "../src/dialogue.ts";
+import type { ClassifierProviderOption } from "../src/classifier-catalog.ts";
+import type { ProbeResult } from "../src/classifier-probe.ts";
+import type { JevConfig } from "../src/types.ts";
 import { ConfigError } from "../src/config.ts";
 import type { SecretStore } from "../src/secrets.ts";
 
@@ -183,8 +186,8 @@ class FakeSecretStore implements SecretStore {
 	}
 }
 
-function run(ui: ScriptedUi, store?: SecretStore): Promise<void> {
-	const ctx: DialogueContext = { hasUI: true, ui };
+function run(ui: ScriptedUi, store?: SecretStore, extra: Partial<DialogueContext> = {}): Promise<void> {
+	const ctx: DialogueContext = { hasUI: true, ui, ...extra };
 	return runDialogue(ctx, store);
 }
 
@@ -433,7 +436,6 @@ describe("dialogue", () => {
 			select: [layerOptionLabel("global"), 
 				"Decision models (1)...",
 				"Add decision model...",
-				"typesafe-system-one",
 				"New secret...",
 				"Back",
 				"Done",
@@ -443,16 +445,16 @@ describe("dialogue", () => {
 				"ollama",
 				"tev2",
 				"http://localhost:11434/v1",
-				"k2",
 				"sk-switchback-TESTVALUE-42-not-a-real-key",
 			],
 		});
 		await run(ui, store);
 		expect(store.setCalls).toEqual([
-			{ name: "k2", value: "sk-switchback-TESTVALUE-42-not-a-real-key" },
+			// The store name is derived from the decision model, never asked for.
+			{ name: "second-key", value: "sk-switchback-TESTVALUE-42-not-a-real-key" },
 		]);
 		const text = readText();
-		expect(text).toContain("secret:k2");
+		expect(text).toContain("secret:second-key");
 		// The literal value must be absent from the config file (tests/AGENTS.md rule).
 		expect(text).not.toContain("sk-switchback-TESTVALUE-42-not-a-real-key");
 	});
@@ -567,6 +569,121 @@ describe("dialogue", () => {
 		await run(new ScriptedUi({ select: [undefined] }));
 		expect(existsSync(globalPath())).toBe(false);
 		expect(existsSync(projectPath())).toBe(false);
+	});
+});
+
+describe("dialogue: catalog-assisted setup", () => {
+	const LOCAL_PROVIDER: ClassifierProviderOption = {
+		provider: "ollama",
+		label: "ollama — Ollama (local SystemOne)",
+		baseUrl: "http://localhost:11434/v1",
+		api: "typesafe-system-one",
+		models: [],
+		local: true,
+	};
+
+	const probeResult = (ok: boolean): ProbeResult => ({
+		ok,
+		answers: ok ? { choice: "sunny", score: 50, noul: true } : { score: 50 },
+		missing: ok ? [] : ["choice", "noul"],
+		ms: 42,
+	});
+
+	it("adds a fallback through the searchable picker", async () => {
+		seed(SAMPLE);
+		const picked: { title: string; current: readonly string[] }[] = [];
+		await run(
+			new ScriptedUi({
+				select: [layerOptionLabel("global"), MODEL_LABEL, "Edit fallbacks (2)", "Add fallback...", "Done", "Back", "Done"],
+			}),
+			undefined,
+			{
+				pickModel: async (title, current) => {
+					picked.push({ title, current });
+					return "opencode-go/mimo-v2.6-flash";
+				},
+			},
+		);
+		expect(readLayerConfig(load()).models[0]?.fallbacks).toEqual([
+			"zai/glm-5.3",
+			"minimax/MiniMax-M3",
+			"opencode-go/mimo-v2.6-flash",
+		]);
+		expect(picked).toHaveLength(1);
+		expect(picked[0]?.current).toEqual(["zai/glm-5.3", "minimax/MiniMax-M3"]);
+	});
+
+	it("picks the provider from the catalog, prefills the base URL and aligns the wire api", async () => {
+		seed(SAMPLE);
+		const store = new FakeSecretStore();
+		const probed: JevConfig[] = [];
+		const ui = new ScriptedUi({
+			select: [layerOptionLabel("global"), "Decision models (1)...", "Add decision model...", LOCAL_PROVIDER.label, "New secret...", "Back", "Done"],
+			input: ["dm2", "tev1", "", "sk-switchback-TESTVALUE-42-not-a-real-key"],
+			confirm: [true],
+		});
+		await run(ui, store, {
+			classifierProviders: [LOCAL_PROVIDER],
+			probeClassifier: async (jev) => {
+				probed.push(jev);
+				return probeResult(true);
+			},
+		});
+		const entry = readLayerConfig(load()).decisionModels?.find((d) => d.name === "dm2");
+		expect(entry?.provider).toBe("ollama");
+		expect(entry?.id).toBe("tev1");
+		// An empty answer to the base-URL prompt keeps the prefilled default.
+		expect(entry?.baseUrl).toBe("http://localhost:11434/v1");
+		// The wire api is aligned with the endpoint, never asked as "(none)".
+		expect(entry?.api).toBe("typesafe-system-one");
+		// The secret name is derived from the decision model, not requested.
+		expect(entry?.apiKey).toBe(`secret:${secretNameFor("dm2")}`);
+		expect(store.setCalls).toEqual([
+			{ name: secretNameFor("dm2"), value: "sk-switchback-TESTVALUE-42-not-a-real-key" },
+		]);
+		// The capability test runs with the key RESOLVED, and reports the verdict.
+		expect(probed).toHaveLength(1);
+		expect(probed[0]?.apiKey).toBe("sk-switchback-TESTVALUE-42-not-a-real-key");
+		expect(ui.notifications.some((n) => n.message.includes("choice  ✓ sunny"))).toBe(true);
+	});
+
+	it("removes the direct endpoint when the base URL is answered with a dash", async () => {
+		seed(SAMPLE);
+		await run(
+			new ScriptedUi({
+				select: [layerOptionLabel("global"), "Decision models (1)...", "Add decision model...", LOCAL_PROVIDER.label, "Back", "Done"],
+				input: ["dm3", "tev1", "-"],
+			}),
+			undefined,
+			{ classifierProviders: [LOCAL_PROVIDER] },
+		);
+		const entry = readLayerConfig(load()).decisionModels?.find((d) => d.name === "dm3");
+		expect(entry?.provider).toBe("ollama");
+		expect(entry?.baseUrl).toBeUndefined();
+		expect(entry?.api).toBeUndefined();
+		expect(entry?.apiKey).toBeUndefined();
+	});
+
+	it("offers the classifier model from the provider's known ids", async () => {
+		seed(SAMPLE);
+		const catalogProvider: ClassifierProviderOption = {
+			provider: "typesafe",
+			label: "typesafe — TypeSafe",
+			baseUrl: "https://api.typesafe.ai/v1/",
+			models: ["jev-1.13", "jev-latest"],
+			local: false,
+		};
+		await run(
+			new ScriptedUi({
+				select: [layerOptionLabel("global"), "Decision models (1)...", "Add decision model...", catalogProvider.label, "jev-latest", "(no API key)", "Back", "Done"],
+				input: ["dm4", ""],
+			}),
+			undefined,
+			{ classifierProviders: [catalogProvider] },
+		);
+		const entry = readLayerConfig(load()).decisionModels?.find((d) => d.name === "dm4");
+		expect(entry?.id).toBe("jev-latest");
+		expect(entry?.baseUrl).toBe("https://api.typesafe.ai/v1/");
 	});
 });
 

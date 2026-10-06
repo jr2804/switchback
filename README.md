@@ -45,7 +45,7 @@ pi --model switchback/auto -p "ping" --no-tools   # -> pong
 | Command | What it does |
 |---------|--------------|
 | `/switchback` | Show current source, effective vs greyed entries (with reason), active blocks with reset time. |
-| `/switchback-config` | Interactively configure virtual models, fallbacks, decision models, API keys and debug — menus and prompts, validated per action, comments preserved. See [the dialogue guide](docs/configuration-dialogue.md). |
+| `/switchback-config` | Interactively configure virtual models, fallbacks, decision models, API keys and debug — menus and prompts, a searchable model picker for fallbacks, a provider choice with prefilled base URLs for decision models, and a one-shot classifier capability test. Validated per action, comments preserved. See [the dialogue guide](docs/configuration-dialogue.md). |
 | `/switchback-blocked` | List models currently blocked by the router, with minutes until reset. Entries auto-disappear after their reset time passes (lazy prune on read). |
 | `/switchback-crashes [n]` | List the most-recent N entries from the global crash store (default 10). Each row shows short-hash, provider/model, class-or-reason, count, last-seen, and an `[annot]` marker for user-annotated entries. |
 | `/switchback-annotate <hash> <quota\|auth\|transient\|overflow\|unknown> [note...]` | Write a user-confirmed class onto a stored crash. After annotation, the Tier 2b cache short-circuits the classifier call for the exact raw bytes. Hash must be a unique ≥4-char prefix; class must be one of the five listed; ambiguous or unknown prefix produces a clear error. |

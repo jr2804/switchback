@@ -68,6 +68,27 @@ export {
 } from "./config-editor.ts";
 export type { ConfigLayer, DecisionModelInput, DecisionModelPatch, LoadedLayer } from "./config-editor.ts";
 export { runDialogue, describeJev, layerOptionLabel } from "./dialogue.ts";
+export { createModelPicker, buildModelItems, MODEL_PICKER_MAX_VISIBLE } from "./model-picker.ts";
+export type { ModelPickerSource, PickerColor, PickerKeybindings, PickerTheme, PickerTui } from "./model-picker.ts";
+export {
+	buildClassifierProviders,
+	classifierBaseUrlNote,
+	normalizeLocalBaseUrl,
+	LOCAL_CLASSIFIER_ENDPOINTS,
+} from "./classifier-catalog.ts";
+export type { ClassifierProviderOption, ClassifierProviderSource, LocalClassifierEndpoint } from "./classifier-catalog.ts";
+export {
+	buildProbeContext,
+	formatProbeReport,
+	missingProbeShapes,
+	probeLocalClassifier,
+	readProbeAnswers,
+	summarizeProbe,
+	PROBE_CHOICE_CRITERIA,
+	PROBE_SHAPES,
+	PROBE_TIMEOUT_MS,
+} from "./classifier-probe.ts";
+export type { ProbeAnswers, ProbeResult } from "./classifier-probe.ts";
 export type { DialogueContext, DialogueUi } from "./dialogue.ts";
 export { loadSimulate, getScenario, simulateRetry, SimulateError } from "./simulate.ts";
 export type { SimulateConfig, SimulateResult } from "./simulate.ts";

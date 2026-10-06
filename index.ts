@@ -30,11 +30,14 @@ import { SWITCHBACK_PROVIDER, findModelConfig, loadConfig } from "./src/config.t
 import { runDialogue } from "./src/dialogue.ts";
 import { createSecretStore } from "./src/secrets.ts";
 import { buildRoute, decide, ConfigInvalidError, type RouterRegistry } from "./src/routing.ts";
+import { buildClassifierProviders } from "./src/classifier-catalog.ts";
+import { buildProbeContext, probeLocalClassifier, summarizeProbe, type ProbeResult } from "./src/classifier-probe.ts";
+import { createModelPicker } from "./src/model-picker.ts";
 import { registerLocalClassifier } from "./src/local-classifier.ts";
 import { SWITCHBACK_THINKING_LEVELS } from "./src/thinking.ts";
 import { getPinnedModel, isBlocked, readBlockedMap, readPinMap, setPinnedModel } from "./src/state.ts";
 import { annotateCrash, isValidAnnotationClass, readCrashMap, shortHash } from "./src/crashes.ts";
-import type { ErrorClass, ModelId, ResolvedSwitchbackConfig, ResolvedSwitchbackFileConfig, SwitchbackState } from "./src/types.ts";
+import type { ErrorClass, JevConfig, ModelId, ResolvedSwitchbackConfig, ResolvedSwitchbackFileConfig, SwitchbackState } from "./src/types.ts";
 
 export default function (pi: ExtensionAPI) {
 	// Secrets: `apiKey: secret:<name>` references in the config are resolved to
@@ -175,7 +178,18 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("switchback-config", {
 		description: "Interactively configure virtual models, fallbacks, decision models, API keys and debug",
 		handler: async (_args, ctx) => {
-			await runDialogue(ctx, secrets);
+			await runDialogue(
+				{
+					hasUI: ctx.hasUI,
+					ui: ctx.ui,
+					// The searchable catalog picker is TUI-only; other modes fall back to
+					// the dialogue's text prompt for `provider/id`.
+					...(ctx.mode === "tui" ? { pickModel: (title: string, current: readonly string[]) => pickModelInteractive(ctx, title, current) } : {}),
+					classifierProviders: classifierProvidersFrom(ctx.modelRegistry),
+					probeClassifier: (jev: JevConfig) => probeClassifierConfig(ctx, jev),
+				},
+				secrets,
+			);
 		},
 	});
 
@@ -332,6 +346,85 @@ function virtualId(fullId: string): string {
 }
 
 /** Parse an on/off environment variable; undefined when it does not carry a flag. */
+/**
+ * The dialogue's searchable model picker: every chat model in pi's catalog
+ * (switchback's own virtual models excluded), marked ready / no-credentials and
+ * with the ones already in the edited list flagged. Built from pi's TUI toolkit
+ * - the same components pi's own pickers use (see `src/model-picker.ts`).
+ */
+function pickModelInteractive(
+	ctx: ExtensionContext,
+	title: string,
+	current: readonly string[],
+): Promise<string | undefined> {
+	const models = ctx.modelRegistry
+		.getModelsOfType("chat")
+		.filter((model) => model.provider !== SWITCHBACK_PROVIDER);
+	return ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) =>
+		createModelPicker({
+			tui,
+			theme,
+			keybindings,
+			done,
+			title,
+			source: {
+				models,
+				current,
+				ready: (provider) => ctx.modelRegistry.getProviderAuthStatus(provider).configured,
+			},
+		}),
+	);
+}
+
+/**
+ * Classifier endpoints for the decision-model wizard: every provider pi reports
+ * a classifier model for (with its own display name and base URL), plus the local
+ * SystemOne servers with their environment-derived defaults. switchback keeps no
+ * provider table of its own beyond those two local endpoints.
+ */
+function classifierProvidersFrom(registry: ExtensionContext["modelRegistry"]) {
+	return buildClassifierProviders({
+		providers: registry.getRegisteredProviderIds().map((id) => {
+			const provider = registry.getProvider(id);
+			return {
+				id,
+				name: registry.getProviderDisplayName(id) || provider?.name || id,
+				...(provider?.baseUrl !== undefined ? { baseUrl: provider.baseUrl } : {}),
+			};
+		}),
+		classifierIds: (provider) => registry.getModelsOfType("classifier", provider).map((model) => model.id),
+	});
+}
+
+/**
+ * Probe a classifier the dialogue just configured: a local `baseUrl` goes
+ * through switchback's own transport (the registered provider only appears after
+ * a restart), a catalog classifier through pi's registry.
+ */
+async function probeClassifierConfig(ctx: ExtensionContext, jev: JevConfig): Promise<ProbeResult> {
+	if (jev.baseUrl !== undefined) {
+		return probeLocalClassifier({
+			baseUrl: jev.baseUrl,
+			apiKey: jev.apiKey ?? jev.provider,
+			provider: jev.provider,
+			id: jev.id,
+		});
+	}
+	const handle = ctx.modelRegistry.findOfType("classifier", jev.provider, jev.id);
+	if (handle === undefined) {
+		return {
+			ok: false,
+			answers: {},
+			missing: ["choice", "score", "noul"],
+			ms: 0,
+			error: `pi has no classifier "${jev.provider}/${jev.id}" in its catalog`,
+		};
+	}
+	const started = Date.now();
+	const result = await ctx.modelRegistry.classify(handle, buildProbeContext());
+	return summarizeProbe(result, Date.now() - started);
+}
+
 function debugFlag(value: string | undefined): boolean | undefined {
 	const v = value?.trim().toLowerCase();
 	if (v === undefined || v === "") return undefined;

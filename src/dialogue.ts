@@ -54,6 +54,8 @@ import {
 	type LoadedLayer,
 } from "./config-editor.ts";
 import { LOCAL_CLASSIFIER_APIS } from "./config.ts";
+import { classifierBaseUrlNote, type ClassifierProviderOption } from "./classifier-catalog.ts";
+import { formatProbeReport, type ProbeResult } from "./classifier-probe.ts";
 import { createSecretStore, type SecretStore } from "./secrets.ts";
 import type { DecisionModelEntry, JevConfig, JevRef, SwitchbackConfig, SwitchbackFileConfig } from "./types.ts";
 
@@ -69,6 +71,24 @@ export interface DialogueUi {
 export interface DialogueContext {
 	hasUI: boolean;
 	ui: DialogueUi;
+	/**
+	 * Optional searchable model picker (TUI contexts supply it). When present,
+	 * "Add fallback..." opens a fuzzy-searchable catalog list instead of asking for
+	 * `provider/id` from memory; when absent the dialogue falls back to the prompt.
+	 */
+	pickModel?: (title: string, current: readonly string[]) => Promise<string | undefined>;
+	/**
+	 * Classifier endpoints pi knows about, for the decision-model wizard's provider
+	 * choice and base-URL defaults (see `src/classifier-catalog.ts`). Empty or
+	 * absent falls back to free-text prompts.
+	 */
+	classifierProviders?: readonly ClassifierProviderOption[];
+	/**
+	 * Send the one-shot capability prompt (choice + score + noul) to a configured
+	 * decision model. Supplied by the command handler, which has the model registry
+	 * and switchback's transport; absent means the test is not offered.
+	 */
+	probeClassifier?: (jev: JevConfig) => Promise<ProbeResult>;
 }
 
 interface DialogueSession {
@@ -227,6 +247,20 @@ function tryReadConfig(loaded: LoadedLayer): SwitchbackFileConfig | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Ask for one physical model. With a TUI picker available the catalog is
+ * searchable (the `/model` experience); otherwise the user types `provider/id`.
+ */
+async function chooseFallback(
+	ctx: DialogueContext,
+	session: DialogueSession,
+	title: string,
+	current: readonly string[],
+): Promise<string | undefined> {
+	if (ctx.pickModel !== undefined) return ctx.pickModel(title, current);
+	return promptRequired(ctx, title, "provider/id");
 }
 
 /** Required single-line input: Esc aborts the step, empty input re-prompts. */
@@ -409,10 +443,11 @@ async function fallbacksEditor(ctx: DialogueContext, session: DialogueSession, v
 		if (choice === undefined || choice === doneOption) return;
 		const labels = model.fallbacks.map((f, i) => `${i + 1}. ${f}`);
 		if (choice === addOption) {
-			const fallback = await promptRequired(
+			const fallback = await chooseFallback(
 				ctx,
+				session,
 				screenTitle(session.loaded, `add fallback to ${virtualId} ("provider/id")`),
-				"provider/id",
+				model.fallbacks,
 			);
 			if (fallback === undefined) continue;
 			addFallback(session.loaded, virtualId, fallback);
@@ -478,11 +513,12 @@ async function decisionModelPicker(ctx: DialogueContext, session: DialogueSessio
 		}
 		if (choice === inlineOption) {
 			const existing = model.jev !== undefined && !("decisionModel" in model.jev) ? model.jev : undefined;
-			const inline = await collectJevFields(ctx, session, existing);
+			const inline = await collectJevFields(ctx, session, existing, virtualId);
 			if (inline === undefined) continue;
 			setDecisionModel(session.loaded, virtualId, inline);
 			if (await saveOrRevert(ctx, session)) {
 				ctx.ui.notify(`${virtualId}: inline classifier set`, "info");
+				await offerClassifierTest(ctx, session, jevFromInput(inline));
 				return;
 			}
 			continue;
@@ -538,6 +574,7 @@ async function decisionModelEntryMenu(
 ): Promise<void> {
 	const renameOption = "Rename (updates references)";
 	const editOption = "Edit fields";
+	const testOption = "Test classifier (choice, score, noul)";
 	const deleteOption = "Delete";
 	const backOption = "Back";
 	for (;;) {
@@ -547,9 +584,25 @@ async function decisionModelEntryMenu(
 		if (current === undefined) return; // deleted elsewhere in this session
 		const choice = await ctx.ui.select(
 			screenTitle(session.loaded, `${current.name} - ${current.provider}/${current.id}`),
-			[renameOption, editOption, deleteOption, backOption],
+			[
+				renameOption,
+				editOption,
+				...(ctx.probeClassifier !== undefined ? [testOption] : []),
+				deleteOption,
+				backOption,
+			],
 		);
 		if (choice === undefined || choice === backOption) return;
+		if (choice === testOption) {
+			await runClassifierTest(ctx, session, {
+				provider: current.provider,
+				id: current.id,
+				...(current.baseUrl !== undefined ? { baseUrl: current.baseUrl } : {}),
+				...(current.api !== undefined ? { api: current.api } : {}),
+				...(current.apiKey !== undefined ? { apiKey: current.apiKey } : {}),
+			});
+			continue;
+		}
 		if (choice === renameOption) {
 			const newName = await promptRequired(
 				ctx,
@@ -607,7 +660,7 @@ async function decisionModelWizard(ctx: DialogueContext, session: DialogueSessio
 		ctx.ui.notify(`a decision model named "${name}" already exists`, "warning");
 		return undefined;
 	}
-	const fields = await collectJevFields(ctx, session, undefined);
+	const fields = await collectJevFields(ctx, session, undefined, name);
 	if (fields === undefined) return undefined;
 	const input: DecisionModelInput = { name, provider: fields.provider, id: fields.id, ...(fields.rest ?? {}) };
 	try {
@@ -618,9 +671,152 @@ async function decisionModelWizard(ctx: DialogueContext, session: DialogueSessio
 	}
 	if (await saveOrRevert(ctx, session)) {
 		ctx.ui.notify(`decision model "${name}" added`, "info");
+		await offerClassifierTest(ctx, session, jevFromInput(fields));
 		return input;
 	}
 	return undefined;
+}
+
+/** The inline classifier config a wizard result describes (used for the capability test). */
+function jevFromInput(fields: { provider: string; id: string; rest?: Partial<DecisionModelInput> }): JevConfig {
+	const rest = fields.rest ?? {};
+	return {
+		provider: fields.provider,
+		id: fields.id,
+		...(rest.baseUrl !== undefined ? { baseUrl: rest.baseUrl } : {}),
+		...(rest.api !== undefined ? { api: rest.api } : {}),
+		...(rest.apiKeySecretName !== undefined ? { apiKey: `secret:${rest.apiKeySecretName}` } : {}),
+	};
+}
+
+/**
+ * Choose the classifier provider: the endpoints pi knows about (each with its
+ * display name and, where it has one, its base URL) plus the local SystemOne
+ * servers, with "Other" for an id that is not in the catalog. The provider
+ * already in use is offered first so Enter keeps it. Falls back to a text prompt
+ * when no catalog was supplied (non-TUI contexts, tests).
+ */
+async function chooseClassifierProvider(
+	ctx: DialogueContext,
+	session: DialogueSession,
+	current: string | undefined,
+): Promise<ClassifierProviderOption | undefined> {
+	const options = ctx.classifierProviders ?? [];
+	if (options.length === 0) {
+		const provider = await promptRequired(
+			ctx,
+			screenTitle(session.loaded, "classifier provider (e.g. typesafe, ollama)"),
+			current ?? "",
+		);
+		if (provider === undefined) return undefined;
+		return { provider, label: provider, models: [], local: false };
+	}
+	const ordered =
+		current === undefined
+			? [...options]
+			: [...options].sort((a, b) => (a.provider === current ? -1 : b.provider === current ? 1 : 0));
+	const labels = ordered.map((option) => option.label);
+	const otherOption = "Other (type a provider id)...";
+	const backOption = "Back";
+	const choice = await ctx.ui.select(
+		screenTitle(
+			session.loaded,
+			`classifier provider${current === undefined ? "" : ` (current: ${current})`}`,
+		),
+		[...labels, otherOption, backOption],
+	);
+	if (choice === undefined || choice === backOption) return undefined;
+	if (choice === otherOption) {
+		const provider = await promptRequired(ctx, screenTitle(session.loaded, "classifier provider id"), current ?? "");
+		if (provider === undefined) return undefined;
+		return { provider, label: provider, models: [], local: false };
+	}
+	const index = labels.indexOf(choice);
+	return index >= 0 ? ordered[index] : undefined;
+}
+
+/** Choose the classifier model id from the provider's known classifiers, or type one. */
+async function chooseClassifierModel(
+	ctx: DialogueContext,
+	session: DialogueSession,
+	option: ClassifierProviderOption,
+	current: string | undefined,
+): Promise<string | undefined> {
+	const prompt = (): Promise<string | undefined> =>
+		promptRequired(
+			ctx,
+			screenTitle(session.loaded, `classifier model id for ${option.provider}`),
+			current ?? "",
+		);
+	if (option.models.length === 0) return prompt();
+	const otherOption = "Other (type a model id)...";
+	const backOption = "Back";
+	const choice = await ctx.ui.select(
+		screenTitle(session.loaded, `classifier model for ${option.provider}`),
+		[...option.models, otherOption, backOption],
+	);
+	if (choice === undefined || choice === backOption) return undefined;
+	if (choice === otherOption) return prompt();
+	return choice;
+}
+
+/**
+ * The base URL for the chosen endpoint. A direct endpoint's default comes from
+ * pi's provider definition or from the local endpoint's environment variable, so
+ * the field arrives prefilled: Enter keeps the shown value (the existing one when
+ * editing), "-" removes the direct endpoint entirely (back to the catalog
+ * classifier), anything else is taken verbatim.
+ */
+async function chooseBaseUrl(
+	ctx: DialogueContext,
+	session: DialogueSession,
+	option: ClassifierProviderOption,
+	current: string | undefined,
+): Promise<string | null | undefined> {
+	if (option.baseUrl === undefined) {
+		// A catalog provider with no endpoint of its own: keep the optional field.
+		return promptOptional(ctx, "baseUrl - direct endpoint (enables a local SystemOne server)", current);
+	}
+	const suggested = current ?? option.baseUrl;
+	const note = classifierBaseUrlNote(option);
+	const value = await ctx.ui.input(
+		screenTitle(
+			session.loaded,
+			`baseUrl for ${option.provider} — Enter keeps ${suggested} (${note}), "-" removes the direct endpoint`,
+		),
+		suggested,
+	);
+	if (value === undefined) return undefined;
+	const trimmed = value.trim();
+	if (trimmed === "-") return null;
+	return trimmed.length === 0 ? suggested : trimmed;
+}
+
+/**
+ * Send the capability prompt and report the verdict. See `src/classifier-probe.ts`.
+ */
+async function runClassifierTest(ctx: DialogueContext, session: DialogueSession, jev: JevConfig): Promise<void> {
+	if (ctx.probeClassifier === undefined) return;
+	const label = `${jev.provider}/${jev.id}${jev.baseUrl !== undefined ? ` at ${jev.baseUrl}` : ""}`;
+	const result = await ctx.probeClassifier(resolveSecretRef(jev, session));
+	ctx.ui.notify(formatProbeReport({ label, result }), result.ok ? "info" : "warning");
+}
+
+/**
+ * Offer the one-shot capability test after a classifier config was written.
+ *
+ * Most SystemOne endpoints publish no model list, so the model id is guessed;
+ * this is where a wrong guess (or a model without the `decision` capability)
+ * surfaces, instead of at the first real routing failure.
+ */
+async function offerClassifierTest(ctx: DialogueContext, session: DialogueSession, jev: JevConfig): Promise<void> {
+	if (ctx.probeClassifier === undefined) return;
+	const confirmed = await ctx.ui.confirm(
+		screenTitle(session.loaded, `test ${jev.provider}/${jev.id} now?`),
+		"Sends one SystemOne prompt that exercises choice, score and noul, so a wrong model id or endpoint shows up immediately.",
+	);
+	if (!confirmed) return;
+	await runClassifierTest(ctx, session, jev);
 }
 
 /** Classifier fields for a NEW inline config / decision model. Undefined = user backed out. */
@@ -628,29 +824,24 @@ async function collectJevFields(
 	ctx: DialogueContext,
 	session: DialogueSession,
 	existing: JevConfig | undefined,
+	hint?: string,
 ): Promise<{ provider: string; id: string; rest?: Partial<DecisionModelInput> } | undefined> {
-	const provider = await promptRequired(
-		ctx,
-		screenTitle(session.loaded, "classifier provider (e.g. typesafe, ollama)"),
-		existing?.provider ?? "",
-	);
-	if (provider === undefined) return undefined;
-	const id = await promptRequired(ctx, screenTitle(session.loaded, "classifier model id"), existing?.id ?? "");
+	const option = await chooseClassifierProvider(ctx, session, existing?.provider);
+	if (option === undefined) return undefined;
+	const id = await chooseClassifierModel(ctx, session, option, existing?.id);
 	if (id === undefined) return undefined;
-	const baseUrl = await promptOptional(ctx, "baseUrl - direct endpoint (enables a local SystemOne server)", existing?.baseUrl);
+	const baseUrl = await chooseBaseUrl(ctx, session, option, existing?.baseUrl);
 	if (baseUrl === undefined) return undefined;
-	if (baseUrl === null) return { provider, id };
-	const api = await ctx.ui.select(
-		screenTitle(session.loaded, "wire API for the direct endpoint"),
-		["(none)", ...LOCAL_CLASSIFIER_APIS],
-	);
-	if (api === undefined) return undefined;
-	const rest: Partial<DecisionModelInput> = { baseUrl };
-	if (api !== "(none)") rest.api = api;
-	const keyAction = await apiKeyAction(ctx, session, existing?.apiKey);
-	if (keyAction === undefined) return undefined;
-	if (keyAction !== null) rest.apiKeySecretName = keyAction;
-	return { provider, id, rest };
+	if (baseUrl === null) return { provider: option.provider, id };
+	// `api` is aligned with the endpoint instead of asked: a direct endpoint speaks
+	// exactly one wire API (switchback's own SystemOne transport), so the old
+	// "(none)" choice offered an option that does not exist.
+	const api = option.api ?? LOCAL_CLASSIFIER_APIS[0];
+	const rest: Partial<DecisionModelInput> = { baseUrl, ...(api !== undefined ? { api } : {}) };
+	const key = await apiKeyAction(ctx, session, existing?.apiKey, hint ?? option.provider);
+	if (key.kind === "cancel") return undefined;
+	if (key.kind === "secret") rest.apiKeySecretName = key.name;
+	return { provider: option.provider, id, rest };
 }
 
 /** Patch fields for an EXISTING decision model. Undefined = user backed out. */
@@ -659,14 +850,14 @@ async function collectJevPatch(
 	session: DialogueSession,
 	current: DecisionModelEntry,
 ): Promise<DecisionModelPatch | undefined> {
-	const provider = await promptOptional(ctx, "provider", current.provider);
-	if (provider === undefined) return undefined;
-	const id = await promptOptional(ctx, "model id", current.id);
-	if (id === undefined) return undefined;
+	const option = await chooseClassifierProvider(ctx, session, current.provider);
+	if (option === undefined) return undefined;
 	const patch: DecisionModelPatch = {};
-	if (provider !== null) patch.provider = provider;
-	if (id !== null) patch.id = id;
-	const baseUrl = await promptOptional(ctx, "baseUrl - direct endpoint", current.baseUrl);
+	if (option.provider !== current.provider) patch.provider = option.provider;
+	const id = await chooseClassifierModel(ctx, session, option, current.id);
+	if (id === undefined) return undefined;
+	if (id !== current.id) patch.id = id;
+	const baseUrl = await chooseBaseUrl(ctx, session, option, current.baseUrl);
 	if (baseUrl === undefined) return undefined;
 	if (baseUrl === null) {
 		// updateDecisionModel clears api/apiKey with baseUrl (loader rule: they require it).
@@ -674,64 +865,106 @@ async function collectJevPatch(
 		return patch;
 	}
 	patch.baseUrl = baseUrl;
-	const api = await ctx.ui.select(
-		screenTitle(session.loaded, "wire API for the direct endpoint"),
-		["(none)", ...LOCAL_CLASSIFIER_APIS],
-	);
-	if (api === undefined) return undefined;
-	patch.api = api === "(none)" ? null : api;
-	const keyAction = await apiKeyAction(ctx, session, current.apiKey);
-	if (keyAction === undefined) return undefined;
-	patch.apiKeySecretName = keyAction; // null removes the key
+	// Keep the entry's own api, or set the endpoint's for a newly added one.
+	if (current.api === undefined) {
+		const api = option.api ?? LOCAL_CLASSIFIER_APIS[0];
+		if (api !== undefined) patch.api = api;
+	}
+	const key = await apiKeyAction(ctx, session, current.apiKey, current.name);
+	if (key.kind === "cancel") return undefined;
+	if (key.kind === "none") patch.apiKeySecretName = null;
+	else if (key.kind === "secret") patch.apiKeySecretName = key.name;
 	return patch;
 }
 
 /**
- * Ask what to do about the API key. Returns the secret NAME to reference
- * (after storing the value), null to remove the key, or undefined when the
- * user backed out or chose to keep the current state.
+ * Secret names are an internal detail of the encrypted store, so the dialogue
+ * derives one instead of asking: `ollama-key`, `local-jev-key`, and so on. A
+ * second key for the same entry simply replaces the stored value under that name.
+ */
+export function secretNameFor(hint: string): string {
+	const cleaned = hint
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/gu, "-")
+		.replace(/^-+|-+$/gu, "");
+	return `${cleaned.length === 0 ? "classifier" : cleaned}-key`;
+}
+
+/** Resolve a `secret:<name>` reference for use (the probe needs the real token). */
+function resolveSecretRef(jev: JevConfig, session: DialogueSession): JevConfig {
+	const apiKey = jev.apiKey;
+	if (apiKey === undefined || !apiKey.startsWith("secret:")) return jev;
+	const stored = session.secrets.get(apiKey.slice("secret:".length));
+	return stored === undefined ? jev : { ...jev, apiKey: stored };
+}
+
+/**
+ * What the user decided about the API key.
+ *
+ * `keep` leaves the field untouched (an existing key stays), `none` means "no
+ * key" (a new entry gets none, an existing one loses it), `secret` names the
+ * store entry to reference, and `cancel` abandons the whole step. Collapsing
+ * these into one nullable string made "no key" indistinguishable from "back
+ * out", which turned a valid choice into an aborted wizard.
+ */
+type ApiKeyAction =
+	| { kind: "keep" }
+	| { kind: "none" }
+	| { kind: "secret"; name: string }
+	| { kind: "cancel" };
+
+/**
+ * Ask what to do about the API key.
+ *
+ * The value is the only thing asked for: the store name is derived
+ * (`secretNameFor`) because it is an internal detail the user has no reason to
+ * invent.
  */
 async function apiKeyAction(
 	ctx: DialogueContext,
 	session: DialogueSession,
 	current: string | undefined,
-): Promise<string | null | undefined> {
-	const keepLabel =
-		current !== undefined ? `Keep current (${current.startsWith("secret:") ? current : "value set by hand"})` : "(no API key)";
-	const keepOption = current !== undefined ? keepLabel : "(no API key)";
+	hint: string,
+): Promise<ApiKeyAction> {
+	const hasCurrent = current !== undefined;
+	const keepOption = hasCurrent
+		? `Keep current (${current.startsWith("secret:") ? current : "value set by hand"})`
+		: "(no API key)";
 	const existingOption = "Use existing secret...";
 	const newOption = "New secret...";
 	const removeOption = "Remove API key";
 	const choice = await ctx.ui.select(
 		screenTitle(session.loaded, "API key - stored encrypted; the config only carries secret:<name>"),
-		current === undefined ? [keepOption, existingOption, newOption] : [keepOption, existingOption, newOption, removeOption],
+		hasCurrent ? [keepOption, existingOption, newOption, removeOption] : [keepOption, existingOption, newOption],
 	);
-	if (choice === undefined || choice === keepOption) return undefined;
-	if (choice === removeOption) return null;
+	if (choice === undefined) return { kind: "cancel" };
+	if (choice === keepOption) return hasCurrent ? { kind: "keep" } : { kind: "none" };
+	if (choice === removeOption) return { kind: "none" };
 	if (choice === existingOption) {
 		const names = session.secrets.list();
 		if (names.length === 0) {
 			ctx.ui.notify("no secrets stored yet - pick 'New secret...'", "warning");
-			return undefined;
+			return { kind: "cancel" };
 		}
 		const name = await ctx.ui.select(screenTitle(session.loaded, "reference which stored secret?"), [...names]);
-		return name;
+		return name === undefined ? { kind: "cancel" } : { kind: "secret", name };
 	}
-	const name = await promptRequired(ctx, screenTitle(session.loaded, "new secret - name"), "e.g. ollama-key");
-	if (name === undefined) return undefined;
+	if (choice !== newOption) return { kind: "cancel" }; // an option this flow does not know: back out
+	const name = secretNameFor(hint);
 	const value = await promptRequired(
 		ctx,
-		screenTitle(session.loaded, `value for secret "${name}" (stored encrypted, not shown again)`),
+		screenTitle(session.loaded, `API key for ${hint} - stored encrypted as secret:${name}, not shown again`),
 		"secret value",
 	);
-	if (value === undefined) return undefined;
+	if (value === undefined) return { kind: "cancel" };
 	try {
 		session.secrets.set(name, value);
 	} catch (error) {
 		ctx.ui.notify(`secret store refused the value: ${errorMessage(error)}`, "error");
-		return undefined;
+		return { kind: "cancel" };
 	}
-	return name;
+	return { kind: "secret", name };
 }
 
 /** Wizard: create a new virtual model entry (id, name, at least one fallback). */
@@ -755,10 +988,11 @@ async function addVirtualModelWizard(ctx: DialogueContext, session: DialogueSess
 		const choice = await ctx.ui.select(screenTitle(session.loaded, body), [addOption, doneOption]);
 		if (choice === undefined) return;
 		if (choice === addOption) {
-			const fallback = await promptRequired(
+			const fallback = await chooseFallback(
 				ctx,
+				session,
 				screenTitle(session.loaded, `fallback ${fallbacks.length + 1} ("provider/id")`),
-				"provider/id",
+				fallbacks,
 			);
 			if (fallback !== undefined) fallbacks.push(fallback);
 			continue;

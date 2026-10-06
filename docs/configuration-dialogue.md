@@ -15,13 +15,47 @@ the command reports and exits without prompting.
   id changes the registered virtual model, so pi must be restarted for the
   old id to disappear. The last remaining virtual model cannot be removed.
 - **Fallbacks** — add, remove, and reorder (`provider/id` entries; the first
-  entry is the preferred model). At least one fallback is required.
+  entry is the preferred model). **Adding opens a searchable picker** over pi's
+  model catalog — the `/model` experience: type any part of a provider, model id
+  or display name to filter, `↑`/`↓` to move, `Tab` or `Enter` to accept, `Esc` to
+  cancel. Each entry shows its display name, context window and whether the
+  provider has credentials yet (`no credentials` is marked, not enforced), and
+  the ones already in the list are flagged `in the list`. Typing a complete
+  `provider/id` and pressing `Enter` accepts it verbatim, which is how a model
+  outside the catalog is added. At least one fallback is required.
 - **Decision models** — the reusable `decisionModels:` entries: add, edit
-  fields (provider, id, `baseUrl`, `api`, API key), rename (references in
-  `models[].jev` are rewritten in the same step), delete. Deleting an entry
-  that is still referenced by a model is refused; re-point those models
-  first. Clearing a model's decision model makes it report and cycle without
-  a classifier.
+  fields, rename (references in `models[].jev` are rewritten in the same step),
+  delete. **The provider is a choice, not free text**: the wizard offers every
+  classifier-capable provider pi reports (with its display name) plus the local
+  SystemOne endpoints, and the **base URL arrives prefilled** — from pi's own
+  provider definition, or from the local endpoint's environment variable
+  (`OLLAMA_HOST`, `LLAMA_SERVER_URL`) with a well-known fallback address.
+  `Enter` keeps the prefilled value, `-` removes the direct endpoint (back to a
+  catalog-resolved classifier). The **wire API is not a question**: a direct
+  endpoint speaks exactly one (switchback's SystemOne transport), so it is set
+  with the endpoint instead of offering a meaningless `(none)`. Where the
+  provider has known classifier models the model id is a choice too.
+  **API keys are asked for as a value only** — the store name is derived from the
+  entry (`ollama-key`, `dm2-key`), because it is an internal detail of
+  `secret:<name>`. Deleting an entry that is still referenced by a model is
+  refused; re-point those models first. Clearing a model's decision model makes
+  it report and cycle without a classifier.
+- **Classifier test** — after a decision model is saved (and from its menu
+  later) switchback offers a **one-shot capability check**: a single SystemOne
+  prompt carrying all three answer shapes a decision model must produce — a
+  `choice`, a `score` and a `bool` (System One's `noul`) — with a verdict per
+  shape. Most SystemOne endpoints publish no model list, so the model id is
+  guessed; this is where a wrong guess, a model without the `decision`
+  capability, or an endpoint that is not a SystemOne server at all shows up —
+  instead of at the first routing failure. It answers, for example:
+
+  ```text
+  switchback decision-model test: ollama/tev1 at http://localhost:11434/v1 (412 ms)
+    choice  ✓ sunny
+    score   ✓ 50
+    noul    ✓ yes
+  ```
+
 - **Debug** — toggles the top-level `debug:` flag (per-switch diagnostics).
 - **Layer switch** — the dialogue asks **which layer to edit before anything
   else**, and "Switch layer..." in the main menu asks again. The chooser shows

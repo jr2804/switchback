@@ -16,15 +16,10 @@
 | `src/idle.ts` | `decideIdleReset()`: the per-virtual-model `idleReset:` policy. Idleness is measured from the conversation's newest message timestamp; fixed thresholds answer arithmetically and `classifier` mode asks the decision model (30-minute floor). Routing order is pin → idle reset → stickiness. |
 | `src/context-fit.ts` | `fitsContext()` / `usableContextTokens()`: whether a candidate can hold the current context. pi sizes the conversation against the **routed** model, so this is used to *prefer* a fitting switch target — never to exclude one, and never on a sticky route. |
 | `src/simulate.ts` | `loadSimulate()`, `simulateRetry()`: test harness for synthetic errors. |
-| `tests/router.test.ts` | 62 tests covering routing structure, blind cycle (all 5 no-classifier reasons), classifier-mocked quota/auth/transient/unknown (incl. the real MiniMax Token Plan and 529-overload captures), session stickiness, the forward multi-model failover walk, step 8 catalog validity, F2 stopReason short-circuit, exhaustion, reasoning-level resolution, state persistence, config loader, constants, and buildRoute wire-up. |
-| `tests/classify-inventory.test.ts` | 15 corpus-preservation tests: every expected scenario in `switchback.simulate.json` is present, incl. the verbatim 2026-10-04 zai 401 probe and the MiniMax Token Plan capture. |
-| `tests/crashes.test.ts` | 25 crash-store tests: roundtrip, atomic write, dedup, verdictHistory bound, all 5 no-classifier reasons, all 5 classified verdict classes, Tier 2b annotation cache (unannotated → classifier still called; annotated → short-circuit), annotation validation (5 valid classes + reject), ambiguous short-hash handling, corrupt-file quarantine. |
-| `tests/state-migration.test.ts` | 5 migration tests: legacy `<cwd>/.pi/switchback.json` → new `<piConfigDir>/switchback/blocks.json` with per-key max, idempotent, blockModel writes only to the new path. |
-| `tests/commands.test.ts` | 6 snapshot + parser tests of the six command outputs and the annotate-args parser. |
-| `tests/config.test.ts` | 20 tests covering DEFAULT_CONFIG, findModelConfig errors, layer aggregation precedence, the YAML-only lookup, the classifier-field validation (baseUrl / api / apiKey) and the debug flag. |
-| `tests/integration-classifier.test.ts` | 11 opt-in tests (10 skipped by default) that drive the real `classifyError` through a real SystemOne transport against the corpus. Gated on `SWITCHBACK_CLASSIFIER_*` env vars — see [Classifier](classifier.md#live-classifier-validation-opt-in). |
 | `switchback.yaml.example` | Config template. The real user config lives at `<cwd>/.pi/switchback.yaml` or `~/.pi/agent/switchback.yaml` and is never shipped. |
 | `switchback.simulate.json` | Synthetic error scenarios; used by router tests (`tests/router.test.ts` + the corpus-preservation suite) and by the opt-in live integration test. Not user-facing any more. |
+
+The test suites and their per-file counts live in [Development → Test layout](development.md#test-layout) — one canonical table, so counts cannot drift between pages.
 
 ## Routing flow
 

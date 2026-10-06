@@ -42,7 +42,7 @@ pi --model switchback/auto -p "ping" --no-tools   # -> pong
 | `/switchback-blocked` | List models currently blocked by the router, with minutes until reset. Entries auto-disappear after their reset time passes (lazy prune on read). |
 | `/switchback-crashes [n]` | List the most-recent N entries from the global crash store (default 10). Each row shows short-hash, provider/model, class-or-reason, count, last-seen, and an `[annot]` marker for user-annotated entries. |
 | `/switchback-annotate <hash> <quota\|auth\|transient\|overflow\|unknown> [note...]` | Write a user-confirmed class onto a stored crash. After annotation, the Tier 2b cache short-circuits the classifier call for the exact raw bytes. Hash must be a unique ≥4-char prefix; class must be one of the five listed; ambiguous or unknown prefix produces a clear error. |
-| `/switchback-simulate <scenario>` | Run a fixture scenario from `switchback.simulate.json` through the router without burning real quota. |
+| `/switchback-next` | Cycle the session's virtual-model pin to the next fallback (including pin off). The pin is the user's "route here" override and wins for as long as the pinned model is usable; with `debug: true` each change prints a line naming what the classifier or clamp resolved to. |
 
 ## Configuration
 

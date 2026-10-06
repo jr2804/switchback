@@ -14,7 +14,7 @@ timestamp wins) and then deleted.
 | `switchback.yaml` | YAML | Human config: fallback list, optional Jev classifier. Per-project override or `~/.pi/agent/`. | user | `<cwd>/.pi/` or agent dir |
 | `blocks.json` | JSON | Runtime blocked-until map (atomic write, lazy prune). Created on first block. Migrated from the legacy `<cwd>/.pi/switchback.json` path on first read. | switchback | `<piConfigDir>/switchback/` |
 | `crashes.json` | JSON | Runtime crash dedup store: sha256(raw) → entry. Created on first failure. User annotations become the Tier 2b cache. | switchback | `<piConfigDir>/switchback/` |
-| `switchback.simulate.json` | JSON | Synthetic error scenarios for `/switchback-simulate`. | user (shipped) | repo (cwd) |
+| `switchback.simulate.json` | JSON | Synthetic error scenarios. Now used by router tests + the opt-in live integration test; the user-facing simulate command was removed. | switchback | repo (cwd) |
 
 The YAML-only rule applies to **user config** only. JSON stays for files that
 are written by the runtime or used as read-only fixtures; switchback never
@@ -141,3 +141,31 @@ Notes:
 - For the env-var-driven test path against a live classifier (TypeSafe
   hosted / OpenRouter / llama.cpp / Ollama), see
   [Classifier → Live classifier validation](classifier.md#live-classifier-validation-opt-in).
+
+## Encrypted API-key store (`secret:<name>`)
+
+A credential never lives in YAML: a classifier `apiKey` may reference a named
+secret instead of a literal value.
+
+```yaml
+decisionModels:
+  - name: hosted
+    provider: my-provider
+    id: my-model
+    baseUrl: https://example.invalid/v1
+    apiKey: secret:my-provider-key
+```
+
+The value itself lives in `<piConfigDir>/switchback/secrets.json`, encrypted at
+rest with Windows DPAPI (CurrentUser scope): the file holds only DPAPI blobs,
+decryptable by the Windows account that wrote them and by no other account on
+the machine. There is no passphrase to choose or store, and no unencrypted
+fallback — anywhere DPAPI is unavailable (a non-Windows host), reading or
+writing a secret fails loudly instead of touching the key in clear text.
+
+The file is machine-managed (atomic writes, never hand-edited). A file that
+can't be read at all is quarantined to `secrets.json.corrupt.<ts>` and the
+store starts empty; a readable file written by a different store version is
+refused and left untouched. Secret values are held only in memory or as
+encrypted blobs — never printed, logged, or written anywhere else — and
+listing exposes names only.

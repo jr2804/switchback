@@ -17,7 +17,7 @@ Build steps 1–8 are complete (per the design doc):
   passively-collected real error samples (see
   [Classifier → Coverage matrix](classifier.md#coverage-matrix)).
 - [x] **Step 5** — `route()` reason dispatch (`user` / `continuation` / `retry` / `direct`) per design doc.
-- [x] **Step 6** — Simulate mode: `switchback.simulate.json` fixture + `/switchback-simulate` command.
+- [x] **Step 6** — Simulate fixture: `switchback.simulate.json` corpus + router tests + opt-in live integration test (no user-facing command).
 - [x] **Step 7** — Integration tests: **153 tests** covering all reasons, blind cycle, all five
   no-classifier reasons, classifier-mocked quota / auth / transient / unknown, F2
   (`stopReason` short-circuit), session stickiness + forward failover walk, exhaustion,

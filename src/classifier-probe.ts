@@ -13,7 +13,12 @@
  * One's "noul") - and a verdict per shape. It is deliberately tiny and
  * deterministic (a coin flip and two-plus-two), so the answers can be checked
  * rather than judged: a choice outside the offered criteria, a score outside
- * 0..100 or a missing answer is a failure, not a matter of taste.
+ * the rubric, or a missing answer is a failure, not a matter of taste.
+ *
+ * The score question carries three levels and a fair coin is an even chance, so
+ * the answer must land on the middle level - index 1. That is the checkable
+ * part: a `score` answer is the probability-weighted average of the LEVEL
+ * INDICES, not a percentage, so "1" is the pass and "50" would be a failure.
  *
  * The same code serves both classifier paths: a catalog classifier is called
  * through pi's registry, a local endpoint through switchback's own transport.
@@ -38,6 +43,12 @@ export const PROBE_CHOICE_CRITERIA: Readonly<Record<string, string>> = {
 };
 
 /**
+ * The score rubric: three ordered levels, so the answer is an index in [0, 2].
+ * A fair coin is an even chance, i.e. the middle level, index 1.
+ */
+export const PROBE_SCORE_CRITERIA: readonly string[] = ["Impossible", "An even chance", "Certain"];
+
+/**
  * The probe prompt: three questions in one request, one per answer shape. The
  * state says what this is, so a decision model does not have to infer intent
  * from the question text alone.
@@ -57,7 +68,7 @@ export function buildProbeContext(): ClassifierContext {
 			score: {
 				type: "score",
 				instructions: "How likely is it that a fair coin lands on heads?",
-				criteria: ["0 = impossible", "50 = an even chance", "100 = certain"],
+				criteria: [...PROBE_SCORE_CRITERIA],
 			},
 			noul: {
 				type: "bool",
@@ -90,7 +101,14 @@ export function readProbeAnswers(result: ClassifierResult): ProbeAnswers {
 	const choice = answerOf(result, "choice");
 	if (choice?.type === "choice" && choice.choice in PROBE_CHOICE_CRITERIA) answers.choice = choice.choice;
 	const score = answerOf(result, "score");
-	if (score?.type === "score" && Number.isFinite(score.score) && score.score >= 0 && score.score <= 100) {
+	// A `score` answer is a rubric index, so validity is the rubric's extent -
+	// not 0..100. A value outside [0, criteria.length - 1] is a broken answer.
+	if (
+		score?.type === "score" &&
+		Number.isFinite(score.score) &&
+		score.score >= 0 &&
+		score.score <= PROBE_SCORE_CRITERIA.length - 1
+	) {
 		answers.score = score.score;
 	}
 	const noul = answerOf(result, "noul");
@@ -106,6 +124,17 @@ export const PROBE_SHAPES: readonly ("choice" | "score" | "noul")[] = ["choice",
 /** Which shapes did not come back usable. */
 export function missingProbeShapes(answers: ProbeAnswers): ("choice" | "score" | "noul")[] {
 	return PROBE_SHAPES.filter((shape) => answers[shape] === undefined);
+}
+
+/**
+ * Render a `score` answer for the report. The raw number is a rubric index, so
+ * it is shown rounded with the level it lands on - a bare "1.02" invites the
+ * reader to mistake it for a percentage.
+ */
+function describeScore(score: number): string {
+	const rounded = Math.round(score);
+	const level = PROBE_SCORE_CRITERIA[rounded];
+	return level === undefined ? score.toFixed(2) : `${score.toFixed(2)} (${level})`;
 }
 
 export interface ProbeResult {
@@ -143,7 +172,7 @@ export function formatProbeReport(opts: {
 	const lines = [
 		`switchback decision-model test: ${label} (${result.ms} ms)`,
 		`  choice  ${result.answers.choice === undefined ? "✗ no usable answer" : `✓ ${result.answers.choice}`}`,
-		`  score   ${result.answers.score === undefined ? "✗ no usable answer" : `✓ ${result.answers.score}`}`,
+		`  score   ${result.answers.score === undefined ? "✗ no usable answer" : `✓ ${describeScore(result.answers.score)}`}`,
 		`  noul    ${result.answers.noul === undefined ? "✗ no usable answer" : `✓ ${result.answers.noul ? "yes" : "no"}`}`,
 	];
 	if (result.error !== undefined) lines.push(`  error   ${result.error}`);

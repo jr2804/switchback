@@ -35,7 +35,7 @@ import { decide, buildRoute, MAX_TRANSIENT_RETRIES, type Decision, type RouterRe
 import { stateFilePath, readBlockedMap, isBlocked, unblockModel, blockModel, getPinnedModel, setPinnedModel } from "../src/state.ts";
 import { simulateRetry, loadSimulate, getScenario, SimulateError } from "../src/simulate.ts";
 import { findModelConfig, loadConfig } from "../src/config.ts";
-import { classifyError, type NoClassifierReason } from "../src/classify.ts";
+import { callClassifier, classifyError, type NoClassifierReason } from "../src/classify.ts";
 import { ConfigInvalidError } from "../src/routing.ts";
 import type { SwitchbackConfig } from "../src/types.ts";
 
@@ -51,11 +51,14 @@ interface FakeEntry {
 type ClassifyAnswer = {
 	class: "quota" | "auth" | "transient" | "overflow" | "unknown";
 	scope?: "model" | "account" | "ip" | "unknown";
+	/** RESET_RUBRIC index, not a percentage (see scoreToResetAtMs). */
 	resetScore?: number;
 };
 
 interface FakeRegistryOpts {
 	entries: readonly FakeEntry[];
+	/** Inspects the questions switchback sent, before the answer is produced. */
+	onQuestions?: (questions: Record<string, unknown>) => void;
 	/** When set, the registry's classify() returns this answer. When omitted, classify() resolves null. */
 	answer?: ClassifyAnswer | null;
 	/** When set, classify() rejects with this error. */
@@ -129,6 +132,8 @@ function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: 
 		},
 		classify: async (_model: unknown, context: unknown) => {
 			const questions = (context as { questions?: Record<string, unknown> } | undefined)?.questions ?? {};
+			// Lets a test inspect the prompt switchback actually sends.
+			opts.onQuestions?.(questions);
 			// The reasoning-level question is a separate prompt from the error
 			// classification; answer it independently so both paths are testable.
 			if ("level" in questions) {
@@ -507,9 +512,11 @@ describe("router — retry reason: blind cycle (no classifier)", () => {
 
 describe("router — retry reason: classifier says quota", () => {
 	for (const scenario of [
-		{ name: "z.ai 5h hit", message: "429 Too Many Requests: z.ai GLM 5h window exceeded. Resets at 2026-10-04T15:30:00Z.", resetScore: 55 },
-		{ name: "ollama-cloud weekly", message: "429: weekly token limit exhausted for ollama-cloud. Try again in 1d 2h.", resetScore: 78 },
-		{ name: "opencode-go monthly", message: "Rate limit reached: opencode-go monthly cap. Retry after 30s.", resetScore: 30 },
+		// resetScore is a RESET_RUBRIC index (0..8), not a percentage: e.g. 4
+		// is "about 6 hours", which is the closest level to a 5-hour window.
+		{ name: "z.ai 5h hit", message: "429 Too Many Requests: z.ai GLM 5h window exceeded. Resets at 2026-10-04T15:30:00Z.", resetScore: 4 },
+		{ name: "ollama-cloud weekly", message: "429: weekly token limit exhausted for ollama-cloud. Try again in 1d 2h.", resetScore: 5.1 },
+		{ name: "opencode-go monthly", message: "Rate limit reached: opencode-go monthly cap. Retry after 30s.", resetScore: 1 },
 	]) {
 		it(`blocks failed model and switches next: ${scenario.name}`, async () => {
 			const registry = makeFakeRegistry({
@@ -835,7 +842,7 @@ describe("simulate mode — end-to-end", () => {
 				{ provider: "zai", id: "glm-4.7" },
 				{ provider: "ollama-cloud", id: "pro" },
 			],
-			answer: { class: "quota", scope: "model", resetScore: 55 },
+			answer: { class: "quota", scope: "model", resetScore: 4 },
 		});
 		const cfg = loadSimulate(fixturePath);
 		const message = getScenario(cfg, "quota-5h-zai")!;
@@ -920,15 +927,16 @@ describe("classifyError — direct unit tests for the three branches", () => {
 	it("branch 2: classifier resolves quota with reset score -> classified", async () => {
 		const registry = makeFakeRegistry({
 			entries: [],
-			answer: { class: "quota", scope: "model", resetScore: 55 },
+			// A `score` answer is a rubric INDEX (0..8), not a percentage.
+			// Index 4 = "about 6 hours".
+			answer: { class: "quota", scope: "model", resetScore: 4 },
 		});
 		const now = 1_000_000_000;
 		const result = await classifyError("any message", registry, { provider: "typesafe", id: "jev-latest" }, now);
 		expect(result.kind).toBe("classified");
 		if (result.kind === "classified") {
 			expect(result.classified.class).toBe("quota");
-			// Score 55 in the hours bucket = 5 hours from now.
-			expect(result.classified.resetAtMs).toBe(now + 5 * 3_600_000);
+			expect(result.classified.resetAtMs).toBe(now + 6 * 3_600_000);
 		}
 	});
 
@@ -963,13 +971,23 @@ describe("classifyError — direct unit tests for the three branches", () => {
 	});
 
 	it("branch 3: classifier times out -> no-classifier, timeout reason", async () => {
+		// An explicit short budget keeps this instant. The production value is
+		// `CLASSIFIER_TIMEOUT_MS` (10 s, sized for a cold local model) and the race
+		// that produces the `timeout` reason is `callClassifier`'s either way;
+		// `classifyError` only forwards the tagged result (covered by the
+		// `threw` / `unresolvable` cases above).
 		const registry = makeFakeRegistry({ entries: [], hang: true });
-		const result = await classifyError("any", registry, { provider: "typesafe", id: "jev-latest" }, Date.now());
+		const result = await callClassifier(
+			registry,
+			{ provider: "typesafe", id: "jev-latest" },
+			{ state: { prompt: "any" }, questions: {} },
+			50,
+		);
 		expect(result.kind).toBe("no-classifier");
 		if (result.kind === "no-classifier") {
 			expect(result.reason).toBe("timeout");
 		}
-	}, 10_000);
+	});
 
 	it("branch 3: classifier throws -> no-classifier, threw reason", async () => {
 		const registry = makeFakeRegistry({ entries: [], throw: new Error("simulated") });
@@ -980,17 +998,52 @@ describe("classifyError — direct unit tests for the three branches", () => {
 		}
 	});
 
-	it("scoreToResetAtMs bucket-relative: 51 = 1h, 76 = 1d, capped at 31d", async () => {
-		// Score 75 -> 25 hours; score 76 -> 1 day; score 100 -> 25 days; score 200 -> cap.
+	it("scoreToResetAtMs reads the rubric index: 0 = none, 4 = 6h, last = 31d cap", async () => {
+		// A SystemOne `score` answer is the probability-weighted average of the
+		// rubric LEVEL INDICES, so the value indexes RESET_RUBRIC directly.
+		// Verified live against tev1:0.8b (five levels, "in 1d 2h" -> 0.914).
 		const now = 1_000_000_000;
-		const makeScoreAnswer = (score: number) => ({ class: "quota" as const, scope: "model" as const, resetScore: score });
-		const registry = (score: number) => makeFakeRegistry({ entries: [], answer: makeScoreAnswer(score) });
-		const r51 = await classifyError("any", registry(51), { provider: "typesafe", id: "jev-latest" }, now);
-		const r76 = await classifyError("any", registry(76), { provider: "typesafe", id: "jev-latest" }, now);
-		const r100 = await classifyError("any", registry(100), { provider: "typesafe", id: "jev-latest" }, now);
-		if (r51.kind === "classified") expect(r51.classified.resetAtMs).toBe(now + 1 * 3_600_000);
-		if (r76.kind === "classified") expect(r76.classified.resetAtMs).toBe(now + 1 * 86_400_000);
-		if (r100.kind === "classified") expect(r100.classified.resetAtMs).toBe(now + 25 * 86_400_000);
+		const registry = (score: number) =>
+			makeFakeRegistry({ entries: [], answer: { class: "quota", scope: "model", resetScore: score } });
+		const resetAt = async (score: number) => {
+			const r = await classifyError("any", registry(score), { provider: "typesafe", id: "jev-latest" }, now);
+			return r.kind === "classified" ? r.classified.resetAtMs : undefined;
+		};
+		// Index 0 ("no reset time") and anything nearer to it than to "within
+		// seconds": no reset.
+		expect(await resetAt(0)).toBeUndefined();
+		expect(await resetAt(0.4)).toBeUndefined();
+		// Index 1 = "within seconds" (30s at the level itself).
+		expect(await resetAt(1)).toBe(now + 30_000);
+		// Index 4 = "about 6 hours"; index 5 = "about 1 day".
+		expect(await resetAt(4)).toBe(now + 6 * 3_600_000);
+		expect(await resetAt(5)).toBe(now + 86_400_000);
+		// Between two levels the value is interpolated geometrically: halfway
+		// between 6h and 1d is 6h * sqrt(4) = 12h.
+		expect(await resetAt(4.5)).toBeCloseTo(now + 12 * 3_600_000, -3);
+		// Beyond the last level (index 8, "a month or longer") the 31-day cap applies.
+		expect(await resetAt(8)).toBe(now + 31 * 86_400_000);
+		expect(await resetAt(999)).toBe(now + 31 * 86_400_000);
+	});
+
+	it("keeps the reset rubric within the level ceiling both backends accept", async () => {
+		// TypeSafe's hosted Jev rejects more than ten score levels with
+		// `400 {"detail":"Too many score levels..."}`, and a rejected request
+		// returns no answers - every message would classify as `unknown`. Ollama
+		// allows 26; the tighter backend is the one that matters.
+		let criteria: string[] | undefined;
+		const registry = makeFakeRegistry({
+			entries: [],
+			answer: { class: "quota", scope: "model" },
+			hang: false,
+			onQuestions: (questions) => {
+				const reset = questions["reset"];
+				criteria = reset && "criteria" in reset ? (reset.criteria as string[]) : undefined;
+			},
+		});
+		await classifyError("any", registry, { provider: "typesafe", id: "jev-latest" }, 1_000_000_000);
+		expect(criteria).toBeDefined();
+		expect(criteria!.length).toBeLessThanOrEqual(10);
 	});
 });
 
@@ -1659,7 +1712,7 @@ describe("router — debug diagnostics on a switch", () => {
 				{ provider: "zai", id: "glm-4.7" },
 				{ provider: "ollama-cloud", id: "pro" },
 			],
-			answer: { class: "quota", scope: "account", resetScore: 55 },
+			answer: { class: "quota", scope: "account", resetScore: 4 },
 			levelAnswer: "high",
 		});
 		const request = buildFakeRequest({

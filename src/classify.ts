@@ -36,7 +36,7 @@
  *   2. CLASSIFIER: the configured `jev` entry via `ctx.modelRegistry.classify`.
  *      The structured-output answers (class / reset score / scope) are the
  *      ONLY message-derived decisions. Score is mapped to ms via
- *      `scoreToResetAtMs` (bucket-relative, 31d cap). Timeout, parse error,
+ *      `scoreToResetAtMs` (rubric index, 31d cap). Timeout, parse error,
  *      resolver-miss, or registry throw are all treated as "no classifier
  *      decision" and signal null to the caller.
  *
@@ -48,8 +48,8 @@
  *      fires on ANY failure when the classifier cannot decide.
  *
  * `JEV_QUESTIONS` are the four structured questions the classifier is asked:
- * class (quota / auth / transient / overflow / unknown), reset (bucket
- * score 0-100), scope (model / account / ip / unknown). The prompt text is
+ * class (quota / auth / transient / overflow / unknown), reset (a rubric
+ * index - see RESET_RUBRIC), scope (model / account / ip / unknown). The prompt text is
  * the classifier's source of truth; switchback does not interpret the
  * message itself.
  *
@@ -82,8 +82,30 @@ const MAX_RESET_MS = 31 * 24 * 3_600_000;
  * The Jev prompt version. Bumped when `JEV_QUESTIONS` (or the locked prompt text
  * they encode) changes meaningfully. Stamped on every classifier verdict recorded
  * in `crashes.json` so a future bump can invalidate stale verdicts.
+ *
+ * v2 (2026-10-06): the `reset` question sends a rubric instead of a 0-100
+ * scale. SystemOne's `score` answer is the probability-weighted average of the
+ * rubric LEVEL INDICES (Ollama and TypeSafe agree; pi-ai forwards it verbatim),
+ * so the old prompt could never return the value it asked for. Verified live
+ * against `tev1:0.8b`: a five-criteria rubric plus the message "Try again in
+ * 1d 2h" answers score 0.914 - an index, where v1 expected 78.
+ *
+ * v3 (2026-10-06): the reset rubric shrank from 21 levels to 9. TypeSafe's
+ * hosted Jev rejects more than ten score levels, and a rejected request returns
+ * no answers at all - so on the catalog path every message classified as
+ * `unknown` (verified live: `400 {"detail":"Too many score levels. Must have at
+ * most 10 levels."}`). Ollama allows 26; the tighter backend sets the ceiling.
+ *
+ * v4 (2026-10-06): the `scope` question now anchors each option in wording the
+ * message actually contains. v3 asked the model to judge counterfactuals ("other
+ * models still work") and named only `unknown` in its instructions, so `unknown`
+ * took the prior mass and won on every case measured - `typesafe/jev-latest`
+ * answered `unknown` at 84-92% with `account` second. The new text gives the
+ * model the lexical cues an error message really carries (a named model, a key
+ * or plan, an address) and asks for `unknown` only as a last resort. Verdicts
+ * recorded under v1-v3 keep their old meaning.
  */
-export const PROMPT_VERSION = "v1";
+export const PROMPT_VERSION = "v4";
 
 /** Clamp a reset timestamp to [now+1m, now+31d]. Inputs <= now are bumped to now+1m. */
 function clampReset(at: number, now: number): number {
@@ -93,6 +115,47 @@ function clampReset(at: number, now: number): number {
 	if (delta > MAX_RESET_MS) return now + MAX_RESET_MS;
 	return at;
 }
+
+/**
+ * Hard ceiling on how many levels a `score` question may carry.
+ *
+ * The two SystemOne backends disagree, and the tighter one wins: Ollama's
+ * `SystemOneScoreQuestion.criteria.maxItems` is 26, but TypeSafe's hosted Jev
+ * rejects more than ten. Verified live 2026-10-06 - a 21-level rubric to
+ * `https://api.typesafe.ai/v1/systemone` answers
+ * `400 {"detail":"Too many score levels. Must have at most 10 levels."}`, and a
+ * rejected request yields no answers at all, so every message classifies as
+ * `unknown`. Keep the rubric at or below this.
+ */
+const MAX_SCORE_LEVELS = 10;
+
+/**
+ * The reset rubric. A SystemOne `score` question answers with the
+ * probability-weighted average of the rubric LEVEL INDICES, so the levels are
+ * the answer space: index 0 means "no reset time stated", and every later index
+ * is a concrete wait. Switchback reads the index back into a duration, which
+ * makes this table the single source of truth for reset windows - there is no
+ * arithmetic against the raw score anywhere.
+ *
+ * The steps are roughly logarithmic (30s ... a month) so one rubric covers the
+ * useful range without asking the model to choose among near-identical levels.
+ * Nine levels, inside `MAX_SCORE_LEVELS` so both backends accept it. Measured
+ * against a local `tev1:0.8b` on four real messages, this ladder and a 21-level
+ * one scored within noise of each other (5.78 vs 5.59 bits mean log error), and
+ * a coarse five-bucket variant was markedly worse (11.32) - so the resolution
+ * below the ten-level ceiling buys nothing.
+ */
+const RESET_RUBRIC: readonly { readonly label: string; readonly ms: number }[] = [
+	{ label: "no reset time is mentioned in the error message", ms: 0 },
+	{ label: "within seconds", ms: 30_000 },
+	{ label: "within minutes", ms: 15 * 60_000 },
+	{ label: "about an hour", ms: 3_600_000 },
+	{ label: "about 6 hours", ms: 6 * 3_600_000 },
+	{ label: "about 1 day", ms: 86_400_000 },
+	{ label: "about 3 days", ms: 3 * 86_400_000 },
+	{ label: "about 1 week", ms: 7 * 86_400_000 },
+	{ label: "about a month or longer", ms: 31 * 86_400_000 },
+];
 
 /**
  * Structured questions for the configured classifier.
@@ -126,30 +189,35 @@ const JEV_QUESTIONS = {
 	reset: {
 		type: "score" as const,
 		instructions:
-			"If the error indicates when the model/provider becomes available again, return a score 0-100 representing how long to wait. Use the BUCKET-RELATIVE interpretation: in the hours bucket, score 51 = 1 hour; in the days bucket, score 76 = 1 day.",
-		criteria: [
-			"0 - no reset time is mentioned in the error message",
-			"1-25 - reset time is on the order of seconds (score = seconds, capped at 25s)",
-			"26-50 - reset time is on the order of minutes (score = minutes, capped at 25 min)",
-			"51-75 - reset time is on the order of hours (score - 50 = hours, capped at 25h)",
-			"76-100 - reset time is days or longer (score - 75 = days, capped at 25d)",
-		] as string[],
+			"If the error message states when the model or provider becomes available again, place that wait on the rubric: pick the level whose duration matches the reset time stated in the message. An explicit duration written in the message outranks any inference. If the message states no reset time, pick the first level.",
+		criteria: RESET_RUBRIC.map((level) => level.label),
 	},
 	scope: {
 		type: "choice" as const,
 		instructions:
-			"When the error is quota or auth, is the limit/account scoped to the specific model, the whole account, or a single IP/region? Pick 'unknown' if not stated.",
+			"Decide what the limit attaches to, using the wording of the message itself. A named model or series (GLM, claude-*, gpt-*, a specific model id) means 'model'; a key, plan, balance, credits or a usage quota means 'account'; an address or region means 'ip'. Choose 'unknown' only when the message names none of those.",
 		criteria: {
-			model: "Only the named model is affected; other models on the same provider still work.",
-			account: "The whole account is blocked, regardless of model.",
-			ip: "A single IP or region is throttled; other regions or other accounts are unaffected.",
-			unknown: "Scope is not stated in the error message.",
+			model: "The message names a specific model or series (e.g. 'GLM 5h window', 'model x is rate limited').",
+			account:
+				"The message refers to the key, plan, balance, credits or a usage quota (e.g. 'invalid API key', 'weekly token limit exhausted', 'insufficient credits', 'monthly cap').",
+			ip: "The message mentions an IP address, a region, or per-address throttling.",
+			unknown: "The message names no model, no credential or plan, and no address - only a bare failure.",
 		},
 	},
 } as const;
 
-/** Timeout for one classifier call. */
-export const CLASSIFIER_TIMEOUT_MS = 5_000;
+/**
+ * Timeout for one classifier call.
+ *
+ * 10 s, not 5: a local SystemOne model that Ollama has evicted (its default
+ * keep-alive is 5 min) has to be read back off disk before it can answer, and
+ * a medium-sized one is slower at that than the request itself. Measured on
+ * 2026-10-06 (Ollama v0.35.1): a 4.2B Q8_0 decision model cold-starts in ~7.8 s
+ * against ~0.07 s warm, so a 5 s budget turned the first failure after an idle
+ * gap into a spurious `no-classifier` blind cycle. Warm calls stay far inside
+ * this budget, so the extra headroom costs nothing in the common case.
+ */
+export const CLASSIFIER_TIMEOUT_MS = 10_000;
 
 function normaliseClass(value: unknown): ErrorClass {
 	if (typeof value !== "string") return "unknown";
@@ -171,19 +239,34 @@ function findJev(registry: ClassifierRegistry, jev: { provider: string; id: stri
 }
 
 /**
- * Bucket-relative score-to-ms mapping. The JEV_QUESTIONS criteria give a
- * score 1-25 in each bucket; the score is the COUNT in the bucket (e.g. 51
- * = 1 hour, 52 = 2 hours, 75 = 25 hours, 76 = 1 day, 100 = 25 days).
- * Result is clamped to the 31-day monthly cap.
+ * Map the classifier's `reset` answer to a timestamp.
+ *
+ * A SystemOne `score` answer is the probability-weighted average of the rubric
+ * LEVEL INDICES (Ollama's `/v1/systemone` and TypeSafe's API both say so
+ * explicitly; pi-ai forwards the number verbatim). The answer is therefore a
+ * fractional INDEX into RESET_RUBRIC, never a percentage - verified live against
+ * `tev1:0.8b`, where a five-level rubric plus "Try again in 1d 2h" answers 0.914.
+ *
+ * An index below 0.5 means the model's expectation sits nearer to "no reset
+ * time" than to the shortest real wait: no reset. Between levels the value is
+ * interpolated geometrically, matching the rubric's roughly logarithmic steps.
+ * The result is clamped to the 31-day monthly cap.
  */
 function scoreToResetAtMs(score: unknown, now: number): number | undefined {
-	if (typeof score !== "number" || !Number.isFinite(score) || score <= 0) return undefined;
-	let deltaMs: number;
-	if (score <= 25) deltaMs = Math.max(1, score) * 1_000; // seconds
-	else if (score <= 50) deltaMs = score * 60_000; // minutes (1 minute .. 25 minutes)
-	else if (score <= 75) deltaMs = (score - 50) * 3_600_000; // hours (1h .. 25h)
-	else deltaMs = (score - 75) * 86_400_000; // days (1d .. 25d)
-	return clampReset(now + deltaMs, now);
+	if (typeof score !== "number" || !Number.isFinite(score)) return undefined;
+	if (score < 0.5) return undefined;
+	const lastIndex = RESET_RUBRIC.length - 1;
+	const clampToLevel = (index: number): number | undefined => {
+		const ms = RESET_RUBRIC[index]?.ms;
+		return ms === undefined || ms <= 0 ? undefined : clampReset(now + ms, now);
+	};
+	if (score >= lastIndex) return clampToLevel(lastIndex);
+	const lower = Math.floor(score);
+	if (lower < 1) return clampToLevel(1);
+	const lowerMs = RESET_RUBRIC[lower]?.ms;
+	const upperMs = RESET_RUBRIC[lower + 1]?.ms;
+	if (lowerMs === undefined || upperMs === undefined || lowerMs <= 0) return clampToLevel(1);
+	return clampReset(now + lowerMs * (upperMs / lowerMs) ** (score - lower), now);
 }
 
 /** Build a classified error from a classifier structured-output result. */

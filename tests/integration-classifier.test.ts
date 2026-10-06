@@ -180,7 +180,7 @@ describe.runIf(enabled)("classifier integration — live corpus validation", () 
 		registry = buildRegistry(model, classifier);
 
 		// Warm-up: load the model server-side before the timed classifyError calls
-		// (classifyError enforces a 5s classifier timeout; a cold start exceeds it).
+		// (classifyError enforces a 10s classifier timeout; a cold start may exceed it).
 		// Mirrors the real request shape - choice + score + bool - so the model and
 		// its shared prompt prefix are resident before the first measured case.
 		await classifier.classify(model, {

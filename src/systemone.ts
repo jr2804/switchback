@@ -33,7 +33,7 @@ import type {
 /** The only classifier wire API switchback drives. */
 export const SYSTEM_ONE_API: ClassifierApi = "typesafe-system-one";
 
-/** Default request timeout. classifyError wraps the call in its own 5s race. */
+/** Default request timeout. classifyError wraps the call in its own race (see `CLASSIFIER_TIMEOUT_MS`). */
 const REQUEST_TIMEOUT_MS = 30_000;
 
 /** The subset of `fetch` this transport uses, injectable for tests. */

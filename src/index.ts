@@ -48,6 +48,7 @@ export {
 	countDecisionModelReferences,
 	defaultLayer,
 	globalConfigPath,
+	layerExists,
 	layerPath,
 	loadLayer,
 	moveFallback,
@@ -66,7 +67,7 @@ export {
 	updateDecisionModel,
 } from "./config-editor.ts";
 export type { ConfigLayer, DecisionModelInput, DecisionModelPatch, LoadedLayer } from "./config-editor.ts";
-export { runDialogue, describeJev } from "./dialogue.ts";
+export { runDialogue, describeJev, layerOptionLabel } from "./dialogue.ts";
 export type { DialogueContext, DialogueUi } from "./dialogue.ts";
 export { loadSimulate, getScenario, simulateRetry, SimulateError } from "./simulate.ts";
 export type { SimulateConfig, SimulateResult } from "./simulate.ts";

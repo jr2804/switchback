@@ -40,7 +40,7 @@ import {
 	setDebug,
 	type LoadedLayer,
 } from "../src/config-editor.ts";
-import { describeJev, runDialogue, type DialogueContext, type DialogueUi } from "../src/dialogue.ts";
+import { describeJev, layerOptionLabel, runDialogue, type DialogueContext, type DialogueUi } from "../src/dialogue.ts";
 import { ConfigError } from "../src/config.ts";
 import type { SecretStore } from "../src/secrets.ts";
 
@@ -203,11 +203,31 @@ describe("config-editor: layer handling", () => {
 		expect(existsSync(`${globalPath()}.tmp`)).toBe(false);
 	});
 
-	it("picks the project layer only when <cwd>/.pi exists", () => {
+	it("prefers the global layer, falling back to a project-only file", () => {
+		// Neither file exists: the global config is the natural home for a new one.
 		expect(defaultLayer()).toBe("global");
+		// A `.pi/` directory alone does NOT make the project layer the target - that
+		// rule silently wrote project overrides for users editing their global config.
 		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+		expect(defaultLayer()).toBe("global");
+		// Only a project file exists: that is plainly what the user works with.
+		seed(SAMPLE, projectPath());
 		expect(defaultLayer()).toBe("project");
+		// Both exist: global is the base every project inherits, so it wins.
+		seed(SAMPLE);
+		expect(defaultLayer()).toBe("global");
 		expect(load("project").path).toBe(projectPath());
+	});
+
+	it("labels each layer with its presence, model count or invalidity", () => {
+		expect(layerOptionLabel("global")).toBe("Global - not present");
+		expect(layerOptionLabel("project")).toBe("Project - not present");
+		seed(SAMPLE);
+		expect(layerOptionLabel("global")).toBe("Global - 1 model");
+		seed(TWO_MODELS, projectPath());
+		expect(layerOptionLabel("project")).toBe("Project - 2 models");
+		seed(BROKEN_YAML);
+		expect(layerOptionLabel("global")).toBe("Global - unreadable (invalid config)");
 	});
 });
 
@@ -338,7 +358,7 @@ describe("dialogue", () => {
 
 	it("walks the add-virtual-model wizard into a saved file", async () => {
 		const ui = new ScriptedUi({
-			select: ["Add virtual model...", "Add fallback...", "Done (needs at least one)", "Done"],
+			select: [layerOptionLabel("global"), "Add virtual model...", "Add fallback...", "Done (needs at least one)", "Done"],
 			input: ["auto", "Auto (fast)", "zai/glm-5.3"],
 		});
 		await run(ui);
@@ -352,7 +372,7 @@ describe("dialogue", () => {
 	it("reverts a failed wizard (duplicate id) and leaves the file unchanged", async () => {
 		seed(SAMPLE);
 		const ui = new ScriptedUi({
-			select: ["Add virtual model...", "Add fallback...", "Done (needs at least one)", "Done"],
+			select: [layerOptionLabel("global"), "Add virtual model...", "Add fallback...", "Done (needs at least one)", "Done"],
 			input: ["auto", "Dup", "zai/glm-5.3"],
 		});
 		await run(ui);
@@ -363,11 +383,11 @@ describe("dialogue", () => {
 	it("toggles debug on and back off", async () => {
 		seed(SAMPLE);
 		await run(
-			new ScriptedUi({ select: ["Toggle debug (currently off)", "Done"] }),
+			new ScriptedUi({ select: [layerOptionLabel("global"), "Toggle debug (currently off)", "Done"] }),
 		);
 		expect(readLayerConfig(load()).debug).toBe(true);
 		await run(
-			new ScriptedUi({ select: ["Toggle debug (currently on)", "Done"] }),
+			new ScriptedUi({ select: [layerOptionLabel("global"), "Toggle debug (currently on)", "Done"] }),
 		);
 		expect(readLayerConfig(load()).debug).toBe(false);
 	});
@@ -376,13 +396,13 @@ describe("dialogue", () => {
 		seed(SAMPLE);
 		await run(
 			new ScriptedUi({
-				select: [MODEL_LABEL, "Edit fallbacks (2)", "Move down...", "1. zai/glm-5.3", "Done", "Back", "Done"],
+				select: [layerOptionLabel("global"), MODEL_LABEL, "Edit fallbacks (2)", "Move down...", "1. zai/glm-5.3", "Done", "Back", "Done"],
 			}),
 		);
 		expect(readLayerConfig(load()).models[0]?.fallbacks).toEqual(["minimax/MiniMax-M3", "zai/glm-5.3"]);
 		await run(
 			new ScriptedUi({
-				select: [
+				select: [layerOptionLabel("global"), 
 					"switchback/auto - Auto",
 					"Edit fallbacks (2)",
 					"Remove fallback...",
@@ -399,7 +419,7 @@ describe("dialogue", () => {
 	it("guards the last remaining fallback", async () => {
 		seed(`models:\n  - id: switchback/auto\n    name: Auto\n    fallbacks:\n      - zai/glm-5.3\n`);
 		const ui = new ScriptedUi({
-			select: [MODEL_LABEL, "Edit fallbacks (1)", "Remove fallback...", undefined, undefined, "Done"],
+			select: [layerOptionLabel("global"), MODEL_LABEL, "Edit fallbacks (1)", "Remove fallback...", undefined, undefined, "Done"],
 		});
 		await run(ui);
 		expect(ui.notifications.some((n) => n.message.includes("at least one fallback"))).toBe(true);
@@ -410,7 +430,7 @@ describe("dialogue", () => {
 		seed(SAMPLE);
 		const store = new FakeSecretStore();
 		const ui = new ScriptedUi({
-			select: [
+			select: [layerOptionLabel("global"), 
 				"Decision models (1)...",
 				"Add decision model...",
 				"typesafe-system-one",
@@ -440,7 +460,7 @@ describe("dialogue", () => {
 	it("blocks deleting a decision model that is still referenced", async () => {
 		seed(SAMPLE);
 		const ui = new ScriptedUi({
-			select: ["Decision models (1)...", "local - ollama/tev1", "Delete", undefined, undefined, "Done"],
+			select: [layerOptionLabel("global"), "Decision models (1)...", "local - ollama/tev1", "Delete", undefined, undefined, "Done"],
 		});
 		await run(ui);
 		expect(ui.notifications.some((n) => n.message.includes("still referenced"))).toBe(true);
@@ -451,7 +471,7 @@ describe("dialogue", () => {
 		seed(TWO_MODELS);
 		await run(
 			new ScriptedUi({
-				select: ["switchback/alt - Alt", "Remove model", "Done"],
+				select: [layerOptionLabel("global"), "switchback/alt - Alt", "Remove model", "Done"],
 				confirm: [true],
 			}),
 		);
@@ -461,7 +481,7 @@ describe("dialogue", () => {
 		seed(TWO_MODELS);
 		await run(
 			new ScriptedUi({
-				select: ["switchback/alt - Alt", "Remove model", undefined, "Done"],
+				select: [layerOptionLabel("global"), "switchback/alt - Alt", "Remove model", undefined, "Done"],
 				confirm: [false],
 			}),
 		);
@@ -471,7 +491,7 @@ describe("dialogue", () => {
 	it("guards the last virtual model against removal", async () => {
 		seed(SAMPLE);
 		const ui = new ScriptedUi({
-			select: [MODEL_LABEL, "Remove model", undefined, "Done"],
+			select: [layerOptionLabel("global"), MODEL_LABEL, "Remove model", undefined, "Done"],
 			confirm: [true],
 		});
 		await run(ui);
@@ -482,7 +502,7 @@ describe("dialogue", () => {
 	it("renames a model id and warns about the restart", async () => {
 		seed(SAMPLE);
 		const ui = new ScriptedUi({
-			select: [MODEL_LABEL, "Rename model id (pi restart required)", "Back", "Done"],
+			select: [layerOptionLabel("global"), MODEL_LABEL, "Rename model id (pi restart required)", "Back", "Done"],
 			input: ["auto-fast"],
 		});
 		await run(ui);
@@ -494,7 +514,7 @@ describe("dialogue", () => {
 	it("reports an invalid config file and exits without touching it", async () => {
 		seed(INVALID_RULES);
 		const before = readText();
-		const ui = new ScriptedUi();
+		const ui = new ScriptedUi({ select: [layerOptionLabel("global")] });
 		await run(ui);
 		expect(ui.notifications[0]?.type).toBe("error");
 		expect(ui.notifications[0]?.message).toContain("fallbacks must be a non-empty array");
@@ -504,13 +524,49 @@ describe("dialogue", () => {
 	it("edits the project layer when <cwd>/.pi exists", async () => {
 		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
 		const ui = new ScriptedUi({
-			select: ["Add virtual model...", "Add fallback...", "Done (needs at least one)", "Done"],
+			select: [layerOptionLabel("project"), "Add virtual model...", "Add fallback...", "Done (needs at least one)", "Done"],
 			input: ["auto", "Auto (project)", "zai/glm-5.3"],
 		});
 		await run(ui);
 		expect(existsSync(projectPath())).toBe(true);
 		expect(readText(projectPath())).toContain("Auto (project)");
 		expect(existsSync(globalPath())).toBe(false);
+	});
+
+	it("edits the chosen layer and leaves the other one alone", async () => {
+		seed(SAMPLE);
+		seed(SAMPLE, projectPath());
+		await run(
+			new ScriptedUi({
+				select: [layerOptionLabel("project"), "Toggle debug (currently off)", "Done"],
+			}),
+		);
+		expect(readLayerConfig(load("project")).debug).toBe(true);
+		expect(readLayerConfig(load("global")).debug).toBe(false);
+	});
+
+	it("switches layer from the main menu through the chooser", async () => {
+		seed(SAMPLE);
+		seed(SAMPLE, projectPath());
+		await run(
+			new ScriptedUi({
+				select: [
+					layerOptionLabel("global"),
+					"Switch layer...",
+					layerOptionLabel("project"),
+					"Toggle debug (currently off)",
+					"Done",
+				],
+			}),
+		);
+		expect(readLayerConfig(load("project")).debug).toBe(true);
+		expect(readLayerConfig(load("global")).debug).toBe(false);
+	});
+
+	it("touches nothing when the layer prompt is cancelled", async () => {
+		await run(new ScriptedUi({ select: [undefined] }));
+		expect(existsSync(globalPath())).toBe(false);
+		expect(existsSync(projectPath())).toBe(false);
 	});
 });
 

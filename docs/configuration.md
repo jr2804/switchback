@@ -42,7 +42,12 @@ order. A duplicated model id therefore means the project entry wins wholesale
 The project-local slot lives under `.pi/` deliberately: git ignores that
 directory (pi's own convention), so a per-project override can never be
 committed into a repository the way a repo-root `switchback.yaml` would be.
-The repo ships only `switchback.yaml.example` as the template. Practically:
+The repo ships only `switchback.yaml.example` as the template. The base config
+therefore belongs in the global file, and the project file carries only the
+overrides for one directory — `/switchback-config` asks which layer to edit
+before anything else and shows both files with their current contents, so an
+edit never lands in the wrong one by accident (see
+[Configuration dialogue](configuration-dialogue.md)). Practically:
 
 - **Inside a project with a `.pi/switchback.yaml`**: that layer is merged on
   top of the global one (or stands alone if no global copy exists).

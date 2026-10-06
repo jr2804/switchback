@@ -23,11 +23,27 @@ the command reports and exits without prompting.
   first. Clearing a model's decision model makes it report and cycle without
   a classifier.
 - **Debug** — toggles the top-level `debug:` flag (per-switch diagnostics).
-- **Layer switch** — jump between the project layer (`<cwd>/.pi/switchback.yaml`)
-  and the global layer (`~/.pi/agent/switchback.yaml`). The layer that opens
-  by default is the project layer when the current directory has a `.pi/`
-  folder, otherwise the global layer. Every screen title shows the file path
-  being edited, so it is always clear where a change lands.
+- **Layer switch** — the dialogue asks **which layer to edit before anything
+  else**, and "Switch layer..." in the main menu asks again. The chooser shows
+  both files and what each currently holds, for example:
+
+  ```text
+  which config layer do you want to edit?
+    global:  ~/.pi/agent/switchback.yaml
+    project: <cwd>/.pi/switchback.yaml
+  Project entries override global entries with the same model id.
+
+    Global - 2 models        <- offered first
+    Project - not present
+  ```
+
+  `not present` means the file does not exist yet (a first save creates it),
+  `N models` is what the layer holds now, and `unreadable (invalid config)`
+  means the file exists but breaks a config rule. The preferred layer is
+  offered first (press Enter to take it): **global** — the base every project
+  inherits — unless only a project file exists, in which case that one is
+  plainly what you are working with. Esc cancels. Every screen title also shows
+  the file path being edited, so it is always clear where a change lands.
 
 ## API keys and the secret store
 

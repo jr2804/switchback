@@ -32,8 +32,11 @@ import {
 	addVirtualModel,
 	countDecisionModelReferences,
 	defaultLayer,
+	globalConfigPath,
+	layerExists,
 	loadLayer,
 	moveFallback,
+	projectConfigPath,
 	readLayerConfig,
 	removeDecisionModel,
 	removeFallback,
@@ -91,6 +94,54 @@ function screenTitle(loaded: LoadedLayer, body: string): string {
 }
 
 /**
+ * Label for one layer in the chooser: which file, and what is in it right now.
+ * Paths live in the screen title, so a label stays stable and scriptable.
+ */
+export function layerOptionLabel(layer: ConfigLayer): string {
+	const name = layer === "global" ? "Global" : "Project";
+	return `${name} - ${describeLayerState(layer)}`;
+}
+
+/** "not present", "N model(s)" or "unreadable (invalid config)" for a layer. */
+function describeLayerState(layer: ConfigLayer): string {
+	if (!layerExists(layer)) return "not present";
+	try {
+		const models = readLayerConfig(loadLayer(layer)).models.length;
+		return `${models} model${models === 1 ? "" : "s"}`;
+	} catch {
+		return "unreadable (invalid config)";
+	}
+}
+
+/**
+ * Ask which layer to edit.
+ *
+ * This is the dialogue's first prompt, and the target of "Switch layer...",
+ * because the layer changes what every later action means: project entries
+ * override global entries with the same model id, so writing to the wrong file
+ * either shadows the other config or fails to. The chooser shows both files,
+ * what each currently holds, and which one is being edited; the preferred layer
+ * is offered first (Enter keeps it). Esc cancels the dialogue.
+ */
+async function selectLayer(ctx: DialogueContext, current: ConfigLayer | undefined): Promise<ConfigLayer | undefined> {
+	const preferred = current ?? defaultLayer();
+	const labels: Record<ConfigLayer, string> = {
+		global: layerOptionLabel("global"),
+		project: layerOptionLabel("project"),
+	};
+	const order: ConfigLayer[] = preferred === "global" ? ["global", "project"] : ["project", "global"];
+	const title = [
+		current === undefined ? "which config layer do you want to edit?" : `switch layer (currently: ${current})`,
+		`  global:  ${globalConfigPath()}`,
+		`  project: ${projectConfigPath()}`,
+		"Project entries override global entries with the same model id.",
+	].join("\n");
+	const choice = await ctx.ui.select(title, order.map((layer) => labels[layer]));
+	if (choice === undefined) return undefined;
+	return choice === labels["global"] ? "global" : "project";
+}
+
+/**
  * Run the dialogue. Returns when the user is done; every completed action has
  * already been saved to the layer file by then.
  */
@@ -100,14 +151,18 @@ export async function runDialogue(ctx: DialogueContext, store?: SecretStore): Pr
 		return;
 	}
 	const secrets = store ?? createSecretStore();
-	let layer: ConfigLayer = defaultLayer();
+	const chosen = await selectLayer(ctx, undefined);
+	if (chosen === undefined) return;
+	let layer: ConfigLayer = chosen;
 	for (;;) {
 		const loaded = openLayer(ctx, layer);
 		if (loaded === undefined) return;
 		const session: DialogueSession = { loaded, secrets };
 		const outcome = await mainMenu(ctx, session);
 		if (outcome === "done") return;
-		layer = loaded.layer === "project" ? "global" : "project";
+		const next = await selectLayer(ctx, loaded.layer);
+		if (next === undefined) return;
+		layer = next;
 	}
 }
 
@@ -207,7 +262,7 @@ async function mainMenu(ctx: DialogueContext, session: DialogueSession): Promise
 		if (session.loaded.doc.contents === undefined || session.loaded.doc.contents === null) {
 			const choice = await ctx.ui.select(
 				screenTitle(session.loaded, "no config in this layer yet"),
-				["Add virtual model...", `Switch layer (editing ${session.loaded.layer})`, "Done"],
+				["Add virtual model...", "Switch layer...", "Done"],
 			);
 			if (choice === undefined || choice === "Done") return "done";
 			if (choice.startsWith("Switch layer")) return "switch";
@@ -220,7 +275,7 @@ async function mainMenu(ctx: DialogueContext, session: DialogueSession): Promise
 		const addOption = "Add virtual model...";
 		const debugOption = `Toggle debug (currently ${config.debug === true ? "on" : "off"})`;
 		const dmOption = `Decision models (${config.decisionModels?.length ?? 0})...`;
-		const switchOption = `Switch layer (editing ${session.loaded.layer})`;
+		const switchOption = "Switch layer...";
 		const doneOption = "Done";
 		options.push(addOption, debugOption, dmOption, switchOption, doneOption);
 

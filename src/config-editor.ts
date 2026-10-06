@@ -69,16 +69,30 @@ export function globalConfigPath(): string {
 }
 
 /**
- * The layer a dialogue should open by default: project when the cwd carries
- * a `.pi/` directory (the user keeps per-project overrides there), else global.
+ * The layer a dialogue offers first.
+ *
+ * Deliberately boring: the GLOBAL config is the base every project inherits, so
+ * it is the natural default - unless the global file does not exist while a
+ * project one does, in which case that project file is plainly what the user
+ * works with. An earlier rule ("project when `<cwd>/.pi` exists") silently wrote
+ * project overrides for users who only ever meant to edit their global config.
+ *
+ * This only orders the chooser; the dialogue asks explicitly and shows both
+ * layers, so nothing is decided invisibly.
  */
 export function defaultLayer(): ConfigLayer {
-	return existsSync(join(process.cwd(), ".pi")) ? "project" : "global";
+	if (existsSync(globalConfigPath())) return "global";
+	return existsSync(projectConfigPath()) ? "project" : "global";
 }
 
 /** File path for a layer. */
 export function layerPath(layer: ConfigLayer): string {
 	return layer === "project" ? projectConfigPath() : globalConfigPath();
+}
+
+/** Whether a layer file exists on disk. */
+export function layerExists(layer: ConfigLayer): boolean {
+	return existsSync(layerPath(layer));
 }
 
 /**

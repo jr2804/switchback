@@ -63,3 +63,4 @@ CLAUDE.md
 .codex/
 .cursor/
 /mise.local.toml
+site/

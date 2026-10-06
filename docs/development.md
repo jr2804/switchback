@@ -13,8 +13,13 @@ Build steps 1–8 are complete (per the design doc):
 - [x] **Step 3** — Atomic blocked-until store at `<piConfigDir>/switchback/blocks.json` (account-scoped; legacy `<cwd>/.pi/switchback.json` migrated on first read).
 - [x] **Step 4** — Classifier-only call via `ctx.modelRegistry.classify()`. The blind-cycle fallback
   replaces the heuristic: when the classifier is missing, unresolvable, or its call fails, the
-  router reports visibly and cycles. **Jev prompt v1 LOCKED 2026-10-04** against 41
-  passively-collected real error samples (see
+  router reports visibly and cycles. **Jev prompt v4 2026-10-06**: the reset
+  question is a 9-level rubric whose levels are the answer space (SystemOne `score`
+  answers are weighted averages of level indices, not percentages), kept at or
+  under `MAX_SCORE_LEVELS` = 10 because TypeSafe's hosted Jev rejects more with a
+  400 and returns no answers at all; and the `scope` question is anchored on
+  lexical cues rather than counterfactuals. v1 locked
+  2026-10-04 against 41 passively-collected real error samples (see
   [Classifier → Coverage matrix](classifier.md#coverage-matrix)).
 - [x] **Step 5** — `route()` reason dispatch (`user` / `continuation` / `retry` / `direct`) per design doc.
 - [x] **Step 6** — Simulate fixture: `switchback.simulate.json` corpus + router tests + opt-in live integration test (no user-facing command).

@@ -165,10 +165,16 @@ non-essential belongs in `.agents/POLICIES.md` or a child AGENTS.md.
    `<cwd>/.pi/switchback.json` is migrated on first read.
 4. **YAML-only user config.** `switchback.yaml` is the single config format;
    JSON is reserved for machine state and fixtures.
-5. **Deterministic reset-time extraction beats Jev score buckets.** Prefer
-   parseable reset durations from the error message; the Jev score is a
-   fallback, bucket-relative (`(score-50)*1h`, `(score-75)*1d`), capped at
-   31 days.
+5. **Deterministic reset-time extraction beats Jev score buckets.** The
+   classifier reads the reset time out of the error message (that is the
+   classifier's *input*, not code-side parsing — rule 1 still forbids regex
+   extractors in switchback); the `reset` answer is a **rubric index** into
+   `RESET_RUBRIC`, mapped to a duration, capped at 31 days. SystemOne `score`
+   answers are the weighted average of level indices, never a 0-100 value, and
+   a `score` question may carry at most **10** criteria (TypeSafe's hosted Jev
+   rejects more with a 400 and returns no answers at all, which silently
+   classifies everything as `unknown`). Keep `RESET_RUBRIC` within
+   `MAX_SCORE_LEVELS`.
 6. **No commits without explicit user approval.** Local commits count; the
    user controls what gets committed. `bd dolt push` has standing user
    approval (granted 2026-10-04). Do NOT run user-gated quota captures

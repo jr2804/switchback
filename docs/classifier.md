@@ -3,8 +3,29 @@
 The router classifies every provider failure through the configured SystemOne
 classifier — a single source of truth for message-derived decisions. There are
 no keyword sets, no HTTP-code patterns, and no regex-based reset extractor in
-the production route. The locked prompt is Jev prompt **v1** (2026-10-04) against
-41 passively-collected real error samples.
+the production route. The prompt is Jev prompt **v2** (2026-10-06), which
+keeps the v1 class/scope questions and replaces the reset question with a
+rubric, both validated against 41 passively-collected real error samples.
+
+### The `reset` answer is a rubric index
+
+A SystemOne `score` answer is the probability-weighted average of the rubric
+**level indices** — Ollama's `/v1/systemone` and TypeSafe's API say so
+explicitly, and pi-ai forwards the number verbatim. It is never a percentage.
+Switchback therefore sends a rubric whose levels *are* the answer space
+(`RESET_RUBRIC`: no-reset, then a roughly logarithmic ladder from seconds to a
+month) and reads the index back into a duration. There is no arithmetic against
+a raw score anywhere.
+
+v1 asked for "a score 0-100" on a five-level rubric. Both backends answer that
+with an index in `[0, 4]`, so every reset window collapsed to a few seconds —
+verified live against `tev1:0.8b`, where a five-level rubric plus the message
+"Try again in 1d 2h" answers `0.914` (the rubric index) where v1 expected 78.
+
+Level count was chosen on measurement: against `tev1:0.8b`, a 5-level bucket
+rubric puts placement 11.3 bits (log2) off the true wait, a 9-level ladder 5.8
+and the shipped 21-level ladder 5.6. Note that a small decision model
+systematically *under*-estimates; the 4B `tev1` or `nimble` places much better.
 
 This page has two parts:
 
@@ -172,9 +193,11 @@ the same shape recurs many times.
 
 **Honest summary:** the 2026-10-04 passive mining observed **41 raw error
 samples** across all four providers. A deliberate zai 401 probe and a
-MiniMax "Token Plan" quota capture were added the same day; the Jev prompt is
+MiniMax "Token Plan" quota capture were added the same day; the Jev prompt's
+class and scope questions are
 **LOCKED against 41** (the pre-probe baseline), and both later captures are
-**pending Jev validation**. Only the distinct shapes survive in the repo as
+**pending Jev validation**. The reset question was revised to a rubric in v2
+(see above); the corpus asserts classes, not reset windows. Only the distinct shapes survive in the repo as
 **10 scenarios** in `switchback.simulate.json`; the zai 401 probe and the
 MiniMax capture are preserved verbatim and test-asserted, the rest of the raw
 corpus is not shipped. Jev validation

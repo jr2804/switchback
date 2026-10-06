@@ -203,10 +203,59 @@ Fields (all optional, except where noted):
 - `apiKey` — bearer token. Local servers ignore it, but the transport
   refuses to send without one, so it defaults to the provider name.
 
-Omitting `baseUrl` keeps the old behaviour: the classifier is looked up
-in pi's catalog from `provider` + `id` only.
+Omitting `baseUrl` keeps the catalog behaviour: the classifier is looked up
+in pi's catalog from `provider` + `id` only, and **pi supplies the endpoint,
+the wire API and the credential** — whatever `/login` or the provider's
+environment variable configured. Switchback stores nothing and asks for
+nothing on this path.
 
-Example — Ollama v0.35+ decision model:
+A `baseUrl` therefore marks a *direct* endpoint: one pi has no catalog entry
+for (a local Ollama server, a self-hosted gateway). Switchback registers the
+classifier itself from the config, and this is the only case that needs a
+switchback-side credential (`apiKey` / `secret:<name>`).
+
+Several decision models may share one endpoint. They are registered together in
+a single provider declaration, because pi replaces a provider's whole model list
+when an extension supplies one — a model left out of that call would be invisible
+to the registry and classify as `unresolvable`. Decision models that no virtual
+model currently references are registered too, so an endpoint stays available
+while a model list is being edited.
+
+The wizard refuses to write a direct endpoint under a provider id pi already
+serves chat models for: registering a classifier there would make pi replace
+those models (its `applyExtension` returns `config.models.map(...)` whenever an
+extension sets `models`). The check is derived from the registry - whatever pi
+has models for is reserved, by definition - not from a list of names, and it
+reads:
+
+```
+pi already serves 7 chat model(s) under "<provider>". A direct endpoint here
+would replace them with the classifier alone - pick a distinct provider id
+("<provider>-<suffix>") instead.
+```
+
+A `decisionModels:` block whose entries are not referenced by **any**
+`models[].jev.decisionModel` is a startup error too: every entry becomes an
+orphan, the router sees no classifier, and every error is reported as
+`not-configured`. Partial references (some entries referenced, others not)
+are allowed: keep the unreferenced ones around to wire up later, the loader
+does not complain. An orphan-everything error names every unreferenced
+entry in one go.
+
+Example — pi's own catalog (no endpoint, no key in the config):
+
+```yaml
+models:
+  - id: switchback/auto
+    name: Auto (Switchback)
+    fallbacks:
+      - zai/glm-5.3
+    jev:
+      provider: typesafe
+      id: jev-latest
+```
+
+Example — a direct endpoint pi does not know (Ollama v0.35+):
 
 ```yaml
 models:
@@ -215,9 +264,10 @@ models:
     fallbacks:
       - ollama/minimax-m3
     jev:
-      provider: ollama-systemone
+      provider: ollama
       id: tev1:0.8b
       baseUrl: http://localhost:11434/v1
+      api: typesafe-system-one
       apiKey: ollama
 ```
 

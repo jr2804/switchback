@@ -70,19 +70,24 @@ models:
     idleReset: 5h
     # Classifier. Two forms:
     #
-    # 1. A classifier from pi's catalog - provider + id only:
+    # 1. A classifier from pi's catalog - provider + id only. pi supplies the
+    #    endpoint, the wire API and the credential (whatever /login configured),
+    #    so this block carries no URL and no key.
     jev:
       decisionModel: main
     #
-    # 2. A local System One endpoint, registered by switchback itself so no pi
-    #    provider is needed. `baseUrl` is the switch. Works with Ollama v0.35+
+    # 2. A direct System One endpoint pi has no catalog entry for, registered by
+    #    switchback itself. `baseUrl` is the switch. Works with Ollama v0.35+
     #    decision models: `ollama show <model>` must list the "decision"
     #    capability (e.g. tev1:0.8b). A plain chat GGUF is rejected by Ollama.
+    #    Pick an id pi does not already serve, or pi will replace that provider's
+    #    chat models with the classifier alone.
     #
     # jev:
-    #   provider: ollama-systemone
+    #   provider: ollama
     #   id: tev1:0.8b
     #   baseUrl: http://localhost:11434/v1
+    #   api: typesafe-system-one
     #   apiKey: ollama        # local servers ignore it; the transport needs a non-empty value
     #                         # or "secret:<name>" referencing the encrypted store (see
     #                         # `decisionModels:` below for the API key flow).

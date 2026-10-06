@@ -9,7 +9,7 @@ errors with a single SystemOne classifier.
 
 ## Entry points
 
-- `index.ts` — extension entry; registers the virtual model + six commands.
+- `index.ts` — extension entry; registers one virtual model per config entry + six commands.
 - `src/routing.ts` — `decide()`, `buildRoute()`.
 - `src/classify.ts` — `classifyError()` (classifier-only).
 - `src/availability.ts` — `resolveFallbacks()`, `pickNextEffective()`.
@@ -25,7 +25,7 @@ errors with a single SystemOne classifier.
 
 ```bash
 npx tsc --noEmit    # type check
-npx vitest run      # 108 tests across 6 files
+npx vitest run      # 210 tests + 11 opt-in across 12 files
 ```
 
 ## Tools
@@ -38,12 +38,12 @@ npx vitest run      # 108 tests across 6 files
 
 ## Commands (in the pi TUI)
 
-- `/switchback` — current model, effective vs greyed entries, active blocks.
-- `/switchback-config` — config source + full fallback list.
+- `/switchback` — config source, per-model pin, fallbacks (effective/greyed/blocks), active blocks.
+- `/switchback-config` — interactive config editor (virtual models, fallbacks, decision models, API keys, debug).
+- `/switchback-next` — cycle the session's virtual-model pin to the next fallback.
 - `/switchback-blocked` — currently blocked models.
 - `/switchback-crashes [n]` — global crash store (default 10).
 - `/switchback-annotate <hash> <class> [note]` — Tier 2b cache write.
-- `/switchback-simulate <scenario>` — replay a fixture through `decide()`.
 
 ## First-time checks
 

@@ -9,6 +9,8 @@
 | System One classifier transport (switchback's own) | `src/systemone.ts` |
 | Catalog validity (`resolveFallbacks`) | `src/availability.ts` |
 | Config loader (YAML) | `src/config.ts` |
+| Config editor (comment-preserving YAML round-trip) | `src/config-editor.ts` |
+| Interactive config dialogue (`/switchback-config`) | `src/dialogue.ts` |
 | Shared types | `src/types.ts` |
 | Blocked-until store (atomic) | `src/state.ts` |
 | Crash store + Tier 2b annotation cache | `src/crashes.ts` |
@@ -19,7 +21,7 @@
 | Tests | `tests/*.test.ts` |
 | Command-output snapshots | `tests/__snapshots__/commands.test.ts.snap` |
 | User-facing docs (quickstart, commands, config pointer) | `README.md` |
-| Docs site — User guide (Home, Configuration, Classifier, License) | `docs/{index,configuration,classifier,license}.md` |
+| Docs site — User guide (Home, Configuration, Configuration dialogue, Classifier, License) | `docs/{index,configuration,configuration-dialogue,classifier,license}.md` |
 | Docs site — Development (Overview, Architecture, Crash collection, Versioning, Issue tracking, Contributing) | `docs/{development,architecture,crash-collection,versioning,issue-tracking,contributing}.md` |
 | Docs site config | `mkdocs.yml` |
 | README banner (hero) | `assets/readme/banner.svg` |

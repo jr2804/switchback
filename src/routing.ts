@@ -60,9 +60,9 @@ import type { Api, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { pickNextEffective, resolveFallbacks, type AvailabilityRegistry } from "./availability.ts";
 import { classifyError, PROMPT_VERSION, type NoClassifierReason } from "./classify.ts";
 import { availableCategories, chooseThinkingLevel, type ThinkingLevelContext, type ThinkingLevelSource } from "./thinking.ts";
-import { blockModel, unblockModel } from "./state.ts";
+import { blockModel, getPinnedModel, isBlocked, readBlockedMap, unblockModel } from "./state.ts";
 import { recordCrash, type CrashAction } from "./crashes.ts";
-import type { BlockedMap, ModelId, SwitchbackConfig, SwitchbackState } from "./types.ts";
+import type { BlockedMap, ModelId, ResolvedSwitchbackConfig, SwitchbackState } from "./types.ts";
 
 /** Maximum number of transient retries on the same model before the router moves on. */
 export const MAX_TRANSIENT_RETRIES = 1;
@@ -206,7 +206,7 @@ function describeNoClassifier(reason: NoClassifierReason): string {
 export async function decide(
 	reason: ModelRouteRequest<SwitchbackState>["reason"],
 	request: ModelRouteRequest<SwitchbackState>,
-	modelConfig: SwitchbackConfig,
+	modelConfig: ResolvedSwitchbackConfig,
 	registry: AvailabilityRegistry & RouterRegistry,
 	inputs: RouteInputs,
 ): Promise<DecisionOutcome> {
@@ -247,7 +247,33 @@ export async function decide(
 		return resolveDispatchLevel(retry, request, modelConfig, registry, inputs);
 	}
 
-	// "user" or "direct": the session stays where it is. Stickiness is the fix for the
+	// "user" or "direct": a manual pin (`/switchback-next`) wins first - it is the
+	// user's explicit "route here" override, above both stickiness and preference,
+	// for as long as the pinned model is usable.
+	const pinned = getPinnedModel(modelConfig.id);
+	if (pinned !== undefined) {
+		const pin = resolved.entries.find((e) => e.id === pinned);
+		if (pin?.availability === "effective" && !isBlockedNow(pinned, blocked, now)) {
+			return resolveDispatchLevel(
+				{
+					decision:
+						request.state?.current === pinned
+							? { kind: "stick", modelId: pinned, reason: "pinned" }
+							: { kind: "switch", modelId: pinned, reason: "pinned" },
+					nextState: buildStateAfterSwitch(pinned, request.state),
+					thinkingLevel: request.thinkingLevel,
+				},
+				request,
+				modelConfig,
+				registry,
+				inputs,
+			);
+		}
+		// A pin on an unusable model is ignored (blocked or greyed); the normal rules
+		// apply and the status command shows why the pin is not being honoured.
+	}
+
+	// Stickiness: the session stays where it is. Stickiness is the fix for the
 	// reported behaviour where every turn restarted at the head of the list, so a model
 	// that had just failed the session was preferred again. A blocked or unavailable
 	// current model is left behind, and the walk continues FORWARD from it.
@@ -298,7 +324,7 @@ export async function decide(
 
 async function decideRetry(
 	request: ModelRouteRequest<SwitchbackState>,
-	modelConfig: SwitchbackConfig,
+	modelConfig: ResolvedSwitchbackConfig,
 	registry: AvailabilityRegistry & RouterRegistry,
 	resolved: ReturnType<typeof resolveFallbacks>,
 	inputs: RouteInputs,
@@ -453,7 +479,7 @@ function resetSuffix(resetAtMs: number | undefined, now: number): string {
 async function resolveDispatchLevel(
 	outcome: DecisionOutcome,
 	request: ModelRouteRequest<SwitchbackState>,
-	modelConfig: SwitchbackConfig,
+	modelConfig: ResolvedSwitchbackConfig,
 	registry: AvailabilityRegistry & RouterRegistry,
 	inputs: RouteInputs,
 ): Promise<DecisionOutcome> {

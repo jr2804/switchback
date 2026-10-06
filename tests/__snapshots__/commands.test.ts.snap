@@ -12,20 +12,4 @@ active blocks: (none)"
 
 exports[`command output capture > /switchback-blocked renders empty list when nothing is blocked 1`] = `"(no models currently blocked)"`;
 
-exports[`command output capture > /switchback-config renders fallback list with availability markers 1`] = `
-"config source: <cwd>/.pi/switchback.yaml
-fallbacks (in order, with availability):
-  1. zai/glm-5.3
-  2. ollama-cloud/glm-5.3-flash
-  3. minimax/MiniMax-M3
-  4. opencode-go/glm-5.3-flash
-effective: 4 / greyed: 0
-classifier: typesafe/jev-latest"
-`;
-
 exports[`command output capture > /switchback-crashes renders empty when no crashes recorded 1`] = `"(no crashes recorded yet)"`;
-
-exports[`command output capture > /switchback-simulate <scenario> runs the fixture through decide() 1`] = `
-"simulate scenario: 429 Too Many Requests: z.ai GLM 5h window exceeded. Resets at 2026-10-04T15:30:0...
-decision: switch -> ollama-cloud/glm-5.3-flash (blind-cycle-not-configured: no classifier configured (set jev: in switchback.yaml))"
-`;

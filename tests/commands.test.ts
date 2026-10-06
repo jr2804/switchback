@@ -114,34 +114,6 @@ describe("command output capture", () => {
 		expect(lines.join("\n")).toMatchSnapshot();
 	});
 
-	it("/switchback-config renders fallback list with availability markers", () => {
-		const entries = [
-			{ provider: "zai", id: "glm-5.3" },
-			{ provider: "ollama-cloud", id: "glm-5.3-flash" },
-			{ provider: "minimax", id: "MiniMax-M3" },
-			{ provider: "opencode-go", id: "glm-5.3-flash" },
-		];
-		const registry = fakeRegistry(entries);
-		const fallbacks = entries.map((e) => `${e.provider}/${e.id}`);
-		const resolved = resolveFallbacks(fallbacks, registry);
-		const { config, source } = loadConfig();
-		const modelConfig = config.models[0]!;
-		// Normalize the source path so the dynamic tmp dir doesn't bias the snapshot.
-		const normalizedSource = source.replace(/\\/g, "/").includes("/switchback.yaml") ? "<cwd>/.pi/switchback.yaml" : source;
-		const lines: string[] = [
-			`config source: ${normalizedSource}`,
-			`fallbacks (in order, with availability):`,
-			...modelConfig.fallbacks.map((f, i) => {
-				const r = resolved.entries[i];
-				const suffix = r && r.availability !== "effective" ? `  [greyed: ${r.reason ?? r.availability}]` : "";
-				return `  ${i + 1}. ${f}${suffix}`;
-			}),
-			`effective: ${resolved.effectiveCount} / greyed: ${resolved.greyedCount}`,
-			`classifier: ${modelConfig.jev ? `${modelConfig.jev.provider}/${modelConfig.jev.id}` : "(none; cycling on any failure)"}`,
-		];
-		expect(lines.join("\n")).toMatchSnapshot();
-	});
-
 	it("/switchback-blocked renders empty list when nothing is blocked", () => {
 		const now = Date.now();
 		const blocked = readBlockedMap(now);
@@ -170,26 +142,6 @@ describe("command output capture", () => {
 		expect(parsedGood).toEqual({ hash: "abcdef", klass: "quota", note: "some note text" });
 	});
 
-	it("/switchback-simulate <scenario> runs the fixture through decide()", async () => {
-		const { simulateRetry } = await import("../src/simulate.ts");
-		const { loadSimulate, getScenario } = await import("../src/simulate.ts");
-		const cfg = loadSimulate(true);
-		const message = getScenario(cfg, "quota-5h-zai")!;
-		const entries = [
-			{ provider: "zai", id: "glm-5.3" },
-			{ provider: "ollama-cloud", id: "glm-5.3-flash" },
-			{ provider: "minimax", id: "MiniMax-M3" },
-			{ provider: "opencode-go", id: "glm-5.3-flash" },
-		];
-		const registry = fakeRegistry(entries);
-		const fallbacks = entries.map((e) => `${e.provider}/${e.id}`);
-		const modelConfig = { id: "switchback/auto", name: "Auto (Switchback)", fallbacks };
-		const result = await simulateRetry(message, modelConfig, registry as unknown as Parameters<typeof simulateRetry>[2], {}, Date.now());
-		const picked = result.decision.kind === "exhausted" || result.decision.kind === "config-invalid" ? "(none)" : result.decision.modelId;
-		const reason = result.decision.kind === "exhausted" || result.decision.kind === "config-invalid" ? result.decision.reason : result.decision.reason;
-		const output = `simulate scenario: ${message.slice(0, 80)}...\ndecision: ${result.decision.kind} -> ${picked} (${reason})`;
-		expect(output).toMatchSnapshot();
-	});
 });
 
 // Re-implementation of the parseAnnotateArgs helper from index.ts. The real

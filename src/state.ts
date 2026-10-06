@@ -123,3 +123,60 @@ export function unblockModel(modelId: ModelId, path: string = stateFilePath()): 
 	delete map[modelId];
 	writeRaw(path, map);
 }
+
+/**
+ * Manually pinned model per virtual model, persisted to
+ * `<piConfigDir>/switchback/pin.json`. A pin is the user's explicit "route here"
+ * override (set by `/switchback-next`); it wins over stickiness and preference
+ * for as long as the pinned model is usable (effective and not blocked). Null
+ * removes the pin. Managed by the runtime; atomic writes like blocks.json.
+ */
+export type PinMap = Record<string, ModelId | null>;
+
+/** Path to the pin map. */
+export function pinFilePath(): string {
+	return join(piSwitchbackDir(), "pin.json");
+}
+
+function readPinRaw(path: string): PinMap {
+	if (!existsSync(path)) return {};
+	const text = readFileSync(path, "utf8");
+	if (text.trim().length === 0) return {};
+	const parsed: unknown = JSON.parse(text);
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+		throw new Error(`switchback: ${path} is not a JSON object`);
+	}
+	const out: PinMap = {};
+	for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+		if (value === null) out[key] = null;
+		else if (typeof value === "string") out[key] = value;
+		else throw new Error(`switchback: ${path} has a non-string pin for "${key}"`);
+	}
+	return out;
+}
+
+function writePinRaw(path: string, map: PinMap): void {
+	mkdirSync(dirname(path), { recursive: true });
+	const tmp = `${path}.tmp`;
+	writeFileSync(tmp, JSON.stringify(map, null, 2), "utf8");
+	renameSync(tmp, path);
+}
+
+/** Read the whole pin map (mostly for status displays). */
+export function readPinMap(path: string = pinFilePath()): PinMap {
+	return readPinRaw(path);
+}
+
+/** The pinned physical model for a virtual model, when one is set. */
+export function getPinnedModel(virtualId: string, path: string = pinFilePath()): ModelId | undefined {
+	const pin = readPinRaw(path)[virtualId];
+	return pin === undefined ? undefined : pin ?? undefined;
+}
+
+/** Set (or clear, with null) the pinned physical model for a virtual model. */
+export function setPinnedModel(virtualId: string, model: ModelId | null, path: string = pinFilePath()): void {
+	const map = readPinRaw(path);
+	if (model === null) delete map[virtualId];
+	else map[virtualId] = model;
+	writePinRaw(path, map);
+}

@@ -32,7 +32,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { decide, buildRoute, MAX_TRANSIENT_RETRIES, type Decision, type RouterRegistry } from "../src/routing.ts";
-import { stateFilePath, readBlockedMap, isBlocked, unblockModel, blockModel } from "../src/state.ts";
+import { stateFilePath, readBlockedMap, isBlocked, unblockModel, blockModel, getPinnedModel, setPinnedModel } from "../src/state.ts";
 import { simulateRetry, loadSimulate, getScenario, SimulateError } from "../src/simulate.ts";
 import { findModelConfig, loadConfig } from "../src/config.ts";
 import { classifyError, type NoClassifierReason } from "../src/classify.ts";
@@ -1184,6 +1184,90 @@ describe("router — thinking level", () => {
 		expect(result.decision.kind).toBe("stick");
 		expect(result.thinkingLevel).toBe("medium");
 		expect(result.thinkingSource).toBeUndefined();
+	});
+});
+
+describe("router — pin (manual override via /switchback-next)", () => {
+	const writePin = (virtualId: string, model: string | null): void => {
+		setPinnedModel(virtualId, model);
+	};
+	const messages: { text: string; type: string }[] = [];
+	const notify = (text: string, type: "info" | "warning" | "error"): void => {
+		messages.push({ text, type });
+	};
+
+	it("a usable pin wins stickiness and preference on user routes", async () => {
+		messages.length = 0;
+		writePin("switchback/auto", "ollama-cloud/pro");
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			],
+		});
+		const result = await decide(
+			"user",
+			buildFakeRequest({ reason: "user", stateCurrent: "zai/glm-4.7" }),
+			FALLBACKS,
+			registry,
+			{ now: 1_000_000, blocked: {} },
+		);
+		expect(result.decision.kind).toBe("switch");
+		if (result.decision.kind === "switch") expect(result.decision.modelId).toBe("ollama-cloud/pro");
+		expect(result.decision.reason).toBe("pinned");
+	});
+
+	it("a blocked pin is ignored (the model is not routed to)", async () => {
+		writePin("switchback/auto", "ollama-cloud/pro");
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			],
+		});
+		const result = await decide(
+			"user",
+			buildFakeRequest({ reason: "user" }),
+			FALLBACKS,
+			registry,
+			{ now: 1_000_000, blocked: { "ollama-cloud/pro": 2_000_000 } },
+		);
+		// Pinned model is blocked; fall through to stickiness on the head (which
+		// happens to be the same head, so the result is a stick on the head).
+		expect(result.decision.kind).toBe("stick");
+		if (result.decision.kind === "stick") expect(result.decision.modelId).toBe("zai/glm-4.7");
+	});
+
+	it("debug emits a line on a manual-change that the staying model cannot express", async () => {
+		messages.length = 0;
+		writePin("switchback/auto", "zai/glm-4.7");
+		const registry = makeFakeRegistry({
+			entries: [{ provider: "zai", id: "glm-4.7", thinkingLevelMap: { off: null, minimal: null, medium: null } }],
+		});
+		await decide(
+			"user",
+			buildFakeRequest({ reason: "user", stateCurrent: "zai/glm-4.7" }),
+			FALLBACKS,
+			registry,
+			{ now: 1_000_000, blocked: {}, notify, debug: true },
+		);
+		expect(messages).toHaveLength(1);
+		expect(messages[0]?.text).toMatch(/stays on zai\/glm-4\.7/);
+		expect(messages[0]?.text).toMatch(/level medium →/);
+	});
+
+	it("debug emits no line for a manual change the staying model already supports", async () => {
+		messages.length = 0;
+		writePin("switchback/auto", "zai/glm-4.7");
+		const registry = makeFakeRegistry({ entries: [{ provider: "zai", id: "glm-4.7" }] });
+		await decide(
+			"user",
+			buildFakeRequest({ reason: "user", stateCurrent: "zai/glm-4.7" }),
+			FALLBACKS,
+			registry,
+			{ now: 1_000_000, blocked: {}, notify, debug: true },
+		);
+		expect(messages).toHaveLength(0);
 	});
 });
 

@@ -24,6 +24,8 @@ export {
 	CrashError,
 } from "./crashes.ts";
 export type { CrashEntry, CrashMap, CrashAction, CrashVerdict, CrashAnnotation, RecordCrashInput } from "./crashes.ts";
+export { createSecretStore, secretsFilePath, powershellDpapi, SecretsError } from "./secrets.ts";
+export type { SecretStore, Dpapi } from "./secrets.ts";
 export { loadConfig, findModelConfig, DEFAULT_CONFIG, SWITCHBACK_PROVIDER, SWITCHBACK_VIRTUAL_ID, ConfigError, piConfigDir, piSwitchbackDir } from "./config.ts";
 export type { SwitchbackConfig, SwitchbackFileConfig, JevConfig } from "./config.ts";
 export { loadSimulate, getScenario, simulateRetry, SimulateError } from "./simulate.ts";

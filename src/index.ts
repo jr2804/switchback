@@ -22,7 +22,8 @@ export {
 	IDLE_RESET_PROMPT_VERSION,
 } from "./idle.ts";
 export type { IdleResetDecision, IdleResetInput } from "./idle.ts";
-export { fitsContext, usableContextTokens, CONTEXT_FIT_RESERVE_TOKENS } from "./context-fit.ts";
+export { fitsContext, usableContextTokens, chooseContextCandidate, CONTEXT_FIT_RESERVE_TOKENS, CONTEXT_CANDIDATE_PROMPT_VERSION } from "./context-fit.ts";
+export type { CandidateWindow, ContextCandidateChoice, ContextCandidateInput } from "./context-fit.ts";
 export { blockModel, isBlocked, readBlockedMap, unblockModel, stateFilePath } from "./state.ts";
 export {
 	readCrashMap,

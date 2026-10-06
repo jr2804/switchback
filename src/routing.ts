@@ -59,12 +59,12 @@ import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import type { Api, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { pickNextEffective, resolveFallbacks, type AvailabilityRegistry } from "./availability.ts";
 import { classifyError, PROMPT_VERSION, type NoClassifierReason } from "./classify.ts";
-import { fitsContext } from "./context-fit.ts";
+import { chooseContextCandidate, fitsContext } from "./context-fit.ts";
 import { decideIdleReset } from "./idle.ts";
 import { availableCategories, chooseThinkingLevel, type ThinkingLevelContext, type ThinkingLevelSource } from "./thinking.ts";
 import { blockModel, getPinnedModel, isBlocked, readBlockedMap, unblockModel } from "./state.ts";
 import { recordCrash, type CrashAction } from "./crashes.ts";
-import type { BlockedMap, ModelId, ResolvedSwitchbackConfig, SwitchbackState } from "./types.ts";
+import type { BlockedMap, JevConfig, ModelId, ResolvedSwitchbackConfig, SwitchbackState } from "./types.ts";
 
 /** Maximum number of transient retries on the same model before the router moves on. */
 export const MAX_TRANSIENT_RETRIES = 1;
@@ -146,43 +146,67 @@ function physicalId(model: ModelRouteRequest<SwitchbackState>["model"] | undefin
 /**
  * Pick the next usable model, preferring one that can hold the current context.
  *
- * A preference, never a filter (see `src/context-fit.ts`): when the ordinary pick
- * already fits, or nothing fits, or the context size is unknown, the ordinary
- * pick is returned unchanged. Only when the ordinary pick would force compaction
- * does the router look for the first candidate in preference order that can hold
- * the context - and if none can, continuity wins and the ordinary pick stands.
+ * A preference, never a filter (see `src/context-fit.ts`): when the context size
+ * is unknown, or nothing can hold it, the ordinary pick is returned unchanged -
+ * continuity matters more than a context drop. When candidates can hold the
+ * conversation, the deterministic pick is the floor and the decision model may
+ * reorder among them (it never sees an ineligible model, and an absent or
+ * unreadable answer keeps the floor).
  */
-function pickWithContextFit(opts: {
+async function pickWithContextFit(opts: {
 	resolved: ReturnType<typeof resolveFallbacks>;
 	skip: ModelId | undefined;
 	blocked: BlockedMap;
 	now: number;
 	startAfter: ModelId | undefined;
 	registry: RouterRegistry;
+	jev: JevConfig | undefined;
 	contextTokens: number | undefined;
-}): ReturnType<typeof pickNextEffective> {
+	reason?: string;
+}): Promise<ReturnType<typeof pickNextEffective>> {
 	const pick = pickNextEffective(opts.resolved, opts.skip, opts.blocked, opts.now, opts.startAfter);
 	const tokens = opts.contextTokens;
 	if (!pick || tokens === undefined || tokens <= 0) return pick;
-	if (fitsModel(opts.registry, pick.modelId, tokens)) return pick;
-	for (const entry of opts.resolved.entries) {
-		if (entry.id === pick.modelId || entry.id === opts.skip) continue;
-		if (entry.availability !== "effective" || isBlockedNow(entry.id, opts.blocked, opts.now)) continue;
-		if (!fitsModel(opts.registry, entry.id, tokens)) continue;
-		return { modelId: entry.id, degraded: false };
+	const fitting = opts.resolved.entries
+		.filter((entry) => entry.id !== opts.skip)
+		.filter((entry) => entry.availability === "effective" && !isBlockedNow(entry.id, opts.blocked, opts.now))
+		.map((entry) => ({ id: entry.id, model: modelOf(opts.registry, entry.id) }))
+		.filter((entry): entry is { id: ModelId; model: Model<Api> } => entry.model !== undefined)
+		.filter((entry) => fitsContext(entry.model, tokens));
+	if (fitting.length === 0) {
+		// Nothing can hold the context: keep the ordinary pick (continuity over a
+		// context drop) rather than failing the switch.
+		return pick;
 	}
-	// Nothing can hold the context: keep the ordinary pick (continuity over a
-	// context drop) rather than failing the switch.
-	return pick;
+	const preferred = fitting.some((entry) => entry.id === pick.modelId) ? pick.modelId : fitting[0]!.id;
+	if (fitting.length === 1) return { modelId: preferred, degraded: false };
+	const choice = await chooseContextCandidate({
+		registry: opts.registry,
+		jev: opts.jev,
+		preferred,
+		contextTokens: tokens,
+		candidates: fitting.map((entry) => ({
+			id: entry.id,
+			contextWindow: entry.model.contextWindow ?? 0,
+			...(entry.model.name !== undefined ? { name: entry.model.name } : {}),
+		})),
+		...(opts.reason !== undefined ? { reason: opts.reason } : {}),
+		...(opts.skip !== undefined ? { failed: opts.skip } : {}),
+	});
+	return { modelId: choice.modelId, degraded: false };
+}
+
+/** The named physical model, when the registry knows it. */
+function modelOf(registry: RouterRegistry, modelId: ModelId): Model<Api> | undefined {
+	const slash = modelId.indexOf("/");
+	if (slash <= 0) return undefined;
+	return registry.find(modelId.slice(0, slash), modelId.slice(slash + 1));
 }
 
 /** Whether the named physical model can hold `tokens` of context (false when unknown). */
 function fitsModel(registry: RouterRegistry, modelId: ModelId, tokens: number): boolean {
-	const slash = modelId.indexOf("/");
-	if (slash <= 0) return false;
-	const model = registry.find(modelId.slice(0, slash), modelId.slice(slash + 1));
-	if (model === undefined) return false;
-	return fitsContext(model, tokens);
+	const model = modelOf(registry, modelId);
+	return model === undefined ? false : fitsContext(model, tokens);
 }
 
 /**
@@ -342,7 +366,7 @@ export async function decide(
 			.map((e) => `${e.id} (resets in ${Math.max(1, Math.round(((blocked[e.id] ?? now) - now) / 60_000))} min)`),
 	});
 	if (idle.reset) {
-		const pick = pickWithContextFit({ resolved, skip: undefined, blocked, now, startAfter: undefined, registry, contextTokens: inputs.contextTokens });
+		const pick = await pickWithContextFit({ resolved, skip: undefined, blocked, now, startAfter: undefined, registry, jev: modelConfig.jev, reason: "idle-reset", contextTokens: inputs.contextTokens });
 		if (pick) {
 			const nextState = buildStateAfterSwitch(pick.modelId, request.state);
 			if (pick.degraded && resolved.effectiveCount === 1 && !nextState.degradedWarned) {
@@ -383,7 +407,7 @@ export async function decide(
 
 	// Nothing usable yet: continue forward from where the session was (wrapping), else
 	// start at the head of the configured list.
-	const pick = pickWithContextFit({ resolved, skip: undefined, blocked, now, startAfter: current, registry, contextTokens: inputs.contextTokens });
+	const pick = await pickWithContextFit({ resolved, skip: undefined, blocked, now, startAfter: current, registry, jev: modelConfig.jev, contextTokens: inputs.contextTokens });
 	if (!pick) {
 		// No non-blocked effective entry AND multiple effective entries exist: the user
 		// is quota-locked-out across all configured fallbacks. Surface "exhausted" rather
@@ -443,7 +467,7 @@ async function decideRetry(
 				thinkingLevel: request.thinkingLevel,
 			};
 		}
-		const pick = pickWithContextFit({ resolved, skip: undefined, blocked, now, startAfter: advanceFrom, registry, contextTokens: inputs.contextTokens });
+		const pick = await pickWithContextFit({ resolved, skip: undefined, blocked, now, startAfter: advanceFrom, registry, jev: modelConfig.jev, contextTokens: inputs.contextTokens });
 		if (!pick) {
 			return { decision: { kind: "exhausted", reason: "all-effective-blocked" }, thinkingLevel: request.thinkingLevel };
 		}
@@ -463,7 +487,7 @@ async function decideRetry(
 	if (result.kind === "no-classifier") {
 		const reasonText = describeNoClassifier(result.reason);
 		inputs.notify?.(`switchback: no classifier decision (${result.reason}) - cycling without classification`, "warning");
-		const pick = pickWithContextFit({ resolved, skip: failedId, blocked, now, startAfter: advanceFrom, registry, contextTokens: inputs.contextTokens });
+		const pick = await pickWithContextFit({ resolved, skip: failedId, blocked, now, startAfter: advanceFrom, registry, jev: modelConfig.jev, contextTokens: inputs.contextTokens });
 		recordDecideCrash(failedId, registry, errorMessage, now, null, result.reason, "blind-cycle");
 		if (pick) {
 			const nextState = buildStateAfterSwitch(pick.modelId, priorState);
@@ -511,7 +535,7 @@ async function decideRetry(
 				thinkingLevel: request.thinkingLevel,
 			};
 		}
-		const pick = pickWithContextFit({ resolved, skip: failedId, blocked, now, startAfter: advanceFrom, registry, contextTokens: inputs.contextTokens });
+		const pick = await pickWithContextFit({ resolved, skip: failedId, blocked, now, startAfter: advanceFrom, registry, jev: modelConfig.jev, contextTokens: inputs.contextTokens });
 		recordDecideCrash(failedId, registry, errorMessage, now, classified, undefined, pick ? "blocked+advanced" : "stuck-stayed");
 		if (pick) {
 			const nextState = buildStateAfterSwitch(pick.modelId, priorState);
@@ -530,7 +554,7 @@ async function decideRetry(
 	// Quota / auth / unknown: block the failed model with the classifier-supplied
 	// reset time and pick the next non-blocked.
 	blockModel(failedId, classified.resetAtMs, now);
-	const pick = pickWithContextFit({ resolved, skip: failedId, blocked, now, startAfter: advanceFrom, registry, contextTokens: inputs.contextTokens });
+	const pick = await pickWithContextFit({ resolved, skip: failedId, blocked, now, startAfter: advanceFrom, registry, jev: modelConfig.jev, contextTokens: inputs.contextTokens });
 	recordDecideCrash(failedId, registry, errorMessage, now, classified, undefined, pick ? "blocked+advanced" : "stuck-stayed");
 	if (pick) {
 		const nextState = buildStateAfterSwitch(pick.modelId, priorState);

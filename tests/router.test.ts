@@ -76,6 +76,12 @@ interface FakeRegistryOpts {
 	 * asks it for `idleReset: classifier` (see src/idle.ts).
 	 */
 	idleAnswer?: "return_to_initial" | "keep_current";
+	/**
+	 * When set, the context-candidate question is answered with this model id. The
+	 * router asks it when several fitting candidates can hold the context
+	 * (see src/context-fit.ts).
+	 */
+	candidateAnswer?: string;
 }
 
 function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: (...args: unknown[]) => Promise<unknown> } {
@@ -103,7 +109,7 @@ function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: 
 	// returns. Tests that want the classifier path to be exercisable must set
 	// answer / throw / hang / unparseable; tests that want the no-classifier path
 	// leave those unset and findOfType returns undefined.
-	const classifierConfigured = opts.answer !== undefined || opts.throw !== undefined || opts.hang === true || opts.unparseable === true || opts.levelAnswer !== undefined || opts.idleAnswer !== undefined;
+	const classifierConfigured = opts.answer !== undefined || opts.throw !== undefined || opts.hang === true || opts.unparseable === true || opts.levelAnswer !== undefined || opts.idleAnswer !== undefined || opts.candidateAnswer !== undefined;
 	const fakeClassifierHandle = classifierConfigured
 		? { provider: "typesafe", id: "jev-latest", api: "classifier" as const, input: ["text" as const] }
 		: undefined;
@@ -140,6 +146,17 @@ function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: 
 					stopReason: "stop" as const,
 					answers: {
 						idle_reset: { type: "choice" as const, choice: opts.idleAnswer, probabilities: {}, confidence: 1 },
+					},
+				};
+			}
+			// The context-candidate question (src/context-fit.ts): which of the models
+			// that can hold the conversation to switch to.
+			if ("candidate" in questions) {
+				if (opts.candidateAnswer === undefined) return null;
+				return {
+					stopReason: "stop" as const,
+					answers: {
+						candidate: { type: "choice" as const, choice: opts.candidateAnswer, probabilities: {}, confidence: 1 },
 					},
 				};
 			}
@@ -1285,8 +1302,56 @@ describe("router — context-window fit on a switch (preference, not a filter)",
 		if (result.decision.kind === "switch") expect(result.decision.modelId).toBe("ollama-cloud/pro");
 	});
 
-	it("never re-routes a sticky session, however large the context", async () => {
+	it("lets the decision model choose among the candidates that fit", async () => {
 		const result = await decide(
+			"retry",
+			buildFakeRequest({
+				reason: "retry",
+				stateCurrent: "zai/glm-4.7",
+				failed: { provider: "zai", id: "glm-4.7", errorMessage: "quota exhausted" },
+			}),
+			FALLBACKS,
+			makeFakeRegistry({
+				entries: [
+					{ provider: "zai", id: "glm-4.7", contextWindow: BIG },
+					{ provider: "ollama-cloud", id: "pro", contextWindow: BIG },
+					{ provider: "minimax", id: "plus", contextWindow: BIG },
+				],
+				answer: { class: "quota" },
+				// Deterministic order would pick ollama-cloud/pro; the decision model
+				// sees both fitting candidates and picks minimax/plus.
+				candidateAnswer: "minimax/plus",
+			}),
+			{ now: 1_000_000, blocked: {}, contextTokens: TOKENS },
+		);
+		expect(result.decision.kind).toBe("switch");
+		if (result.decision.kind === "switch") expect(result.decision.modelId).toBe("minimax/plus");
+	});
+
+	it("keeps the deterministic candidate when the decision model cannot choose", async () => {
+		const result = await decide(
+			"retry",
+			buildFakeRequest({
+				reason: "retry",
+				stateCurrent: "zai/glm-4.7",
+				failed: { provider: "zai", id: "glm-4.7", errorMessage: "quota exhausted" },
+			}),
+			FALLBACKS,
+			makeFakeRegistry({
+				entries: [
+					{ provider: "zai", id: "glm-4.7", contextWindow: BIG },
+					{ provider: "ollama-cloud", id: "pro", contextWindow: BIG },
+					{ provider: "minimax", id: "plus", contextWindow: BIG },
+				],
+				answer: { class: "quota" },
+			}),
+			{ now: 1_000_000, blocked: {}, contextTokens: TOKENS },
+		);
+		expect(result.decision.kind).toBe("switch");
+		if (result.decision.kind === "switch") expect(result.decision.modelId).toBe("ollama-cloud/pro");
+	});
+
+	it("never re-routes a sticky session, however large the context", async () => {		const result = await decide(
 			"user",
 			buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro" }),
 			FALLBACKS,

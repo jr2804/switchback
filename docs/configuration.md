@@ -128,6 +128,12 @@ response reserve) over one that cannot:
   (a failover switch or an idle reset). A sticky session is never re-routed,
   however large its context.
 - When pi cannot report a context size, no preference is applied.
+- When **more than one** candidate can hold the conversation, the **decision
+  model chooses between them**: it is given the context size, each candidate's
+  window and remaining headroom, the model that just failed and your own
+  preference order, and may reorder them. The deterministic pick stays the floor —
+  an absent, failed or unreadable answer keeps it — so this can only reorder
+  candidates that were already eligible, never introduce one.
 
 The margin is `CONTEXT_FIT_RESERVE_TOKENS` (16k, pi's own default compaction
 reserve), so a model that only just fits is not treated as fitting — it would

@@ -6,14 +6,24 @@
  * which speaks the same wire protocol as pi's `typesafe-system-one` transport,
  * but pi ships no Ollama classifier provider and `models.json` cannot express
  * one (its schema has no classifier model type). So switchback declares the
- * endpoint itself, from its own config: exactly one decision model, used only
- * by this extension.
+ * endpoint itself, from its own config.
  *
  * `jev.baseUrl` in `switchback.yaml` is the switch. When present, switchback
- * registers `jev.provider` with that one classifier model and its own System
- * One transport (src/systemone.ts), so the normal
+ * registers `jev.provider` with the classifier model(s) for that endpoint and
+ * its own System One transport (src/systemone.ts), so the normal
  * `ctx.modelRegistry.classify()` path - block map, Tier 2b annotation cache,
  * reset scoring - works unchanged.
+ *
+ * **One endpoint, many models.** `registerProvider` takes the provider's whole
+ * model list, and pi replaces that list wholesale when an extension supplies
+ * one (`applyExtension` returns `config.models.map(...)`), so the registration
+ * has to carry every classifier model that lives on the endpoint in a single
+ * call. Two decision models pointed at the same `provider` + `baseUrl` would
+ * otherwise leave the second one unregistered - `findOfType("classifier", ...)`
+ * would return nothing for it and classification would report `unresolvable`.
+ * `groupLocalEndpoints` does that grouping, and it considers decision models
+ * that no virtual model references too, so an endpoint stays registered while a
+ * model list is being edited.
  *
  * The transport is switchback's own rather than an import of pi's
  * `@earendil-works/pi-ai/api/typesafe-system-one.lazy`: pi supplies host
@@ -46,32 +56,70 @@ export function isLocalClassifier(jev: JevConfig | undefined): boolean {
 	return jev?.baseUrl !== undefined;
 }
 
+/** One direct endpoint and every classifier model that lives on it. */
+export interface LocalClassifierEndpoint {
+	/** Provider id written to the config. */
+	provider: string;
+	/** The System One base URL (`POST {baseUrl}/systemone`). */
+	baseUrl: string;
+	/**
+	 * Bearer token for the endpoint. A local server ignores it, but the transport
+	 * refuses to send without one, so it falls back to the provider id.
+	 */
+	apiKey: string;
+	/** Distinct classifier models to register under this provider. */
+	models: readonly JevConfig[];
+}
+
 /**
- * Register the configured direct endpoint as a classifier provider. A no-op
- * when `jev.baseUrl` is absent (the classifier is then resolved from pi's own
- * catalog, as before).
+ * Group every direct endpoint in a config with all the classifier models that
+ * share it. Entries without a `baseUrl` are catalog classifiers and are not
+ * switchback's to register; they are skipped.
+ *
+ * Ordering follows first appearance, and a repeated `provider` + `baseUrl` +
+ * model id collapses to one entry - the same classifier is often named by
+ * several virtual models, and by a `decisionModels` entry as well.
  */
-export function registerLocalClassifier(pi: ExtensionAPI, jev: JevConfig | undefined): void {
-	if (jev === undefined || jev.baseUrl === undefined) return;
-	const api: ClassifierApi = LOCAL_CLASSIFIER_API;
-	const model: ClassifierModel<ClassifierApi> = {
+export function groupLocalEndpoints(jevs: readonly JevConfig[]): LocalClassifierEndpoint[] {
+	const byEndpoint = new Map<string, { provider: string; baseUrl: string; apiKey?: string; models: JevConfig[] }>();
+	for (const jev of jevs) {
+		if (jev.baseUrl === undefined) continue;
+		const key = `${jev.provider}|${jev.baseUrl}`;
+		const group = byEndpoint.get(key) ?? { provider: jev.provider, baseUrl: jev.baseUrl, models: [] };
+		if (group.apiKey === undefined && jev.apiKey !== undefined) group.apiKey = jev.apiKey;
+		if (!group.models.some((model) => model.id === jev.id)) group.models.push(jev);
+		byEndpoint.set(key, group);
+	}
+	return [...byEndpoint.values()].map((group) => ({
+		provider: group.provider,
+		baseUrl: group.baseUrl,
+		apiKey: group.apiKey ?? group.provider,
+		models: group.models,
+	}));
+}
+
+/**
+ * Register one direct endpoint as a classifier provider, carrying **all** its
+ * classifier models. Call `groupLocalEndpoints` first; a no-op list means there
+ * is nothing local to register and the classifier stays catalog-resolved.
+ */
+export function registerLocalClassifier(pi: ExtensionAPI, endpoint: LocalClassifierEndpoint): void {
+	const { provider, baseUrl, apiKey } = endpoint;
+	const models: ClassifierModel<ClassifierApi>[] = endpoint.models.map((jev) => ({
 		type: "classifier",
 		id: jev.id,
 		name: `${jev.id} (switchback local classifier)`,
-		api,
-		provider: jev.provider,
-		baseUrl: jev.baseUrl,
+		api: LOCAL_CLASSIFIER_API,
+		provider,
+		baseUrl,
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: LOCAL_CLASSIFIER_CONTEXT_WINDOW,
-	};
-	// A local server (Ollama) ignores the bearer token, but the header must be
-	// non-empty, so default it to something deterministic.
-	const apiKey = jev.apiKey ?? jev.provider;
-	pi.registerProvider(jev.provider, {
-		baseUrl: jev.baseUrl,
+	}));
+	pi.registerProvider(provider, {
+		baseUrl,
 		apiKey,
-		models: [model],
-		classifiers: { [SYSTEM_ONE_API]: systemOneClassifier(jev.baseUrl, { apiKey }) },
+		models,
+		classifiers: { [SYSTEM_ONE_API]: systemOneClassifier(baseUrl, { apiKey }) },
 	});
 }

@@ -1,23 +1,42 @@
 /**
- * The classifier endpoints the config dialogue offers.
+ * The classifier providers the config dialogue offers.
  *
- * The decision-model wizard used to ask for a provider id as free text, which
- * invites typos and hides the fact that a wrong id fails only at classification
- * time. What providers exist, what they are called and where they live is
- * knowledge pi already has: every classifier-capable provider is registered in
- * the model registry, with its display name and base URL. This module turns that
- * registry view into a choice list - switchback keeps no provider table of its
- * own beyond the two local endpoints pi does not know about.
+ * Every entry is derived from pi at runtime: the model registry already knows
+ * which providers exist, what they are called, where they live and which
+ * classifier models each one ships. Switchback keeps **no** provider table of
+ * its own - not a provider id, not a display name, not a base URL, not a model
+ * id. Anything hardcoded here would drift the moment pi-ai's generated catalog
+ * moves, and pi-ai's `dist/providers/data/*.json` is a build artifact, not an
+ * extension point.
  *
- * Local endpoints (Ollama's `/v1/systemone`, a llama.cpp server) are the one
- * case pi cannot supply, because they are not pi providers at all: switchback
- * registers them itself when `baseUrl` is present. Their defaults come from the
- * conventional environment variables (`OLLAMA_HOST`, `LLAMA_SERVER_URL`) and fall
- * back to the well-known local addresses, so the wizard can prefill a working
- * URL instead of asking the user to remember one.
+ * An endpoint pi does not know (a local Ollama server, a self-hosted gateway)
+ * is not part of the offer: the wizard's "Other" escape hatch collects the
+ * provider id and base URL from the user, and switchback registers that
+ * endpoint itself. Once configured it appears in the registry like any other
+ * provider, so later edits are prefilled from the config rather than guessed.
  */
 
-import { LOCAL_CLASSIFIER_APIS } from "./config.ts";
+/** One classifier model a provider ships, as pi's registry reports it. */
+export interface ClassifierModelSummary {
+	/** Model id to write into the config. */
+	id: string;
+	/** Wire API that model speaks (the value for the config's `api` key). */
+	api: string;
+}
+
+/** One provider as pi's registry reports it, reduced to what the wizard needs. */
+export interface ClassifierProviderSource {
+	/** Provider id. */
+	id: string;
+	/** Provider display name. */
+	name: string;
+	/** Provider base URL, when the provider declares one. */
+	baseUrl?: string;
+	/** Classifier models this provider ships (empty when it has none). */
+	classifiers: readonly ClassifierModelSummary[];
+	/** How many chat models pi already has for this provider (clash detection). */
+	chatModels: number;
+}
 
 /** One choice in the decision-model wizard's provider step. */
 export interface ClassifierProviderOption {
@@ -25,138 +44,86 @@ export interface ClassifierProviderOption {
 	provider: string;
 	/** Choice label, e.g. "typesafe — TypeSafe". */
 	label: string;
+	/** Provider display name, without the id prefix the label carries. */
+	displayName: string;
 	/**
-	 * Default base URL. Present for pi providers that declare one and for local
-	 * endpoints; absent means "resolve from pi's catalog", i.e. no `baseUrl` key.
+	 * Base URL. Present when the provider declares one; absent means "resolve
+	 * from pi's catalog", i.e. the config carries no `baseUrl` key.
 	 */
 	baseUrl?: string;
 	/**
-	 * Wire API to write alongside `baseUrl`. Every local endpoint switchback knows
-	 * speaks exactly one, so the wizard sets it from here instead of asking - the
-	 * old "wire API? (none)" question offered a choice that does not exist.
+	 * Wire API to write alongside `baseUrl`, taken from the provider's own
+	 * classifier models. Absent when the provider declares none.
 	 */
 	api?: string;
-	/** Classifier model ids pi knows for this provider (empty: ask for an id). */
+	/** Classifier model ids the provider ships, sorted. */
 	models: readonly string[];
-	/** True for a local SystemOne endpoint (switchback registers it itself). */
+	/**
+	 * True for an endpoint the user named themselves (the wizard's "Other"
+	 * path, or a provider already configured with a direct endpoint). Everything
+	 * pi's catalog reports is false: those are resolved, not registered.
+	 */
 	local: boolean;
-}
-
-/** The local classifier endpoints pi does not provide. */
-export interface LocalClassifierEndpoint {
-	provider: string;
-	name: string;
-	/** Environment variable that overrides the address. */
-	envVar: string;
-	/** Address used when the environment variable is unset. */
-	defaultBaseUrl: string;
-	/** The wire API this endpoint speaks (the only one switchback supports today). */
-	api: string;
+	/** How many chat models pi already has for this provider; 0 when unknown. */
+	chatModels: number;
 }
 
 /**
- * Local SystemOne endpoints, in the order they are offered. Both speak the same
- * wire API (switchback's own transport), so the wizard can set `api` for them.
+ * Build the provider choices from pi's registry view: every provider that ships
+ * at least one classifier model, alphabetically. A provider with no classifier
+ * models is left out rather than offered as a dead end - a direct endpoint is
+ * reachable through the wizard's "Other" choice.
  */
-export const LOCAL_CLASSIFIER_ENDPOINTS: readonly LocalClassifierEndpoint[] = [
-	{
-		provider: "ollama",
-		name: "Ollama (local SystemOne)",
-		envVar: "OLLAMA_HOST",
-		defaultBaseUrl: "http://localhost:11434/v1",
-		api: LOCAL_CLASSIFIER_APIS[0] ?? "typesafe-system-one",
-	},
-	{
-		provider: "llama-server",
-		name: "llama.cpp server (local SystemOne)",
-		envVar: "LLAMA_SERVER_URL",
-		defaultBaseUrl: "http://localhost:8080/v1",
-		api: LOCAL_CLASSIFIER_APIS[0] ?? "typesafe-system-one",
-	},
-];
-
-/**
- * Normalize a host or URL from an environment variable into an OpenAI-style
- * `/v1` base URL: `127.0.0.1:11434` and `http://127.0.0.1:11434` both become
- * `http://127.0.0.1:11434/v1`, and a value that already carries a path is kept
- * (minus a trailing slash).
- */
-export function normalizeLocalBaseUrl(value: string): string | undefined {
-	const trimmed = value.trim();
-	if (trimmed.length === 0) return undefined;
-	// Any explicit scheme is honoured only if it is http(s); anything else is treated
-	// as a bare host ("127.0.0.1:11434").
-	const withScheme = /^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed) ? trimmed : `http://${trimmed}`;
-	let parsed: URL;
-	try {
-		parsed = new URL(withScheme);
-	} catch {
-		return undefined;
-	}
-	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
-	const path = parsed.pathname.replace(/\/+$/u, "");
-	return `${parsed.origin}${path === "" ? "/v1" : path}`;
-}
-
-export interface ClassifierProviderSource {
-	/** Registered providers, as pi's registry reports them. */
-	providers: readonly { id: string; name: string; baseUrl?: string }[];
-	/** Classifier model ids pi knows for a provider (empty when none). */
-	classifierIds: (provider: string) => readonly string[];
-	/** Environment for the local-endpoint defaults. Defaults to `process.env`. */
-	env?: Record<string, string | undefined>;
-}
-
-/**
- * Build the provider choices: every classifier-capable pi provider first
- * (alphabetically, with its own display name and base URL), then the local
- * endpoints with their environment-derived defaults. A provider pi lists but
- * that declares no base URL keeps `baseUrl` undefined, which is the correct
- * config for a catalog-resolved classifier.
- */
-export function buildClassifierProviders(source: ClassifierProviderSource): ClassifierProviderOption[] {
-	const env = source.env ?? process.env;
-	const catalog: ClassifierProviderOption[] = [];
-	for (const provider of source.providers) {
-		const models = source.classifierIds(provider.id);
-		if (models.length === 0) continue;
-		catalog.push({
+export function buildClassifierProviders(source: readonly ClassifierProviderSource[]): ClassifierProviderOption[] {
+	const options: ClassifierProviderOption[] = [];
+	for (const provider of source) {
+		if (provider.classifiers.length === 0) continue;
+		const models = provider.classifiers.map((model) => model.id);
+		const api = provider.classifiers[0]?.api;
+		options.push({
 			provider: provider.id,
 			label: `${provider.id} — ${provider.name}`,
+			displayName: provider.name,
 			...(provider.baseUrl !== undefined ? { baseUrl: provider.baseUrl } : {}),
+			...(api !== undefined ? { api } : {}),
 			models: [...models].sort(),
 			local: false,
+			chatModels: provider.chatModels,
 		});
 	}
-	catalog.sort((a, b) => a.provider.localeCompare(b.provider));
-
-	const local: ClassifierProviderOption[] = LOCAL_CLASSIFIER_ENDPOINTS.map((endpoint) => {
-		const fromEnv = env[endpoint.envVar];
-		const baseUrl =
-			(fromEnv !== undefined ? normalizeLocalBaseUrl(fromEnv) : undefined) ?? endpoint.defaultBaseUrl;
-		return {
-			provider: endpoint.provider,
-			label: `${endpoint.provider} — ${endpoint.name}`,
-			baseUrl,
-			api: endpoint.api,
-			models: [],
-			local: true,
-		};
-	});
-
-	return [...catalog, ...local];
+	options.sort((a, b) => a.provider.localeCompare(b.provider));
+	return options;
 }
 
 /**
- * A short note for a choice's screen title: where the base URL default came
- * from, so a prefilled value is explainable rather than magic.
+ * A short note for a choice's screen title: where the prefilled base URL came
+ * from, so the value is explainable rather than magic.
  */
-export function classifierBaseUrlNote(option: ClassifierProviderOption, env: Record<string, string | undefined> = process.env): string {
+export function classifierBaseUrlNote(option: ClassifierProviderOption): string {
 	if (option.baseUrl === undefined) return "resolved from pi's model catalog (no baseUrl needed)";
-	const endpoint = LOCAL_CLASSIFIER_ENDPOINTS.find((candidate) => candidate.provider === option.provider);
-	if (endpoint === undefined) return `provider default: ${option.baseUrl}`;
-	const fromEnv = env[endpoint.envVar];
-	return fromEnv !== undefined && normalizeLocalBaseUrl(fromEnv) === option.baseUrl
-		? `from ${endpoint.envVar}`
-		: `default (set ${endpoint.envVar} to override)`;
+	return `from pi's model catalog: ${option.baseUrl}`;
+}
+
+/**
+ * Whether writing a direct endpoint (`baseUrl`) for this choice would make pi
+ * replace models it already owns.
+ *
+ * pi's `applyExtension` returns `config.models.map(...)` whenever an extension
+ * registers a provider with a model list, so declaring a classifier under a
+ * provider that already serves chat models drops those chat models for the
+ * session. Derived from the registry rather than a list of "reserved" ids:
+ * whatever pi has models for is reserved, by definition.
+ */
+export function directEndpointWouldClobber(option: ClassifierProviderOption): boolean {
+	return option.chatModels > 0;
+}
+
+/**
+ * Build a suggested decision-model name from the provider + model id. Used as
+ * the prefilled default in the last wizard step. Keeps the user's keystrokes
+ * to a Tab + Enter for the common case of accepting the suggestion.
+ */
+export function defaultDecisionModelName(provider: string, modelId: string): string {
+	const cleanedModel = modelId.replace(/[:/]/g, "-").replace(/-latest$/u, "");
+	return `${provider}-${cleanedModel}`;
 }

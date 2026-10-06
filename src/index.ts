@@ -74,10 +74,10 @@ export type { ModelPickerSource, PickerColor, PickerKeybindings, PickerTheme, Pi
 export {
 	buildClassifierProviders,
 	classifierBaseUrlNote,
-	normalizeLocalBaseUrl,
-	LOCAL_CLASSIFIER_ENDPOINTS,
+	defaultDecisionModelName,
+	directEndpointWouldClobber,
 } from "./classifier-catalog.ts";
-export type { ClassifierProviderOption, ClassifierProviderSource, LocalClassifierEndpoint } from "./classifier-catalog.ts";
+export type { ClassifierModelSummary, ClassifierProviderOption, ClassifierProviderSource } from "./classifier-catalog.ts";
 export {
 	buildProbeContext,
 	formatProbeReport,

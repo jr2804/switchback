@@ -19,7 +19,7 @@
  * project-vs-global layer default deterministic.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -292,14 +292,14 @@ describe("config-editor: the loader's gate owns every rule", () => {
 		seed(SAMPLE);
 		const loaded = load();
 		setDecisionModel(loaded, "switchback/auto", { decisionModel: "missing" });
-		expect(() => saveLayer(loaded)).toThrow(/is not defined in decisionModels/);
+		expect(() => saveLayer(loaded)).toThrow(/not referenced by any model\.jev\.decisionModel|is not defined in decisionModels/);
 	});
 
 	it("rejects removing a still-referenced decision model at save time", () => {
 		seed(SAMPLE);
 		const loaded = load();
 		removeDecisionModel(loaded, "local");
-		expect(() => saveLayer(loaded)).toThrow(/is not defined in decisionModels/);
+		expect(() => saveLayer(loaded)).toThrow(/not referenced by any model\.jev\.decisionModel|is not defined in decisionModels/);
 	});
 
 	it("reads an invalid file through the loader's message and refuses to open it", () => {
@@ -433,19 +433,21 @@ describe("dialogue", () => {
 		seed(SAMPLE);
 		const store = new FakeSecretStore();
 		const ui = new ScriptedUi({
-			select: [layerOptionLabel("global"), 
+			select: [layerOptionLabel("global"),
 				"Decision models (1)...",
 				"Add decision model...",
 				"New secret...",
 				"Back",
 				"Done",
 			],
+			// Wizard order (with no catalog context): provider, baseUrl, modelId,
+			// apiKey value, name (LAST, prefilled).
 			input: [
-				"second",
 				"ollama",
-				"tev2",
 				"http://localhost:11434/v1",
+				"tev2",
 				"sk-switchback-TESTVALUE-42-not-a-real-key",
+				"second",
 			],
 		});
 		await run(ui, store);
@@ -573,18 +575,23 @@ describe("dialogue", () => {
 });
 
 describe("dialogue: catalog-assisted setup", () => {
-	const LOCAL_PROVIDER: ClassifierProviderOption = {
-		provider: "ollama",
-		label: "ollama — Ollama (local SystemOne)",
-		baseUrl: "http://localhost:11434/v1",
+	// A provider pi's registry reports: switchback invents neither its id, its
+	// display name, its base URL nor its classifier model ids.
+	const CATALOG_PROVIDER: ClassifierProviderOption = {
+		provider: "typesafe",
+		label: "typesafe — TypeSafe",
+		displayName: "TypeSafe",
+		baseUrl: "https://api.typesafe.ai/v1/",
 		api: "typesafe-system-one",
-		models: [],
-		local: true,
+		models: ["jev-1.13", "jev-latest"],
+		local: false,
+		chatModels: 0,
 	};
 
+	// A `score` answer is a rubric index; the probe's rubric has three levels.
 	const probeResult = (ok: boolean): ProbeResult => ({
 		ok,
-		answers: ok ? { choice: "sunny", score: 50, noul: true } : { score: 50 },
+		answers: ok ? { choice: "sunny", score: 1, noul: true } : { score: 1 },
 		missing: ok ? [] : ["choice", "noul"],
 		ms: 42,
 	});
@@ -613,77 +620,87 @@ describe("dialogue: catalog-assisted setup", () => {
 		expect(picked[0]?.current).toEqual(["zai/glm-5.3", "minimax/MiniMax-M3"]);
 	});
 
-	it("picks the provider from the catalog, prefills the base URL and aligns the wire api", async () => {
+	it("keeps a catalog provider catalog-resolved: no baseUrl, no api, no secret", async () => {
 		seed(SAMPLE);
 		const store = new FakeSecretStore();
 		const probed: JevConfig[] = [];
 		const ui = new ScriptedUi({
-			select: [layerOptionLabel("global"), "Decision models (1)...", "Add decision model...", LOCAL_PROVIDER.label, "New secret...", "Back", "Done"],
-			input: ["dm2", "tev1", "", "sk-switchback-TESTVALUE-42-not-a-real-key"],
+			// Wizard order: provider (from the registry), baseUrl (Enter = keep pi's
+			// resolution), modelId (from the provider's own classifier list), then the
+			// name LAST. There is no apiKey step: pi holds the credential, so
+			// switchback neither asks for one nor writes a secret reference.
+			select: [layerOptionLabel("global"), "Decision models (1)...", "Add decision model...", CATALOG_PROVIDER.label, "jev-latest", "Back", "Done"],
+			input: ["", "dm2"],
 			confirm: [true],
 		});
 		await run(ui, store, {
-			classifierProviders: [LOCAL_PROVIDER],
+			classifierProviders: [CATALOG_PROVIDER],
 			probeClassifier: async (jev) => {
 				probed.push(jev);
 				return probeResult(true);
 			},
 		});
 		const entry = readLayerConfig(load()).decisionModels?.find((d) => d.name === "dm2");
-		expect(entry?.provider).toBe("ollama");
-		expect(entry?.id).toBe("tev1");
-		// An empty answer to the base-URL prompt keeps the prefilled default.
-		expect(entry?.baseUrl).toBe("http://localhost:11434/v1");
-		// The wire api is aligned with the endpoint, never asked as "(none)".
-		expect(entry?.api).toBe("typesafe-system-one");
-		// The secret name is derived from the decision model, not requested.
-		expect(entry?.apiKey).toBe(`secret:${secretNameFor("dm2")}`);
-		expect(store.setCalls).toEqual([
-			{ name: secretNameFor("dm2"), value: "sk-switchback-TESTVALUE-42-not-a-real-key" },
-		]);
-		// The capability test runs with the key RESOLVED, and reports the verdict.
-		expect(probed).toHaveLength(1);
-		expect(probed[0]?.apiKey).toBe("sk-switchback-TESTVALUE-42-not-a-real-key");
-		expect(ui.notifications.some((n) => n.message.includes("choice  ✓ sunny"))).toBe(true);
-	});
-
-	it("removes the direct endpoint when the base URL is answered with a dash", async () => {
-		seed(SAMPLE);
-		await run(
-			new ScriptedUi({
-				select: [layerOptionLabel("global"), "Decision models (1)...", "Add decision model...", LOCAL_PROVIDER.label, "Back", "Done"],
-				input: ["dm3", "tev1", "-"],
-			}),
-			undefined,
-			{ classifierProviders: [LOCAL_PROVIDER] },
-		);
-		const entry = readLayerConfig(load()).decisionModels?.find((d) => d.name === "dm3");
-		expect(entry?.provider).toBe("ollama");
+		expect(entry?.provider).toBe("typesafe");
+		expect(entry?.id).toBe("jev-latest");
+		// pi resolves the endpoint, the wire api and the credential from its own
+		// catalog (whatever /login configured), so the config carries none of them.
 		expect(entry?.baseUrl).toBeUndefined();
 		expect(entry?.api).toBeUndefined();
 		expect(entry?.apiKey).toBeUndefined();
+		expect(store.setCalls).toEqual([]);
+		// The capability test runs with whatever pi resolves for the provider (there
+		// is no switchback-side key to resolve), and reports the verdict.
+		expect(probed).toHaveLength(1);
+		expect(probed[0]?.apiKey).toBeUndefined();
+		expect(ui.notifications.some((n) => n.message.includes("choice  ✓ sunny"))).toBe(true);
+	});
+
+	it("asks for provider id and base URL for an endpoint pi does not know", async () => {
+		seed(SAMPLE);
+		const store = new FakeSecretStore();
+		// The catalog cannot list this endpoint's models, so the wizard asks the
+		// server itself (Ollama's /api/tags, filtered by the decision capability).
+		vi.stubGlobal("fetch", async () => ({
+			ok: true,
+			status: 200,
+			json: async () => ({ models: [{ name: "tev1:0.8b", capabilities: ["decision", "completion"] }] }),
+		}));
+		try {
+			const ui = new ScriptedUi({
+				// provider ("Other"), provider id, baseUrl, modelId (live list),
+				// apiKey action, apiKey value, name LAST.
+				select: [layerOptionLabel("global"), "Decision models (1)...", "Add decision model...", "Other (type a provider id)...", "tev1:0.8b", "New secret...", "Back", "Done"],
+				input: ["local-ollama", "http://localhost:11434/v1", "sk-switchback-TESTVALUE-42-not-a-real-key", "dm3"],
+			});
+			await run(ui, store, { classifierProviders: [CATALOG_PROVIDER] });
+			const entry = readLayerConfig(load()).decisionModels?.find((d) => d.name === "dm3");
+			expect(entry?.provider).toBe("local-ollama");
+			expect(entry?.id).toBe("tev1:0.8b");
+			expect(entry?.baseUrl).toBe("http://localhost:11434/v1");
+			// switchback supports one direct wire protocol, so it is written, not asked.
+			expect(entry?.api).toBe("typesafe-system-one");
+			expect(entry?.apiKey).toBe(`secret:${secretNameFor("dm3")}`);
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 
 	it("offers the classifier model from the provider's known ids", async () => {
 		seed(SAMPLE);
-		const catalogProvider: ClassifierProviderOption = {
-			provider: "typesafe",
-			label: "typesafe — TypeSafe",
-			baseUrl: "https://api.typesafe.ai/v1/",
-			models: ["jev-1.13", "jev-latest"],
-			local: false,
-		};
 		await run(
 			new ScriptedUi({
-				select: [layerOptionLabel("global"), "Decision models (1)...", "Add decision model...", catalogProvider.label, "jev-latest", "(no API key)", "Back", "Done"],
-				input: ["dm4", ""],
+				// Wizard order: provider, model id (from the catalog list), apiKey
+				// action "(no API key)", baseUrl (Enter = keep pi's catalog), name LAST.
+				select: [layerOptionLabel("global"), "Decision models (1)...", "Add decision model...", CATALOG_PROVIDER.label, "jev-1.13", "(no API key)", "Back", "Done"],
+				input: ["", "dm4"],
 			}),
 			undefined,
-			{ classifierProviders: [catalogProvider] },
+			{ classifierProviders: [CATALOG_PROVIDER] },
 		);
 		const entry = readLayerConfig(load()).decisionModels?.find((d) => d.name === "dm4");
-		expect(entry?.id).toBe("jev-latest");
-		expect(entry?.baseUrl).toBe("https://api.typesafe.ai/v1/");
+		expect(entry?.id).toBe("jev-1.13");
+		expect(entry?.baseUrl).toBeUndefined();
 	});
 });
 

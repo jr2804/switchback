@@ -398,6 +398,30 @@ function parseFileConfig(value: unknown, path: string): SwitchbackFileConfig {
 		throw new ConfigError("debug must be a boolean", path);
 	}
 	const decisionModels = parseDecisionModels(value["decisionModels"], path);
+	// An orphan `decisionModels` entry is a silent foot-gun: the router would
+	// have no classifier for every model whose `jev` references the orphan and
+	// would emit blind-cycle traffic (the live crash store showed exactly this
+	// on 2026-10-06). Reject only when NONE of the entries are referenced -
+	// partial references are fine: at least one classifier still resolves and
+	// the user can keep the others around to wire up later.
+	if (decisionModels.length > 0) {
+		const referenced = new Set<string>();
+		for (const model of parsed) {
+			if (model.jev !== undefined && "decisionModel" in model.jev) {
+				referenced.add(model.jev.decisionModel);
+			}
+		}
+		const orphans = decisionModels.filter((d) => !referenced.has(d.name));
+		if (orphans.length === decisionModels.length) {
+			throw new ConfigError(
+				`decisionModels entries are not referenced by any model.jev.decisionModel: ` +
+					`${orphans.map((d) => `"${d.name}"`).join(", ")}. ` +
+					`A decisionModels entry must be referenced by at least one model.jev.decisionModel, otherwise the router sees no classifier and reports it as "not configured" - ` +
+					`reference one from a model ("${parsed[0]?.id ?? "<first model>"}".jev.decisionModel: <name>) or remove the decisionModels block.`,
+				path,
+			);
+		}
+	}
 	return {
 		models: parsed,
 		...(decisionModels.length > 0 ? { decisionModels } : {}),

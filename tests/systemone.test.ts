@@ -15,7 +15,7 @@ const MODEL: ClassifierModel<ClassifierApi> = {
 	id: "tev1:0.8b",
 	name: "tev1:0.8b",
 	api: "typesafe-system-one",
-	provider: "ollama-systemone",
+	provider: "ollama",
 	baseUrl: "http://localhost:11434/v1",
 	input: ["text"],
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

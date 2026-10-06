@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { DEFAULT_CONFIG, findModelConfig, loadConfig, ConfigError, SWITCHBACK_PROVIDER, SWITCHBACK_VIRTUAL_ID } from "../src/config.ts";
-import { registerLocalClassifier } from "../src/local-classifier.ts";
+import { groupLocalEndpoints, registerLocalClassifier } from "../src/local-classifier.ts";
 
 let originalCwd: string;
 let tmpDir: string;
@@ -199,6 +199,43 @@ describe("loadConfig - bare ids and decisionModel references", () => {
       decisionModel: does-not-exist`);
 		expect(() => loadConfig()).toThrow(/decisionModel "does-not-exist"/);
 	});
+
+	it("rejects decisionModels when none of them are referenced", () => {
+		writeWith(
+			`- id: auto
+    name: Main
+    fallbacks: ["zai/glm-5.3"]`,
+			`decisionModels:
+  - name: main
+    provider: typesafe
+    id: jev-latest
+  - name: backup
+    provider: typesafe
+    id: jev-1.13
+`,
+		);
+		expect(() => loadConfig()).toThrow(/decisionModels entries are not referenced/);
+	});
+
+	it("accepts a partial reference (one referenced, others unused)", () => {
+		writeWith(
+			`- id: auto
+    name: Main
+    fallbacks: ["zai/glm-5.3"]
+    jev:
+      decisionModel: main`,
+			`decisionModels:
+  - name: main
+    provider: typesafe
+    id: jev-latest
+  - name: backup
+    provider: typesafe
+    id: jev-1.13
+`,
+		);
+		const { config } = loadConfig();
+		expect(config.models[0]?.jev).toEqual({ provider: "typesafe", id: "jev-latest" });
+	});
 });
 
 describe("loadConfig - debug flag", () => {
@@ -239,11 +276,11 @@ describe("loadConfig - classifier endpoint fields (jev.baseUrl)", () => {
 
 	it("parses a direct endpoint (baseUrl + api + apiKey)", () => {
 		writeConfig(
-			"      provider: ollama-systemone\n      id: tev1:0.8b\n      baseUrl: http://localhost:11434/v1\n      api: typesafe-system-one\n      apiKey: ollama\n",
+			"      provider: ollama\n      id: tev1:0.8b\n      baseUrl: http://localhost:11434/v1\n      api: typesafe-system-one\n      apiKey: ollama\n",
 		);
 		const { config } = loadConfig();
 		expect(config.models[0]?.jev).toEqual({
-			provider: "ollama-systemone",
+			provider: "ollama",
 			id: "tev1:0.8b",
 			baseUrl: "http://localhost:11434/v1",
 			api: "typesafe-system-one",
@@ -255,6 +292,18 @@ describe("loadConfig - classifier endpoint fields (jev.baseUrl)", () => {
 		writeConfig("      provider: typesafe\n      id: jev-latest\n");
 		const { config } = loadConfig();
 		expect(config.models[0]?.jev).toEqual({ provider: "typesafe", id: "jev-latest" });
+	});
+
+	it("accepts any provider id for a direct endpoint (no reserved list in the loader)", () => {
+		// The loader names no providers: whether an id collides with one pi already
+		// serves is registry knowledge, and the wizard refuses that case at the
+		// point where the registry is available (see classifier-catalog.ts).
+		writeConfig(
+			"      provider: anything\n      id: tev1:0.8b\n      baseUrl: http://localhost:11434/v1\n      api: typesafe-system-one\n      apiKey: local\n",
+		);
+		const jev = findModelConfig(loadConfig().config, "switchback/auto")?.jev;
+		expect(jev?.provider).toBe("anything");
+		expect(jev?.baseUrl).toBe("http://localhost:11434/v1");
 	});
 
 	it("rejects an unsupported api", () => {
@@ -278,37 +327,80 @@ describe("loadConfig - classifier endpoint fields (jev.baseUrl)", () => {
 	});
 });
 
+describe("groupLocalEndpoints", () => {
+	it("groups every model that shares an endpoint into one registration", () => {
+		// pi replaces a provider's model list wholesale when an extension supplies
+		// one, so every classifier on the endpoint has to travel in a single call -
+		// a model left out is invisible to `findOfType` and classifies as
+		// `unresolvable`.
+		const groups = groupLocalEndpoints([
+			{ provider: "ollama", id: "tinyjev", baseUrl: "http://localhost:11434/v1" },
+			{ provider: "ollama", id: "tev1:0.8b", baseUrl: "http://localhost:11434/v1", apiKey: "token" },
+		]);
+		expect(groups).toHaveLength(1);
+		expect(groups[0]?.provider).toBe("ollama");
+		expect(groups[0]?.models.map((m) => m.id)).toEqual(["tinyjev", "tev1:0.8b"]);
+		// The first non-empty key on the endpoint wins; the transport needs one.
+		expect(groups[0]?.apiKey).toBe("token");
+	});
+
+	it("falls back to the provider id as the bearer token", () => {
+		const [group] = groupLocalEndpoints([
+			{ provider: "ollama", id: "tinyjev", baseUrl: "http://localhost:11434/v1" },
+		]);
+		expect(group?.apiKey).toBe("ollama");
+	});
+
+	it("keeps distinct endpoints apart and de-duplicates repeated model ids", () => {
+		const groups = groupLocalEndpoints([
+			{ provider: "ollama", id: "a", baseUrl: "http://localhost:11434/v1" },
+			{ provider: "ollama", id: "a", baseUrl: "http://localhost:11434/v1" },
+			{ provider: "ollama", id: "b", baseUrl: "http://other:11434/v1" },
+		]);
+		expect(groups.map((g) => `${g.provider}|${g.baseUrl}`)).toEqual([
+			"ollama|http://localhost:11434/v1",
+			"ollama|http://other:11434/v1",
+		]);
+		expect(groups[0]?.models.map((m) => m.id)).toEqual(["a"]);
+	});
+
+	it("skips catalog classifiers: a jev without a baseUrl is not switchback's to register", () => {
+		expect(groupLocalEndpoints([
+			{ provider: "typesafe", id: "jev-latest" },
+			{ provider: "ollama", id: "tev1:0.8b", baseUrl: "http://localhost:11434/v1" },
+		])).toHaveLength(1);
+		expect(groupLocalEndpoints([])).toEqual([]);
+	});
+});
+
 describe("registerLocalClassifier", () => {
 	interface Captured {
 		id: string;
-		cfg: { models?: { type?: string; id: string }[]; classifiers?: Record<string, unknown> };
+		cfg: { baseUrl?: string; apiKey?: string; models?: { type?: string; id: string }[]; classifiers?: Record<string, unknown> };
 	}
 
-	it("registers exactly one classifier model and the transport for a direct endpoint", () => {
+	function capture() {
 		const captured: Captured[] = [];
-		registerLocalClassifier(
-			{ registerProvider: (id: string, cfg: never) => captured.push({ id, cfg }) } as never,
-			{ provider: "ollama-systemone", id: "tev1:0.8b", baseUrl: "http://localhost:11434/v1", apiKey: "ollama" },
-		);
+		return { captured, pi: { registerProvider: (id: string, cfg: never) => captured.push({ id, cfg }) } as never };
+	}
+
+	it("registers every model on the endpoint plus the transport in one call", () => {
+		const { captured, pi } = capture();
+		registerLocalClassifier(pi, {
+			provider: "ollama",
+			baseUrl: "http://localhost:11434/v1",
+			apiKey: "ollama",
+			models: [
+				{ provider: "ollama", id: "tinyjev", baseUrl: "http://localhost:11434/v1" },
+				{ provider: "ollama", id: "tev1:0.8b", baseUrl: "http://localhost:11434/v1" },
+			],
+		});
 		expect(captured).toHaveLength(1);
-		expect(captured[0]?.id).toBe("ollama-systemone");
-		expect(captured[0]?.cfg.models).toHaveLength(1);
-		expect(captured[0]?.cfg.models?.[0]?.type).toBe("classifier");
+		expect(captured[0]?.id).toBe("ollama");
+		expect(captured[0]?.cfg.baseUrl).toBe("http://localhost:11434/v1");
+		expect(captured[0]?.cfg.apiKey).toBe("ollama");
+		expect(captured[0]?.cfg.models?.map((m) => m.id)).toEqual(["tinyjev", "tev1:0.8b"]);
+		expect(captured[0]?.cfg.models?.every((m) => m.type === "classifier")).toBe(true);
 		expect(Object.keys(captured[0]?.cfg.classifiers ?? {})).toEqual(["typesafe-system-one"]);
-	});
-
-	it("is a no-op without baseUrl (catalog classifier path)", () => {
-		let called = 0;
-		registerLocalClassifier(
-			{ registerProvider: () => { called += 1; } } as never,
-			{ provider: "typesafe", id: "jev-latest" },
-		);
-		expect(called).toBe(0);
-	});
-
-	it("is a no-op when there is no classifier at all", () => {
-		let called = 0;
-		registerLocalClassifier({ registerProvider: () => { called += 1; } } as never, undefined);
-		expect(called).toBe(0);
 	});
 });

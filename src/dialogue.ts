@@ -54,7 +54,8 @@ import {
 	type LoadedLayer,
 } from "./config-editor.ts";
 import { LOCAL_CLASSIFIER_APIS } from "./config.ts";
-import { classifierBaseUrlNote, type ClassifierProviderOption } from "./classifier-catalog.ts";
+import { classifierBaseUrlNote, defaultDecisionModelName, directEndpointWouldClobber, type ClassifierProviderOption } from "./classifier-catalog.ts";
+import { discoverOllamaModels } from "./classifier-discovery.ts";
 import { formatProbeReport, type ProbeResult } from "./classifier-probe.ts";
 import { createSecretStore, type SecretStore } from "./secrets.ts";
 import type { DecisionModelEntry, JevConfig, JevRef, SwitchbackConfig, SwitchbackFileConfig } from "./types.ts";
@@ -271,6 +272,33 @@ async function promptRequired(ctx: DialogueContext, title: string, placeholder: 
 		const trimmed = value.trim();
 		if (trimmed.length > 0) return trimmed;
 		ctx.ui.notify("a value is required (Esc leaves the step)", "warning");
+	}
+}
+
+/**
+ * Name-last step of the decision-model wizard: the input arrives prefilled with
+ * a derived default, empty input keeps the default, Esc aborts. A name already
+ * in use is rejected with a warning and the prompt loops.
+ */
+async function promptNameLast(
+	ctx: DialogueContext,
+	loaded: LoadedLayer,
+	suggestedName: string,
+	knownNames: readonly string[],
+): Promise<string | undefined> {
+	for (;;) {
+		const value = await ctx.ui.input(
+			screenTitle(loaded, `new decision model - name (Enter keeps "${suggestedName}")`),
+			suggestedName,
+		);
+		if (value === undefined) return undefined;
+		const trimmed = value.trim();
+		const name = trimmed.length === 0 ? suggestedName : trimmed;
+		if (knownNames.includes(name)) {
+			ctx.ui.notify(`a decision model named "${name}" already exists`, "warning");
+			continue;
+		}
+		return name;
 	}
 }
 
@@ -649,20 +677,89 @@ async function decisionModelEntryMenu(
 	}
 }
 
-/** Collect a brand-new decision model entry (name first, then classifier fields). */
+/** Collect a brand-new decision model entry. The order is provider → baseUrl →
+ * model id → apiKey → name (last, prefilled). The user can Tab + Enter through
+ * the whole flow when accepting the defaults; the only prompt that requires a
+ * real decision is the apiKey action (new secret, keep existing, or none).
+ */
 async function decisionModelWizard(ctx: DialogueContext, session: DialogueSession): Promise<DecisionModelInput | undefined> {
 	// Tolerant read: on a fresh layer there is no config yet and no name to clash with;
 	// addDecisionModel + the save gate still own the uniqueness rule.
 	const config = tryReadConfig(session.loaded);
-	const name = await promptRequired(ctx, screenTitle(session.loaded, "new decision model - name"), "e.g. local-jev");
-	if (name === undefined) return undefined;
-	if ((config?.decisionModels ?? []).some((d) => d.name === name)) {
-		ctx.ui.notify(`a decision model named "${name}" already exists`, "warning");
-		return undefined;
+	const knownNames = (config?.decisionModels ?? []).map((d) => d.name);
+
+	// 1. Provider
+	const option = await chooseClassifierProvider(ctx, session, undefined);
+	if (option === undefined) return undefined;
+
+	// 2. baseUrl (always prefilled for both catalog and local; "-" clears it)
+	const baseUrl = await chooseBaseUrl(ctx, session, option, undefined);
+	if (baseUrl === undefined) return undefined;
+
+	// 3. Model id (from the provider's catalog classifiers, or asked of the endpoint itself)
+	const id = await chooseClassifierModel(ctx, session, option, undefined, baseUrl ?? option.baseUrl);
+	if (id === undefined) return undefined;
+
+	// apiKey / api / baseUrl are loader-coupled: apiKey and api both require a
+	// baseUrl, so a cleared baseUrl means none of those fields apply. Skip the
+	// apiKey step entirely when the user typed "-".
+	let apiKeyResult: ApiKeyAction = { kind: "none" };
+	if (baseUrl !== null) {
+		// 4. apiKey action: collect the user's choice (none / pick existing / new
+		//    secret value) but defer the secret-store write until we know the
+		//    final decision-model name - the store entry is derived from the
+		//    name so a single secret can be re-keyed under the new name.
+		apiKeyResult = await apiKeyAction(ctx, session, undefined, option.provider);
+		if (apiKeyResult.kind === "cancel") return undefined;
 	}
-	const fields = await collectJevFields(ctx, session, undefined, name);
-	if (fields === undefined) return undefined;
-	const input: DecisionModelInput = { name, provider: fields.provider, id: fields.id, ...(fields.rest ?? {}) };
+
+	// 5. Name (LAST, prefilled). Only the catalog providers need an apiKey at
+	//    all - a local Ollama / llama-server ignores it; a local server also
+	//    needs one as a non-empty transport requirement, but the wizard sets
+	//    it for them when the user picks "no api key" or skips the step.
+	const rest: Partial<DecisionModelInput> = {};
+	if (baseUrl !== null && baseUrl !== undefined) rest.baseUrl = baseUrl;
+	if (baseUrl !== null && baseUrl !== undefined) {
+		const api = option.api ?? LOCAL_CLASSIFIER_APIS[0];
+		if (api !== undefined) rest.api = api;
+	}
+	if (apiKeyResult.kind === "secret") {
+		// Defer the secret-store commit until the name is known so the store
+		// entry follows the decision-model name (`secret:<name>-key`); we pass
+		// apiKeyResult.value into the new logic further below.
+	}
+	// For local endpoints the transport defaults to a non-empty bearer token
+	// (`local-classifier.ts` falls back to the provider id), so an apiKey in
+	// the config is optional. For catalog providers the user must either
+	// supply a secret or accept "no api key" - the wizard does not write a
+	// literal token to disk in either path.
+
+	const suggestedName = defaultDecisionModelName(option.provider, id);
+	const name = await promptNameLast(
+		ctx,
+		session.loaded,
+		suggestedName,
+		knownNames,
+	);
+	if (name === undefined) return undefined;
+
+	// Commit the apiKey value (if any) under the now-known name, then build the
+// DecisionModelInput. Deferring the write keeps the secret name aligned with
+// the decision-model name regardless of whether the user kept the suggested
+// default or typed their own.
+	let finalRest: Partial<DecisionModelInput> = rest;
+	if (apiKeyResult.kind === "secret") {
+		const secretName = secretNameFor(name);
+		try {
+			session.secrets.set(secretName, apiKeyResult.value);
+		} catch (error) {
+			ctx.ui.notify(`secret store refused the value: ${errorMessage(error)}`, "error");
+			return undefined;
+		}
+		finalRest = { ...rest, apiKeySecretName: secretName };
+	}
+
+	const input: DecisionModelInput = { name, provider: option.provider, id, ...finalRest };
 	try {
 		addDecisionModel(session.loaded, input);
 	} catch (error) {
@@ -671,7 +768,7 @@ async function decisionModelWizard(ctx: DialogueContext, session: DialogueSessio
 	}
 	if (await saveOrRevert(ctx, session)) {
 		ctx.ui.notify(`decision model "${name}" added`, "info");
-		await offerClassifierTest(ctx, session, jevFromInput(fields));
+		await offerClassifierTest(ctx, session, jevFromInput({ provider: option.provider, id, rest: finalRest }));
 		return input;
 	}
 	return undefined;
@@ -690,11 +787,25 @@ function jevFromInput(fields: { provider: string; id: string; rest?: Partial<Dec
 }
 
 /**
- * Choose the classifier provider: the endpoints pi knows about (each with its
- * display name and, where it has one, its base URL) plus the local SystemOne
- * servers, with "Other" for an id that is not in the catalog. The provider
- * already in use is offered first so Enter keeps it. Falls back to a text prompt
- * when no catalog was supplied (non-TUI contexts, tests).
+ * Choose the classifier provider.
+ *
+ * The picker shows two sections, separated by header lines that explain what
+ * each side means:
+ *
+ *   - Catalog providers (resolved through pi) - TypeSafe, OpenRouter, ...
+ *     These speak `typesafe-system-one` over HTTPS; the wizard sets the
+ *     provider's default baseUrl automatically.
+ *   - Local SystemOne endpoints (you run the server) - Ollama, llama.cpp.
+ *     The wizard sets the `/v1/systemone` baseUrl from OLLAMA_HOST /
+ *     LLAMA_SERVER_URL or a well-known default; switchback registers the
+ *     classifier itself.
+ *
+ * "Other (type a provider id)..." is the escape hatch for a custom provider
+ * not in either section. The provider already in use, if any, is offered first
+ * so Enter keeps it.
+ *
+ * Falls back to a text prompt when no catalog was supplied (non-TUI contexts,
+ * tests).
  */
 async function chooseClassifierProvider(
 	ctx: DialogueContext,
@@ -705,17 +816,14 @@ async function chooseClassifierProvider(
 	if (options.length === 0) {
 		const provider = await promptRequired(
 			ctx,
-			screenTitle(session.loaded, "classifier provider (e.g. typesafe, ollama)"),
+			screenTitle(session.loaded, "classifier provider"),
 			current ?? "",
 		);
 		if (provider === undefined) return undefined;
-		return { provider, label: provider, models: [], local: false };
+		return declaredEndpoint(provider);
 	}
-	const ordered =
-		current === undefined
-			? [...options]
-			: [...options].sort((a, b) => (a.provider === current ? -1 : b.provider === current ? 1 : 0));
-	const labels = ordered.map((option) => option.label);
+	// The provider already in use is offered first so Enter keeps it.
+	const ordered = [...options].sort((a, b) => (a.provider === current ? -1 : b.provider === current ? 1 : 0));
 	const otherOption = "Other (type a provider id)...";
 	const backOption = "Back";
 	const choice = await ctx.ui.select(
@@ -723,24 +831,42 @@ async function chooseClassifierProvider(
 			session.loaded,
 			`classifier provider${current === undefined ? "" : ` (current: ${current})`}`,
 		),
-		[...labels, otherOption, backOption],
+		[...ordered.map((option) => option.label), otherOption, backOption],
 	);
 	if (choice === undefined || choice === backOption) return undefined;
 	if (choice === otherOption) {
 		const provider = await promptRequired(ctx, screenTitle(session.loaded, "classifier provider id"), current ?? "");
 		if (provider === undefined) return undefined;
-		return { provider, label: provider, models: [], local: false };
+		return declaredEndpoint(provider);
 	}
-	const index = labels.indexOf(choice);
+	const index = ordered.findIndex((o) => o.label === choice);
 	return index >= 0 ? ordered[index] : undefined;
 }
 
-/** Choose the classifier model id from the provider's known classifiers, or type one. */
+/**
+ * An endpoint the user names themselves: pi has no catalog entry for it, so
+ * switchback registers the classifier from the config (`baseUrl` present). No
+ * base URL or wire API is invented here - the wizard asks for both.
+ */
+function declaredEndpoint(provider: string): ClassifierProviderOption {
+	return { provider, label: provider, displayName: provider, models: [], local: true, chatModels: 0 };
+}
+
+/** Choose the classifier model id from the provider's known classifiers, or type one.
+ *
+ * The picker offers what pi's catalog knows for this provider. When the catalog
+ * knows nothing and the endpoint is reachable, the wizard asks the server
+ * itself (Ollama's `/api/tags`, filtered by the `decision` capability) so a
+ * freshly pointed endpoint does not have to wait for a routing failure to reveal
+ * a wrong model id. Provider-agnostic on purpose: the trigger is "the catalog
+ * cannot help here", not a hardcoded provider name.
+ */
 async function chooseClassifierModel(
 	ctx: DialogueContext,
 	session: DialogueSession,
 	option: ClassifierProviderOption,
 	current: string | undefined,
+	baseUrl: string | undefined,
 ): Promise<string | undefined> {
 	const prompt = (): Promise<string | undefined> =>
 		promptRequired(
@@ -748,12 +874,23 @@ async function chooseClassifierModel(
 			screenTitle(session.loaded, `classifier model id for ${option.provider}`),
 			current ?? "",
 		);
-	if (option.models.length === 0) return prompt();
+
+	let liveModels: readonly string[] = option.models;
+	if (liveModels.length === 0 && baseUrl !== undefined) {
+		const { models, error } = await discoverOllamaModels({ baseUrl });
+		if (error !== undefined) {
+			ctx.ui.notify(`no model list from ${baseUrl} (${error}); type the model id`, "warning");
+		}
+		const decisionOnly = models.filter((m) => m.decisionCapable).map((m) => m.id);
+		if (decisionOnly.length > 0) liveModels = decisionOnly;
+	}
+
+	if (liveModels.length === 0) return prompt();
 	const otherOption = "Other (type a model id)...";
 	const backOption = "Back";
 	const choice = await ctx.ui.select(
 		screenTitle(session.loaded, `classifier model for ${option.provider}`),
-		[...option.models, otherOption, backOption],
+		[...liveModels, otherOption, backOption],
 	);
 	if (choice === undefined || choice === backOption) return undefined;
 	if (choice === otherOption) return prompt();
@@ -761,11 +898,19 @@ async function chooseClassifierModel(
 }
 
 /**
- * The base URL for the chosen endpoint. A direct endpoint's default comes from
- * pi's provider definition or from the local endpoint's environment variable, so
- * the field arrives prefilled: Enter keeps the shown value (the existing one when
- * editing), "-" removes the direct endpoint entirely (back to the catalog
- * classifier), anything else is taken verbatim.
+ * The base URL for the chosen endpoint.
+ *
+ * Two shapes, because the config means different things by the field:
+ *
+ *  - An endpoint the user declared (pi has no catalog entry): the base URL is
+ *    required, since switchback registers the classifier from it.
+ *  - A provider from pi's catalog: pi already resolves the endpoint, so the
+ *    config normally carries **no** `baseUrl` at all and `Enter` keeps that.
+ *    Typing one is an explicit override - and when pi owns chat models under
+ *    that provider id, writing a direct endpoint would make pi replace them
+ *    (its `applyExtension`), so the wizard refuses and says so.
+ *
+ * `"-"` always means "no direct endpoint".
  */
 async function chooseBaseUrl(
 	ctx: DialogueContext,
@@ -773,23 +918,41 @@ async function chooseBaseUrl(
 	option: ClassifierProviderOption,
 	current: string | undefined,
 ): Promise<string | null | undefined> {
-	if (option.baseUrl === undefined) {
-		// A catalog provider with no endpoint of its own: keep the optional field.
-		return promptOptional(ctx, "baseUrl - direct endpoint (enables a local SystemOne server)", current);
+	if (option.local) {
+		const value = await promptOptional(
+			ctx,
+			screenTitle(
+				session.loaded,
+				`baseUrl for ${option.provider} — the SystemOne endpoint, e.g. http://host:port/v1 (required)`,
+			),
+			current,
+		);
+		if (value === undefined || value === null) return undefined;
+		const trimmed = value.trim();
+		// Required: an empty answer for a declared endpoint leaves nothing to register.
+		return trimmed.length === 0 ? undefined : trimmed;
 	}
-	const suggested = current ?? option.baseUrl;
 	const note = classifierBaseUrlNote(option);
 	const value = await ctx.ui.input(
 		screenTitle(
 			session.loaded,
-			`baseUrl for ${option.provider} — Enter keeps ${suggested} (${note}), "-" removes the direct endpoint`,
+			`baseUrl for ${option.provider} — Enter keeps pi's catalog (${note}), "-" clears, any URL overrides`,
 		),
-		suggested,
+		current ?? "",
 	);
 	if (value === undefined) return undefined;
 	const trimmed = value.trim();
-	if (trimmed === "-") return null;
-	return trimmed.length === 0 ? suggested : trimmed;
+	if (trimmed === "-" || trimmed.length === 0) return null;
+	if (directEndpointWouldClobber(option)) {
+		ctx.ui.notify(
+			`pi already serves ${option.chatModels} chat model(s) under "${option.provider}". ` +
+				"A direct endpoint here would replace them with the classifier alone - " +
+				`pick a distinct provider id ("${option.provider}-<suffix>") instead.`,
+			"warning",
+		);
+		return undefined;
+	}
+	return trimmed;
 }
 
 /**
@@ -828,10 +991,10 @@ async function collectJevFields(
 ): Promise<{ provider: string; id: string; rest?: Partial<DecisionModelInput> } | undefined> {
 	const option = await chooseClassifierProvider(ctx, session, existing?.provider);
 	if (option === undefined) return undefined;
-	const id = await chooseClassifierModel(ctx, session, option, existing?.id);
-	if (id === undefined) return undefined;
 	const baseUrl = await chooseBaseUrl(ctx, session, option, existing?.baseUrl);
 	if (baseUrl === undefined) return undefined;
+	const id = await chooseClassifierModel(ctx, session, option, existing?.id, baseUrl ?? option.baseUrl);
+	if (id === undefined) return undefined;
 	if (baseUrl === null) return { provider: option.provider, id };
 	// `api` is aligned with the endpoint instead of asked: a direct endpoint speaks
 	// exactly one wire API (switchback's own SystemOne transport), so the old
@@ -840,8 +1003,34 @@ async function collectJevFields(
 	const rest: Partial<DecisionModelInput> = { baseUrl, ...(api !== undefined ? { api } : {}) };
 	const key = await apiKeyAction(ctx, session, existing?.apiKey, hint ?? option.provider);
 	if (key.kind === "cancel") return undefined;
-	if (key.kind === "secret") rest.apiKeySecretName = key.name;
+	if (key.kind === "secret") {
+		const committedName = commitSecret(ctx, session, hint ?? option.provider, key.value);
+		if (committedName === undefined) return undefined;
+		rest.apiKeySecretName = committedName;
+	}
 	return { provider: option.provider, id, rest };
+}
+
+/**
+ * Commit a secret value to the store under a name derived from `hint`. Returns
+ * the chosen name on success, undefined on failure (the wizard treats undefined
+ * as user cancellation). The hint should be the decision-model name when one
+ * exists, or the provider id for inline jev.
+ */
+function commitSecret(
+	ctx: DialogueContext,
+	session: DialogueSession,
+	hint: string,
+	value: string,
+): string | undefined {
+	const name = secretNameFor(hint);
+	try {
+		session.secrets.set(name, value);
+		return name;
+	} catch (error) {
+		ctx.ui.notify(`secret store refused the value: ${errorMessage(error)}`, "error");
+		return undefined;
+	}
 }
 
 /** Patch fields for an EXISTING decision model. Undefined = user backed out. */
@@ -854,11 +1043,11 @@ async function collectJevPatch(
 	if (option === undefined) return undefined;
 	const patch: DecisionModelPatch = {};
 	if (option.provider !== current.provider) patch.provider = option.provider;
-	const id = await chooseClassifierModel(ctx, session, option, current.id);
-	if (id === undefined) return undefined;
-	if (id !== current.id) patch.id = id;
 	const baseUrl = await chooseBaseUrl(ctx, session, option, current.baseUrl);
 	if (baseUrl === undefined) return undefined;
+	const id = await chooseClassifierModel(ctx, session, option, current.id, baseUrl ?? option.baseUrl);
+	if (id === undefined) return undefined;
+	if (id !== current.id) patch.id = id;
 	if (baseUrl === null) {
 		// updateDecisionModel clears api/apiKey with baseUrl (loader rule: they require it).
 		patch.baseUrl = null;
@@ -873,7 +1062,11 @@ async function collectJevPatch(
 	const key = await apiKeyAction(ctx, session, current.apiKey, current.name);
 	if (key.kind === "cancel") return undefined;
 	if (key.kind === "none") patch.apiKeySecretName = null;
-	else if (key.kind === "secret") patch.apiKeySecretName = key.name;
+	else if (key.kind === "secret") {
+		const committedName = commitSecret(ctx, session, current.name, key.value);
+		if (committedName === undefined) return undefined;
+		patch.apiKeySecretName = committedName;
+	}
 	return patch;
 }
 
@@ -911,7 +1104,8 @@ function resolveSecretRef(jev: JevConfig, session: DialogueSession): JevConfig {
 type ApiKeyAction =
 	| { kind: "keep" }
 	| { kind: "none" }
-	| { kind: "secret"; name: string }
+	/** Value picked up; the wizard commits it under a name it derives later. */
+	| { kind: "secret"; value: string }
 	| { kind: "cancel" };
 
 /**
@@ -948,23 +1142,16 @@ async function apiKeyAction(
 			return { kind: "cancel" };
 		}
 		const name = await ctx.ui.select(screenTitle(session.loaded, "reference which stored secret?"), [...names]);
-		return name === undefined ? { kind: "cancel" } : { kind: "secret", name };
+		return name === undefined ? { kind: "cancel" } : { kind: "secret", value: name };
 	}
 	if (choice !== newOption) return { kind: "cancel" }; // an option this flow does not know: back out
-	const name = secretNameFor(hint);
 	const value = await promptRequired(
 		ctx,
-		screenTitle(session.loaded, `API key for ${hint} - stored encrypted as secret:${name}, not shown again`),
+		screenTitle(session.loaded, `API key for ${hint} - the store name is derived from the decision model, not shown again`),
 		"secret value",
 	);
 	if (value === undefined) return { kind: "cancel" };
-	try {
-		session.secrets.set(name, value);
-	} catch (error) {
-		ctx.ui.notify(`secret store refused the value: ${errorMessage(error)}`, "error");
-		return { kind: "cancel" };
-	}
-	return { kind: "secret", name };
+	return { kind: "secret", value };
 }
 
 /** Wizard: create a new virtual model entry (id, name, at least one fallback). */

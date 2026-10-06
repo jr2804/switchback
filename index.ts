@@ -33,7 +33,7 @@ import { buildRoute, decide, ConfigInvalidError, type RouterRegistry } from "./s
 import { buildClassifierProviders } from "./src/classifier-catalog.ts";
 import { buildProbeContext, probeLocalClassifier, summarizeProbe, type ProbeResult } from "./src/classifier-probe.ts";
 import { createModelPicker } from "./src/model-picker.ts";
-import { registerLocalClassifier } from "./src/local-classifier.ts";
+import { groupLocalEndpoints, registerLocalClassifier } from "./src/local-classifier.ts";
 import { SWITCHBACK_THINKING_LEVELS } from "./src/thinking.ts";
 import { getPinnedModel, isBlocked, readBlockedMap, readPinMap, setPinnedModel } from "./src/state.ts";
 import { annotateCrash, isValidAnnotationClass, readCrashMap, shortHash } from "./src/crashes.ts";
@@ -53,16 +53,17 @@ export default function (pi: ExtensionAPI) {
 
 	// A classifier that names its own endpoint (jev.baseUrl) is registered here, so
 	// switchback can classify through a local System One server (e.g. Ollama
-	// v0.35+) without a pi provider for it. No-op for catalog classifiers. Registered
-	// once per distinct endpoint, since several virtual models may share one.
-	const registeredEndpoints = new Set<string>();
-	for (const modelConfig of modelConfigs) {
-		const jev = modelConfig.jev;
-		if (jev?.baseUrl === undefined) continue;
-		const key = `${jev.provider}|${jev.baseUrl}`;
-		if (registeredEndpoints.has(key)) continue;
-		registeredEndpoints.add(key);
-		registerLocalClassifier(pi, jev);
+	// v0.35+) without a pi provider for it. No-op for catalog classifiers. Every
+	// direct endpoint is registered **once**, carrying all the classifier models
+	// that share it - pi replaces a provider's model list wholesale when an
+	// extension supplies one, and a model left out of that list is invisible to
+	// `findOfType`. Decision models count even when no virtual model references
+	// them, so an endpoint stays registered while a model list is being edited.
+	for (const endpoint of groupLocalEndpoints([
+		...modelConfigs.flatMap((modelConfig) => (modelConfig.jev === undefined ? [] : [modelConfig.jev])),
+		...(initial.config.decisionModels ?? []),
+	])) {
+		registerLocalClassifier(pi, endpoint);
 	}
 
 	// Last successfully loaded config; reloaded on every route so edits to
@@ -380,20 +381,25 @@ function pickModelInteractive(
  * Classifier endpoints for the decision-model wizard: every provider pi reports
  * a classifier model for (with its own display name and base URL), plus the local
  * SystemOne servers with their environment-derived defaults. switchback keeps no
- * provider table of its own beyond those two local endpoints.
+ * provider table of its own.
  */
 function classifierProvidersFrom(registry: ExtensionContext["modelRegistry"]) {
-	return buildClassifierProviders({
-		providers: registry.getRegisteredProviderIds().map((id) => {
+	return buildClassifierProviders(
+		registry.getRegisteredProviderIds().map((id) => {
 			const provider = registry.getProvider(id);
 			return {
 				id,
 				name: registry.getProviderDisplayName(id) || provider?.name || id,
 				...(provider?.baseUrl !== undefined ? { baseUrl: provider.baseUrl } : {}),
+				classifiers: registry
+					.getModelsOfType("classifier", id)
+					.map((model) => ({ id: model.id, api: model.api })),
+				// Chat models pi already owns under this id: registering a direct
+				// endpoint here would replace them (pi's `applyExtension`).
+				chatModels: registry.getModelsOfType("chat", id).length,
 			};
 		}),
-		classifierIds: (provider) => registry.getModelsOfType("classifier", provider).map((model) => model.id),
-	});
+	);
 }
 
 /**

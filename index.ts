@@ -29,14 +29,14 @@ import { resolveFallbacks, type AvailabilityRegistry } from "./src/availability.
 import { SWITCHBACK_PROVIDER, findModelConfig, loadConfig } from "./src/config.ts";
 import { runDialogue } from "./src/dialogue.ts";
 import { createSecretStore } from "./src/secrets.ts";
-import { buildRoute, decide, ConfigInvalidError, type RouterRegistry } from "./src/routing.ts";
+import { buildRoute, decide, observeUnretriedFailure, ConfigInvalidError, type RouterRegistry } from "./src/routing.ts";
 import { buildClassifierProviders } from "./src/classifier-catalog.ts";
 import { buildProbeContext, probeLocalClassifier, summarizeProbe, type ProbeResult } from "./src/classifier-probe.ts";
 import { createModelPicker } from "./src/model-picker.ts";
 import { groupLocalEndpoints, registerLocalClassifier } from "./src/local-classifier.ts";
 import { SWITCHBACK_THINKING_LEVELS } from "./src/thinking.ts";
 import { getPinnedModel, isBlocked, readBlockedMap, readPinMap, setPinnedModel } from "./src/state.ts";
-import { annotateCrash, isValidAnnotationClass, readCrashMap, shortHash } from "./src/crashes.ts";
+import { annotateCrash, hashSample, isValidAnnotationClass, readCrashMap, shortHash } from "./src/crashes.ts";
 import type { ErrorClass, JevConfig, ModelId, ResolvedSwitchbackConfig, ResolvedSwitchbackFileConfig, SwitchbackState } from "./src/types.ts";
 
 export default function (pi: ExtensionAPI) {
@@ -121,6 +121,66 @@ export default function (pi: ExtensionAPI) {
 				});
 				return buildRoute(ctx.modelRegistry, result.decision, result.thinkingLevel, result.nextState);
 			},
+		});
+
+		// Failures pi will not retry.
+		//
+		// pi only shows a router an error when `isRetryableAssistantError` accepts
+		// its text - a string match against two fixed lists. A provider-limit error
+		// that trips the non-retryable list (a quota message whose text happens to
+		// mention `billing`, for instance) or neither list never reaches `route()`,
+		// so `request.failed` is absent, nothing is classified, the model is never
+		// blocked, and the next turn walks back into it. The retry path above is
+		// untouched: that one *is* pi's retry, re-routed rather than second-guessed.
+		//
+		// This hook is the fallback for the cases pi gave up on. It produces the
+		// verdict and the block with the same code (`observeUnretriedFailure` ->
+		// `assessFailure`), never touches pi's retry machinery, and cannot re-route a
+		// run that has already ended - it only ensures the next routing decision
+		// leaves the dead model behind, which the `user` path already does for a
+		// blocked current model.
+		const handledFailures = new Set<string>();
+		const rememberHandled = (raw: string): void => {
+			handledFailures.add(hashSample(raw));
+			if (handledFailures.size > 64) {
+				// Small, bounded, session-scoped: only needs to cover the retries of
+				// one run, not the whole transcript.
+				const oldest = handledFailures.values().next();
+				if (!oldest.done) handledFailures.delete(oldest.value);
+			}
+		};
+		pi.on("agent_end", (event, ctx) => {
+			void (async () => {
+				for (const message of event.messages) {
+					if (message.role !== "assistant" || message.stopReason !== "error") continue;
+					const errorMessage = message.errorMessage;
+					if (errorMessage === undefined || errorMessage.trim().length === 0) continue;
+					if (handledFailures.has(hashSample(errorMessage))) continue;
+					let config: ResolvedSwitchbackFileConfig;
+					try {
+						config = loadConfig(secrets).config;
+					} catch {
+						// A broken config must not turn a provider error into an
+						// extension throw; the router will report it on the next route.
+						continue;
+					}
+					const modelConfig = findModelConfig(config, fullVirtualId);
+					const now = Date.now();
+					const acted = await observeUnretriedFailure({
+						failedId: `${message.provider}/${message.model}`,
+						errorMessage,
+						stopReason: message.stopReason,
+						jev: modelConfig.jev,
+						registry: ctx.modelRegistry,
+						now,
+						blocked: readBlockedMap(now),
+						...(debug && ctx.hasUI
+							? { notify: (m: string, t: "info" | "warning" | "error") => ctx.ui.notify(m, t) }
+							: {}),
+					});
+					if (acted || handledFailures.size === 0) rememberHandled(errorMessage);
+				}
+			})();
 		});
 	}
 

@@ -56,7 +56,7 @@
 
 import type { ExtensionContext, ModelRoute, ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel } from "@earendil-works/pi-ai";
-import type { Api, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { Api, Model, ModelThinkingLevel, StopReason } from "@earendil-works/pi-ai";
 import { pickNextEffective, resolveFallbacks, type AvailabilityRegistry } from "./availability.ts";
 import { classifyError, PROMPT_VERSION, type NoClassifierReason } from "./classify.ts";
 import { chooseContextCandidate, fitsContext } from "./context-fit.ts";
@@ -64,7 +64,7 @@ import { decideIdleReset } from "./idle.ts";
 import { availableCategories, chooseThinkingLevel, type ThinkingLevelContext, type ThinkingLevelSource } from "./thinking.ts";
 import { blockModel, getPinnedModel, isBlocked, readBlockedMap, unblockModel } from "./state.ts";
 import { recordCrash, type CrashAction } from "./crashes.ts";
-import type { BlockedMap, JevConfig, ModelId, ResolvedSwitchbackConfig, SwitchbackState } from "./types.ts";
+import type { BlockedMap, ClassifiedError, JevConfig, ModelId, ResolvedSwitchbackConfig, SwitchbackState } from "./types.ts";
 
 /** Maximum number of transient retries on the same model before the router moves on. */
 export const MAX_TRANSIENT_RETRIES = 1;
@@ -438,6 +438,134 @@ export async function decide(
 	);
 }
 
+/** What a failed request turned into, once classified. */
+export interface AssessedFailure {
+	/** Provider-qualified id of the model that failed, when it could be identified. */
+	failedId: string | undefined;
+	/** The raw error text the verdict came from. */
+	errorMessage: string;
+	/** The classifier's verdict, or undefined on the no-classifier path. */
+	verdict: ClassifiedError | undefined;
+	/** Why there is no verdict, when the classifier could not produce one. */
+	noClassifierReason: NoClassifierReason | undefined;
+	/** Transient only: a same-model retry is still within budget. */
+	transientRetryLeft: boolean;
+	/** Whether this assessment wrote a block (or cleared one) for the model. */
+	touchedBlocks: boolean;
+}
+
+/**
+ * Turn one failed request into a verdict and a block, without deciding where to
+ * go next.
+ *
+ * This is the single place a failure becomes a classification and mutates the
+ * account-scoped block map, so both callers stay in step:
+ *
+ *  - `decideRetry` calls it and then routes: pi's own retry is re-routed to a
+ *    different model instead of being spent on the one that just failed.
+ *  - The `agent_end` hook calls it for failures pi decided **not** to retry
+ *    (pi's `isRetryableAssistantError` string-matches the message; a quota error
+ *    whose text merely mentions `billing`, for instance, is treated as a
+ *    non-retryable limit and never reaches the router). There is no retry left
+ *    to re-route, so the only useful act is to record the verdict and block the
+ *    model - which is enough, because the next routing decision leaves a blocked
+ *    current model behind and walks forward.
+ *
+ * Blocking policy, unchanged from the retry path: quota / auth / unknown block
+ * with the classifier's reset window, transient does not block (it is retried
+ * and then moved past), overflow clears any block because pi already compacted.
+ */
+export async function assessFailure(opts: {
+	failedId: string | undefined;
+	errorMessage: string;
+	stopReason: StopReason | undefined;
+	jev: JevConfig | undefined;
+	registry: RouterRegistry;
+	now: number;
+	blocked: BlockedMap;
+	transientRetries: number;
+}): Promise<AssessedFailure> {
+	const { failedId, errorMessage, stopReason, jev, registry, now, blocked } = opts;
+	const result = await classifyError(errorMessage, registry, jev, now, stopReason);
+	if (result.kind === "no-classifier") {
+		// The universal cycle: advance, but never fabricate a class and never write a
+		// block - there is nothing to justify one with.
+		return { failedId, errorMessage, verdict: undefined, noClassifierReason: result.reason, transientRetryLeft: false, touchedBlocks: false };
+	}
+	const classified = result.classified;
+	if (classified.class === "overflow") {
+		if (failedId !== undefined) unblockModel(failedId);
+		return { failedId, errorMessage, verdict: classified, noClassifierReason: undefined, transientRetryLeft: false, touchedBlocks: true };
+	}
+	if (classified.class === "transient") {
+		const retries = opts.transientRetries;
+		const left = retries < MAX_TRANSIENT_RETRIES && (failedId === undefined || !isBlockedNow(failedId, blocked, now));
+		return { failedId, errorMessage, verdict: classified, noClassifierReason: undefined, transientRetryLeft: left, touchedBlocks: false };
+	}
+	// Quota / auth / unknown: block with the classifier-supplied reset window.
+	if (failedId !== undefined) blockModel(failedId, classified.resetAtMs, now);
+	return { failedId, errorMessage, verdict: classified, noClassifierReason: undefined, transientRetryLeft: false, touchedBlocks: true };
+}
+
+/**
+ * Assess a failure pi declined to retry.
+ *
+ * pi only hands a router an error when `isRetryableAssistantError` accepts its
+ * text - a string match against two fixed lists. A provider-limit error that
+ * trips the non-retryable list (or neither list) never reaches `route()`, so
+ * switchback sees no `failed` at all: the model stays unblocked and the next
+ * turn walks straight back into it.
+ *
+ * This is the fallback for that case. It reuses `assessFailure`, so the
+ * verdict and the block are produced by exactly the same code as the retry
+ * path; only the routing decision is absent, because there is no retry left to
+ * re-route. Returns true when it acted, so the caller can skip duplicates.
+ */
+export async function observeUnretriedFailure(opts: {
+	failedId: string | undefined;
+	errorMessage: string;
+	stopReason: StopReason | undefined;
+	jev: JevConfig | undefined;
+	registry: AvailabilityRegistry & RouterRegistry;
+	now: number;
+	blocked: BlockedMap;
+	notify?: NotifyFn;
+}): Promise<boolean> {
+	const { failedId, errorMessage, now } = opts;
+	const assessed = await assessFailure({
+		failedId,
+		errorMessage,
+		stopReason: opts.stopReason,
+		jev: opts.jev,
+		registry: opts.registry,
+		now,
+		blocked: opts.blocked,
+		transientRetries: 0,
+	});
+	if (assessed.noClassifierReason !== undefined) {
+		opts.notify?.(
+			`switchback: ${failedId ?? "the active model"} failed with no classifier decision (${assessed.noClassifierReason}) - not retrying`,
+			"warning",
+		);
+		// No verdict means nothing to justify a block with; record the sighting so
+		// the corpus shows the gap, and leave routing untouched.
+		recordDecideCrash(failedId, opts.registry, errorMessage, now, null, assessed.noClassifierReason, "blind-cycle");
+		return false;
+	}
+	const classified = assessed.verdict;
+	const action: CrashAction = assessed.touchedBlocks ? "blocked+advanced" : "stuck-stayed";
+	recordDecideCrash(failedId, opts.registry, errorMessage, now, classified ?? null, undefined, action);
+	if (classified !== undefined && assessed.touchedBlocks) {
+		opts.notify?.(
+			`switchback: ${failedId} failed (${classified.class}, pi will not retry) - blocked${
+				classified.resetAtMs === undefined ? "" : ` until ${new Date(classified.resetAtMs).toISOString()}`
+			}`,
+			"warning",
+		);
+	}
+	return assessed.touchedBlocks;
+}
+
 async function decideRetry(
 	request: ModelRouteRequest<SwitchbackState>,
 	modelConfig: ResolvedSwitchbackConfig,
@@ -478,13 +606,26 @@ async function decideRetry(
 		};
 	}
 
-	const result = await classifyError(errorMessage, registry, modelConfig.jev, now, stopReason);
+	const assessed = await assessFailure({
+		failedId,
+		errorMessage,
+		stopReason,
+		jev: modelConfig.jev,
+		registry,
+		now,
+		blocked,
+		transientRetries: priorState?.transientRetries ?? 0,
+	});
+	const result = assessed.verdict === undefined && assessed.noClassifierReason !== undefined
+		? ({ kind: "no-classifier", reason: assessed.noClassifierReason } as const)
+		: undefined;
+	const classified = assessed.verdict;
 
 	// No-classifier path: the universal cycle. Report visibly (when notify is
 	// wired), advance to the next non-blocked effective model, do NOT write to
 	// the account-scoped block map, do NOT call blockModel. The cycle is the one allowed
 	// heuristic; no class label is fabricated.
-	if (result.kind === "no-classifier") {
+	if (result !== undefined) {
 		const reasonText = describeNoClassifier(result.reason);
 		inputs.notify?.(`switchback: no classifier decision (${result.reason}) - cycling without classification`, "warning");
 		const pick = await pickWithContextFit({ resolved, skip: failedId, blocked, now, startAfter: advanceFrom, registry, jev: modelConfig.jev, contextTokens: inputs.contextTokens });
@@ -507,15 +648,10 @@ async function decideRetry(
 		return { decision: { kind: "exhausted", reason: `blind-cycle-${result.reason}-no-fallback` }, thinkingLevel: request.thinkingLevel };
 	}
 
-	const classified = result.classified;
-
 	// Overflow: pi already compacted; the route stays as the router chose it. Stick
 	// to the failed model without blocking or counting as a transient retry.
-	if (classified.class === "overflow") {
+	if (classified?.class === "overflow") {
 		const modelId = failedId ?? priorState?.current ?? "(unknown)";
-		if (failedId !== undefined) {
-			unblockModel(failedId);
-		}
 		recordDecideCrash(failedId, registry, errorMessage, now, classified, undefined, "stuck-stayed");
 		return {
 			decision: { kind: "stick", modelId, reason: "overflow-stick" },
@@ -525,13 +661,12 @@ async function decideRetry(
 	}
 
 	// Transient: stay on the same model up to MAX_TRANSIENT_RETRIES, then move on.
-	if (classified.class === "transient") {
-		const retries = priorState?.transientRetries ?? 0;
-		if (retries < MAX_TRANSIENT_RETRIES && !isBlockedNow(failedId, blocked, now)) {
+	if (classified?.class === "transient") {
+		if (assessed.transientRetryLeft) {
 			recordDecideCrash(failedId, registry, errorMessage, now, classified, undefined, "stuck-stayed");
 			return {
-				decision: { kind: "stick", modelId: failedId, reason: "transient-retry" },
-				nextState: keepState(failedId, priorState, retries + 1),
+				decision: { kind: "stick", modelId: failedId!, reason: "transient-retry" },
+				nextState: keepState(failedId, priorState, (priorState?.transientRetries ?? 0) + 1),
 				thinkingLevel: request.thinkingLevel,
 			};
 		}
@@ -551,23 +686,22 @@ async function decideRetry(
 		return { decision: { kind: "exhausted", reason: "transient-exhausted-no-fallback" }, thinkingLevel: request.thinkingLevel };
 	}
 
-	// Quota / auth / unknown: block the failed model with the classifier-supplied
-	// reset time and pick the next non-blocked.
-	blockModel(failedId, classified.resetAtMs, now);
+	// Quota / auth / unknown: assessFailure has already blocked the failed model
+	// with the classifier-supplied reset time; pick the next non-blocked.
 	const pick = await pickWithContextFit({ resolved, skip: failedId, blocked, now, startAfter: advanceFrom, registry, jev: modelConfig.jev, contextTokens: inputs.contextTokens });
-	recordDecideCrash(failedId, registry, errorMessage, now, classified, undefined, pick ? "blocked+advanced" : "stuck-stayed");
+	recordDecideCrash(failedId, registry, errorMessage, now, classified ?? null, undefined, pick ? "blocked+advanced" : "stuck-stayed");
 	if (pick) {
 		const nextState = buildStateAfterSwitch(pick.modelId, priorState);
 		if (pick.degraded && resolved.effectiveCount === 1 && !nextState.degradedWarned) {
 			nextState.degradedWarned = true;
 		}
 		return {
-			decision: { kind: "switch", modelId: pick.modelId, reason: (pick.degraded ? `${classified.class}-fallback-degraded` : `${classified.class}-fallback`) + resetSuffix(classified.resetAtMs, now) },
+			decision: { kind: "switch", modelId: pick.modelId, reason: (pick.degraded ? `${classified!.class}-fallback-degraded` : `${classified!.class}-fallback`) + resetSuffix(classified!.resetAtMs, now) },
 			nextState,
 			thinkingLevel: request.thinkingLevel,
 		};
 	}
-	return { decision: { kind: "exhausted", reason: `${classified.class}-no-fallback` }, thinkingLevel: request.thinkingLevel };
+	return { decision: { kind: "exhausted", reason: `${classified!.class}-no-fallback` }, thinkingLevel: request.thinkingLevel };
 }
 
 /** Human suffix for the reset window a blocked model got, empty when there is none. */

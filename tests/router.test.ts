@@ -31,7 +31,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { decide, buildRoute, MAX_TRANSIENT_RETRIES, type Decision, type RouterRegistry } from "../src/routing.ts";
+import { decide, buildRoute, observeUnretriedFailure, MAX_TRANSIENT_RETRIES, type Decision, type RouterRegistry } from "../src/routing.ts";
+import { readCrashMap } from "../src/crashes.ts";
 import { stateFilePath, readBlockedMap, isBlocked, unblockModel, blockModel, getPinnedModel, setPinnedModel } from "../src/state.ts";
 import { simulateRetry, loadSimulate, getScenario, SimulateError } from "../src/simulate.ts";
 import { findModelConfig, loadConfig } from "../src/config.ts";
@@ -1044,6 +1045,104 @@ describe("classifyError — direct unit tests for the three branches", () => {
 		await classifyError("any", registry, { provider: "typesafe", id: "jev-latest" }, 1_000_000_000);
 		expect(criteria).toBeDefined();
 		expect(criteria!.length).toBeLessThanOrEqual(10);
+	});
+});
+
+describe("observeUnretriedFailure — failures pi will not retry", () => {
+	// pi only hands a router an error when isRetryableAssistantError accepts its
+	// text. A quota message that trips the non-retryable list (here on the word
+	// "billing", present only in a help URL) never reaches route(), so switchback
+	// saw nothing and the model was never blocked. This is the fallback.
+	const OLLAMA_QUOTA =
+		'429: {"message":"You reached your Pro 5-hour limit. Max is $100/month for $300 of usage, ' +
+		"with no 5-hour or weekly caps: https://ollama.com/settings/billing (ref: abc)\",\"type\":\"api_error\"}";
+
+	it("blocks the failed model, so the next user turn walks forward past it", async () => {
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			],
+			answer: { class: "quota", scope: "account", resetScore: 5 },
+		});
+		const now = Date.now();
+		const acted = await observeUnretriedFailure({
+			failedId: "zai/glm-4.7",
+			errorMessage: OLLAMA_QUOTA,
+			stopReason: "error",
+			jev: FALLBACKS.jev,
+			registry,
+			now,
+			blocked: readBlockedMap(now),
+		});
+		expect(acted).toBe(true);
+
+		// The block is what makes the next turn leave the model behind: a blocked
+		// current model is skipped by the `user` path, which is the whole point.
+		const later = now + 1_000;
+		expect(isBlocked("zai/glm-4.7", later, readBlockedMap(later))).toBe(true);
+		const request = buildFakeRequest({ reason: "user", stateCurrent: "zai/glm-4.7" });
+		const result = await decide("user", request, FALLBACKS, registry, { now: later, blocked: readBlockedMap(later) });
+		expect(result.decision.kind).toBe("switch");
+		expect(result.decision.kind === "switch" ? result.decision.modelId : "").toBe("ollama-cloud/pro");
+	});
+
+	it("records the verdict in the crash store", async () => {
+		const registry = makeFakeRegistry({
+			entries: [{ provider: "zai", id: "glm-4.7" }],
+			answer: { class: "quota", scope: "account", resetScore: 5 },
+		});
+		const now = Date.now();
+		await observeUnretriedFailure({
+			failedId: "zai/glm-4.7",
+			errorMessage: OLLAMA_QUOTA,
+			stopReason: "error",
+			jev: FALLBACKS.jev,
+			registry,
+			now,
+			blocked: readBlockedMap(now),
+		});
+		const map = readCrashMap();
+		const entry = Object.values(map).find((e) => e.provider === "zai" && e.model === "glm-4.7");
+		expect(entry).toBeDefined();
+		expect(entry?.verdict?.class).toBe("quota");
+		expect(entry?.action).toBe("blocked+advanced");
+	});
+
+	it("does not block, and says so, when no classifier is configured", async () => {
+		const registry = makeFakeRegistry({ entries: [{ provider: "zai", id: "glm-4.7" }] });
+		const now = Date.now();
+		const acted = await observeUnretriedFailure({
+			failedId: "zai/glm-4.7",
+			errorMessage: OLLAMA_QUOTA,
+			stopReason: "error",
+			jev: undefined,
+			registry,
+			now,
+			blocked: readBlockedMap(now),
+		});
+		expect(acted).toBe(false);
+		// Nothing to justify a block with, so the model stays usable.
+		expect(isBlocked("zai/glm-4.7", now + 1_000, readBlockedMap(now + 1_000))).toBe(false);
+	});
+
+	it("leaves the model unblocked for a transient verdict, which pi already retried", async () => {
+		const registry = makeFakeRegistry({
+			entries: [{ provider: "zai", id: "glm-4.7" }],
+			answer: { class: "transient", scope: "unknown" },
+		});
+		const now = Date.now();
+		const acted = await observeUnretriedFailure({
+			failedId: "zai/glm-4.7",
+			errorMessage: "529 over_error: temporarily unavailable",
+			stopReason: "error",
+			jev: FALLBACKS.jev,
+			registry,
+			now,
+			blocked: readBlockedMap(now),
+		});
+		expect(acted).toBe(false);
+		expect(isBlocked("zai/glm-4.7", now + 1_000, readBlockedMap(now + 1_000))).toBe(false);
 	});
 });
 

@@ -46,6 +46,20 @@ downstream consumers only.
 - A module that gains consumers gets a barrel export; a module that
   carries user-visible state gets a docs section where that state is
   documented (`docs/configuration.md`).
+- **Keep a module under ~500 lines of code** (comments and blank lines
+  excluded; measure per file, not per file plus its test). A user
+  preference carried over from Python/Rust/C practice, where the limit is
+  a language-independent readability heuristic rather than a TS idiom.
+  When a module exceeds it, look for a **responsibility seam** first —
+  `src/routing.ts` split into `decide()` (where to go) and
+  `src/build-route.ts` (what that means on the wire) because the two had
+  genuinely different reasons to change. Do not split mechanically: moving
+  code to hit a number costs a `FILES.md` row, a barrel edit and a
+  verification gap (`tsc` only covers the entry graph), and buys nothing if
+  the result still has to be read together. Types that cross a seam move
+  with their consumer and get re-exported, so import sites do not change.
+  A heavily commented file is not automatically over budget: `routing.ts`
+  was 820 lines but 545 code, and the surplus was rationale a reader needs.
 
 ## Verification
 

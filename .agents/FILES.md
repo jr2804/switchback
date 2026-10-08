@@ -3,7 +3,8 @@
 | What | Where |
 | ---- | ----- |
 | Extension entry / virtual model + commands | `index.ts` |
-| Routing (`decide`, `buildRoute`) | `src/routing.ts` |
+| Routing (`decide`) | `src/routing.ts` |
+| Dispatch (`buildRoute`, reasoning-level resolution) | `src/build-route.ts` |
 | Classification (`classifyError`) | `src/classify.ts` |
 | Local-classifier provider registration | `src/local-classifier.ts` |
 | System One classifier transport (switchback's own) | `src/systemone.ts` |

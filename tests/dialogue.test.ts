@@ -40,14 +40,8 @@ import {
 	setDebug,
 	type LoadedLayer,
 } from "../src/config-editor.ts";
-import {
-	describeJev,
-	layerOptionLabel,
-	runDialogue,
-	secretNameFor,
-	type DialogueContext,
-	type DialogueUi,
-} from "../src/dialogue.ts";
+import { layerOptionLabel, runDialogue } from "../src/dialogue.ts";
+import { describeJev, secretNameFor, type DialogueContext, type DialogueUi } from "../src/dialogue-ui.ts";
 import type { ClassifierProviderOption } from "../src/classifier-catalog.ts";
 import type { ProbeResult } from "../src/classifier-probe.ts";
 import type { JevConfig } from "../src/types.ts";

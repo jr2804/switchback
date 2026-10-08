@@ -103,7 +103,8 @@ export {
 	updateDecisionModel,
 } from "./config-editor.ts";
 export type { ConfigLayer, DecisionModelInput, DecisionModelPatch, LoadedLayer } from "./config-editor.ts";
-export { runDialogue, describeJev, layerOptionLabel } from "./dialogue.ts";
+export { runDialogue, layerOptionLabel } from "./dialogue.ts";
+export { describeJev } from "./dialogue-ui.ts";
 export { createModelPicker, buildModelItems, MODEL_PICKER_MAX_VISIBLE } from "./model-picker.ts";
 export type { ModelPickerSource, PickerColor, PickerKeybindings, PickerTheme, PickerTui } from "./model-picker.ts";
 export {
@@ -129,7 +130,7 @@ export {
 	PROBE_TIMEOUT_MS,
 } from "./classifier-probe.ts";
 export type { ProbeAnswers, ProbeResult } from "./classifier-probe.ts";
-export type { DialogueContext, DialogueUi } from "./dialogue.ts";
+export type { DialogueContext, DialogueUi } from "./dialogue-ui.ts";
 export { loadSimulate, getScenario, simulateRetry, SimulateError } from "./simulate.ts";
 export type { SimulateConfig, SimulateResult } from "./simulate.ts";
 export { resolveFallbacks, effectiveIds, pickNextEffective } from "./availability.ts";

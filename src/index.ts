@@ -4,8 +4,10 @@
  * can `import { decide, ... } from "..//src/index.ts"` without enumerating modules.
  */
 
-export { decide, buildRoute, ConfigInvalidError, MAX_TRANSIENT_RETRIES } from "./routing.ts";
-export type { Decision, DecisionOutcome, NotifyFn, RouteInputs, RouterRegistry } from "./routing.ts";
+export { decide, observeUnretriedFailure, assessFailure, MAX_TRANSIENT_RETRIES } from "./routing.ts";
+export type { RouteInputs } from "./routing.ts";
+export { buildRoute, ConfigInvalidError } from "./build-route.ts";
+export type { Decision, DecisionOutcome, NotifyFn, RouterRegistry } from "./build-route.ts";
 export { classifyError, PROMPT_VERSION, callClassifier, readChoice, CLASSIFIER_TIMEOUT_MS } from "./classify.ts";
 export type { ClassificationResult, NoClassifierReason, ClassifierCallResult, ClassifierRegistry } from "./classify.ts";
 export { chooseThinkingLevel, availableCategories, supportedLevels, SWITCHBACK_THINKING_LEVELS, THINKING_PROMPT_VERSION } from "./thinking.ts";

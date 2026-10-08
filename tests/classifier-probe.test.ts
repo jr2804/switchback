@@ -47,7 +47,10 @@ describe("classifier-probe: the prompt", () => {
 		expect(context.questions["score"]?.type).toBe("score");
 		expect(context.questions["noul"]?.type).toBe("bool");
 		expect(Object.keys(context.questions)).toHaveLength(3);
-		expect(context.state["purpose"]).toMatch(/self-test/);
+		// A bare string: Respan rejects any object shape that is not
+		// `{input, output}`, so the probe must not send `{purpose: ...}`.
+		expect(typeof context.state).toBe("string");
+		expect(String(context.state)).toMatch(/self-test/);
 		// Three levels means the answer is an index in [0, 2] - a fair coin is an
 		// even chance, i.e. the middle level.
 		expect(PROBE_SCORE_CRITERIA).toHaveLength(3);

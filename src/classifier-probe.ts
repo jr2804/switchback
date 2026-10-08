@@ -31,7 +31,7 @@ import type {
 	ClassifierModel,
 	ClassifierResult,
 } from "@earendil-works/pi-ai";
-import { SYSTEM_ONE_API, systemOneClassifier, type FetchLike } from "./systemone.ts";
+import { SYSTEM_ONE_API, classifierState, systemOneClassifier, type FetchLike } from "./systemone.ts";
 
 /** Default budget for the whole probe (one round-trip). */
 export const PROBE_TIMEOUT_MS = 30_000;
@@ -52,13 +52,18 @@ export const PROBE_SCORE_CRITERIA: readonly string[] = ["Impossible", "An even c
  * The probe prompt: three questions in one request, one per answer shape. The
  * state says what this is, so a decision model does not have to infer intent
  * from the question text alone.
+ *
+ * `state` is a bare string. SystemOne accepts a string, an object or an array;
+ * Respan rejects a `{purpose, note}` object outright ("state must be a string
+ * or an object with only input (a message array) and output (a message)"), while
+ * Ollama and TypeSafe take either. See `classifierState()` in `systemone.ts` for
+ * the single cast that widens pi-ai's narrower `JsonObject` type.
  */
 export function buildProbeContext(): ClassifierContext {
 	return {
-		state: {
-			purpose: "switchback decision-model self-test",
-			note: "Answer all three questions. This is a capability check, not a task.",
-		},
+		state: classifierState(
+			"switchback decision-model self-test. Answer all three questions. This is a capability check, not a task.",
+		),
 		questions: {
 			choice: {
 				type: "choice",

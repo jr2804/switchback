@@ -59,6 +59,7 @@
 
 import type { ClassifierAnswer, ClassifierApi, ClassifierContext, ClassifierModel, ClassifierResult, StopReason } from "@earendil-works/pi-ai";
 import { hashSample, lookupCrash } from "./crashes.ts";
+import { classifierState } from "./systemone.ts";
 import type { ClassifiedError, ErrorClass, ErrorScope } from "./types.ts";
 
 /** The classifier model entry that the registry returns for `findOfType("classifier", ...)`. */
@@ -441,7 +442,7 @@ export async function classifyError(
 	// Branch 2: classifier. Any failure (not configured, unresolvable,
 	// timeout, threw, unparseable) falls through to "no-classifier".
 	const call = await callClassifier(registry, jev, {
-		state: { prompt: message.slice(0, 16_000) },
+		state: classifierState(message),
 		questions: JEV_QUESTIONS,
 	});
 	if (call.kind === "no-classifier") {

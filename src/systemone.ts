@@ -33,6 +33,23 @@ import type {
 /** The only classifier wire API switchback drives. */
 export const SYSTEM_ONE_API: ClassifierApi = "typesafe-system-one";
 
+/**
+ * The `state` to send with a SystemOne request.
+ *
+ * The wire protocol accepts a string, an object or an array; the bare text is
+ * the shape every backend takes. Switchback used to send `{ prompt: <text> }`,
+ * which Respan rejects with `400 Respan state must be a string or an object
+ * with only input (a message array) and output (a message)` while Ollama and
+ * TypeSafe accept it - so the breakage only ever showed up on Respan.
+ *
+ * pi-ai types `ClassifierContext.state` as `JsonObject`, narrower than the
+ * protocol, so the string passes through this single helper rather than being
+ * cast at each call site.
+ */
+export function classifierState(text: string): ClassifierContext["state"] {
+	return text.slice(0, 16_000) as unknown as ClassifierContext["state"];
+}
+
 /** Default request timeout. classifyError wraps the call in its own race (see `CLASSIFIER_TIMEOUT_MS`). */
 const REQUEST_TIMEOUT_MS = 30_000;
 

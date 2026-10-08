@@ -1,0 +1,7 @@
+[tasks.lint-ts]
+description = "Lint TypeScript (gts: Google TypeScript Style, ESLint + Prettier check)"
+run = "gts lint"
+
+[tasks.format-ts]
+description = "Auto-fix TypeScript lint and formatting (gts fix)"
+run = "gts fix"

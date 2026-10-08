@@ -2,6 +2,7 @@
 bun = "latest"
 uv = "latest"
 "rumdl" = "latest"
+"npm:gts" = "latest"
 
 [settings.npm]
 package_manager = "bun"

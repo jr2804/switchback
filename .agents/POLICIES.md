@@ -28,8 +28,12 @@
 ## Verification
 
 - Type check: `npx tsc --noEmit` (must be clean).
+- Lint + format check: `mise run lint-ts` (gts: ESLint + Prettier). Must be
+  clean for *code you touched*; the tree is not a zero baseline, so read the
+  count before and after rather than treating a non-zero exit as a regression.
+- Formatting fixes: `mise run format-ts` (same tool, writes in place).
 - Tests: `npx vitest run` (must be all green; report milestones only after
-  both pass).
+  all three pass).
 - Manual end-to-end: `pi --extension ./index.ts --model switchback/auto -p "ping"`.
 - Crash corpus honesty: the coverage matrix in `README.md` distinguishes raw
   observations from shipped fixtures; do not conflate.
@@ -51,7 +55,8 @@
 ## Checklist (before considering a task done)
 
 1. `npx tsc --noEmit` clean.
-2. `npx vitest run` green.
+2. `mise run lint-ts` clean for the code you touched.
+3. `npx vitest run` green.
 3. Relevant docs updated (DOX pass).
 4. No defensive-coding patterns introduced (`try { ... } catch {}` swallow,
    `hasattr` guards, `import` try/except).

@@ -3,6 +3,10 @@
 | What | Where |
 | ---- | ----- |
 | Extension entry / virtual model + commands | `index.ts` |
+| Lint + format config (gts rules over repo house style) | `eslint.config.js` |
+| Formatter options (house style: tabs, 120 cols, double quotes) | `.prettierrc.json` |
+| tsconfig used for type-aware lint (covers `src/` + `tests/`) | `tsconfig.eslint.json` |
+| Lint / format tasks | `.config/mise/conf.d/ts.toml` |
 | Routing (`decide`) | `src/routing.ts` |
 | Dispatch (`buildRoute`, reasoning-level resolution) | `src/build-route.ts` |
 | Classification (`classifyError`) | `src/classify.ts` |

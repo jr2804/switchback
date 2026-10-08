@@ -143,6 +143,7 @@ gitignored).
 | `codegraph` | Code navigation | Symbol/call/dependency maps (if installed) |
 | `grepai` | Semantic search | Find code by meaning (if installed) |
 | `vitest` | Test runs | `npx vitest run` |
+| `gts` (mise `lint-ts` / `format-ts`) | Before committing TS changes | Lint + formatting; see `.agents/POLICIES.md` → Verification |
 | `tsc` | Type check | `npx tsc --noEmit` (strict + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`) |
 | `pi-intercom` | Multi-session | Coordination across pi sessions in this cwd |
 

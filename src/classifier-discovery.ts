@@ -74,10 +74,7 @@ export async function discoverOllamaModels(opts: {
 		for (const entry of json.models ?? []) {
 			const id = entry.name ?? entry.model;
 			if (typeof id !== "string" || id.length === 0) continue;
-			const capsRaw =
-				entry.capabilities ??
-				entry.details?.capabilities ??
-				[];
+			const capsRaw = entry.capabilities ?? entry.details?.capabilities ?? [];
 			const capabilities = capsRaw.filter((cap): cap is string => typeof cap === "string");
 			models.push({
 				id,
@@ -109,5 +106,8 @@ function ollamaTagsUrl(baseUrl: string): string {
  * entered by hand for testing.
  */
 export function decisionCapableModels(models: readonly OllamaModelSummary[]): string[] {
-	return models.filter((m) => m.decisionCapable).map((m) => m.id).sort();
+	return models
+		.filter((m) => m.decisionCapable)
+		.map((m) => m.id)
+		.sort();
 }

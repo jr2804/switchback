@@ -10,7 +10,13 @@ export { buildRoute, ConfigInvalidError } from "./build-route.ts";
 export type { Decision, DecisionOutcome, NotifyFn, RouterRegistry } from "./build-route.ts";
 export { classifyError, PROMPT_VERSION, callClassifier, readChoice, CLASSIFIER_TIMEOUT_MS } from "./classify.ts";
 export type { ClassificationResult, NoClassifierReason, ClassifierCallResult, ClassifierRegistry } from "./classify.ts";
-export { chooseThinkingLevel, availableCategories, supportedLevels, SWITCHBACK_THINKING_LEVELS, THINKING_PROMPT_VERSION } from "./thinking.ts";
+export {
+	chooseThinkingLevel,
+	availableCategories,
+	supportedLevels,
+	SWITCHBACK_THINKING_LEVELS,
+	THINKING_PROMPT_VERSION,
+} from "./thinking.ts";
 export type { ThinkingLevelChoice, ThinkingLevelContext, ThinkingLevelSource } from "./thinking.ts";
 export {
 	decideIdleReset,
@@ -24,7 +30,13 @@ export {
 	IDLE_RESET_PROMPT_VERSION,
 } from "./idle.ts";
 export type { IdleResetDecision, IdleResetInput } from "./idle.ts";
-export { fitsContext, usableContextTokens, chooseContextCandidate, CONTEXT_FIT_RESERVE_TOKENS, CONTEXT_CANDIDATE_PROMPT_VERSION } from "./context-fit.ts";
+export {
+	fitsContext,
+	usableContextTokens,
+	chooseContextCandidate,
+	CONTEXT_FIT_RESERVE_TOKENS,
+	CONTEXT_CANDIDATE_PROMPT_VERSION,
+} from "./context-fit.ts";
 export type { CandidateWindow, ContextCandidateChoice, ContextCandidateInput } from "./context-fit.ts";
 export { blockModel, isBlocked, readBlockedMap, unblockModel, stateFilePath } from "./state.ts";
 export {
@@ -42,8 +54,29 @@ export {
 export type { CrashEntry, CrashMap, CrashAction, CrashVerdict, CrashAnnotation, RecordCrashInput } from "./crashes.ts";
 export { createSecretStore, secretsFilePath, powershellDpapi, SecretsError } from "./secrets.ts";
 export type { SecretStore, Dpapi } from "./secrets.ts";
-export { loadConfig, findModelConfig, DEFAULT_CONFIG, SWITCHBACK_PROVIDER, SWITCHBACK_VIRTUAL_ID, ConfigError, piConfigDir, piSwitchbackDir, LOCAL_CLASSIFIER_APIS, resolveJevConfig, resolveSecretApiKey, validateFileConfig } from "./config.ts";
-export type { SwitchbackConfig, SwitchbackFileConfig, JevConfig, JevRef, DecisionModelEntry, ResolvedSwitchbackConfig, ResolvedSwitchbackFileConfig } from "./config.ts";
+export {
+	loadConfig,
+	findModelConfig,
+	DEFAULT_CONFIG,
+	SWITCHBACK_PROVIDER,
+	SWITCHBACK_VIRTUAL_ID,
+	ConfigError,
+	piConfigDir,
+	piSwitchbackDir,
+	LOCAL_CLASSIFIER_APIS,
+	resolveJevConfig,
+	resolveSecretApiKey,
+	validateFileConfig,
+} from "./config.ts";
+export type {
+	SwitchbackConfig,
+	SwitchbackFileConfig,
+	JevConfig,
+	JevRef,
+	DecisionModelEntry,
+	ResolvedSwitchbackConfig,
+	ResolvedSwitchbackFileConfig,
+} from "./config.ts";
 export {
 	addDecisionModel,
 	addFallback,
@@ -79,7 +112,11 @@ export {
 	defaultDecisionModelName,
 	directEndpointWouldClobber,
 } from "./classifier-catalog.ts";
-export type { ClassifierModelSummary, ClassifierProviderOption, ClassifierProviderSource } from "./classifier-catalog.ts";
+export type {
+	ClassifierModelSummary,
+	ClassifierProviderOption,
+	ClassifierProviderSource,
+} from "./classifier-catalog.ts";
 export {
 	buildProbeContext,
 	formatProbeReport,

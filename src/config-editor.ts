@@ -186,10 +186,7 @@ function assertModelIdAvailable(loaded: LoadedLayer, fullId: string): void {
  * by `validateFileConfig`, so the user sees the loader's own message if a
  * fallback misses its `provider/id` form.
  */
-export function addVirtualModel(
-	loaded: LoadedLayer,
-	input: { id: string; name: string; fallbacks: ModelId[] },
-): void {
+export function addVirtualModel(loaded: LoadedLayer, input: { id: string; name: string; fallbacks: ModelId[] }): void {
 	const fullId = normalizeVirtualId(input.id);
 	assertModelIdAvailable(loaded, fullId);
 	const seq = requireModelsSeq(loaded);

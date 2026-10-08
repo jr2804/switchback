@@ -113,8 +113,19 @@ describe("idle — formatting", () => {
 
 describe("idle — decisions", () => {
 	it("does nothing when the option is absent or never", async () => {
-		const base = { messages: [messageAt(T0)], now: T0 + 10 * HOUR, currentModel: "ollama-cloud/pro", candidates: ["zai/glm-4.7"], blockedNotes: [] };
-		const absent = await decideIdleReset({ ...base, registry: classifierAbsent(), jev: undefined, option: undefined });
+		const base = {
+			messages: [messageAt(T0)],
+			now: T0 + 10 * HOUR,
+			currentModel: "ollama-cloud/pro",
+			candidates: ["zai/glm-4.7"],
+			blockedNotes: [],
+		};
+		const absent = await decideIdleReset({
+			...base,
+			registry: classifierAbsent(),
+			jev: undefined,
+			option: undefined,
+		});
 		expect(absent.reset).toBe(false);
 		expect(absent.source).toBe("none");
 		const never = await decideIdleReset({ ...base, registry: classifierAbsent(), jev: undefined, option: "never" });

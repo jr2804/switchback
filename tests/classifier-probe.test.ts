@@ -95,18 +95,27 @@ describe("classifier-probe: answer validation", () => {
 describe("classifier-probe: verdict and report", () => {
 	it("passes only when all three shapes answered usably", () => {
 		expect(summarizeProbe(result(GOOD), 120)).toMatchObject({ ok: true, ms: 120, missing: [] });
-		expect(summarizeProbe(result({ choice: GOOD.choice }), 90)).toMatchObject({ ok: false, missing: ["score", "noul"] });
+		expect(summarizeProbe(result({ choice: GOOD.choice }), 90)).toMatchObject({
+			ok: false,
+			missing: ["score", "noul"],
+		});
 	});
 
 	it("carries a transport error through", () => {
-		const failed = summarizeProbe(result({}, { stopReason: "error", errorMessage: "System One API error (400)" }), 5);
+		const failed = summarizeProbe(
+			result({}, { stopReason: "error", errorMessage: "System One API error (400)" }),
+			5,
+		);
 		expect(failed.ok).toBe(false);
 		expect(failed.error).toMatch(/400/);
 		expect(formatProbeReport({ label: "ollama/tev1", result: failed })).toContain("System One API error (400)");
 	});
 
 	it("formats one line per shape", () => {
-		const report = formatProbeReport({ label: "ollama/tev1 at http://localhost:11434/v1", result: summarizeProbe(result(GOOD), 250) });
+		const report = formatProbeReport({
+			label: "ollama/tev1 at http://localhost:11434/v1",
+			result: summarizeProbe(result(GOOD), 250),
+		});
 		expect(report).toContain("ollama/tev1 at http://localhost:11434/v1");
 		expect(report).toContain("choice  ✓ sunny");
 		// The raw number is a rubric index, so the report names the level it lands on.
@@ -116,7 +125,10 @@ describe("classifier-probe: verdict and report", () => {
 	});
 
 	it("explains a partial answer set", () => {
-		const report = formatProbeReport({ label: "ollama/tev1", result: summarizeProbe(result({ score: GOOD.score }), 30) });
+		const report = formatProbeReport({
+			label: "ollama/tev1",
+			result: summarizeProbe(result({ score: GOOD.score }), 30),
+		});
 		expect(report).toContain("choice  ✗ no usable answer");
 		expect(report).toMatch(/may not be a System One decision model/);
 	});
@@ -131,7 +143,12 @@ describe("classifier-probe: local endpoint path", () => {
 			const body = {
 				model: "tev1",
 				answers: {
-					choice: { type: "choice", choice: "sunny", probabilities: { sunny: 0.9, rainy: 0.1 }, confidence: 0.9 },
+					choice: {
+						type: "choice",
+						choice: "sunny",
+						probabilities: { sunny: 0.9, rainy: 0.1 },
+						confidence: 0.9,
+					},
 					score: { type: "score", score: 1.02, confidence: 0.8 },
 					noul: { type: "noul", noul: 0.9 },
 				},

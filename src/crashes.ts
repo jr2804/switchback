@@ -67,7 +67,12 @@ export interface CrashEntry {
 	action: CrashAction;
 	/** User annotation. When present, the entry short-circuits classifyError on the next hit. */
 	annotated?: CrashAnnotation;
-	verdictHistory: { at: number; verdict: CrashVerdict | null; noClassifierReason?: NoClassifierReason; action: CrashAction }[];
+	verdictHistory: {
+		at: number;
+		verdict: CrashVerdict | null;
+		noClassifierReason?: NoClassifierReason;
+		action: CrashAction;
+	}[];
 }
 
 export type CrashMap = Record<string, CrashEntry>;
@@ -162,7 +167,10 @@ export function recordCrash(input: RecordCrashInput, path: string = crashesFileP
 	const map = readRaw(path);
 	const hash = hashSample(input.raw);
 	const existing = map[hash];
-	const sampleForStore = input.raw.length > 4_000 ? `${input.raw.slice(0, 4_000)}...[truncated ${input.raw.length - 4_000} chars]` : input.raw;
+	const sampleForStore =
+		input.raw.length > 4_000
+			? `${input.raw.slice(0, 4_000)}...[truncated ${input.raw.length - 4_000} chars]`
+			: input.raw;
 	const verdict: CrashVerdict | null = input.verdict
 		? { class: input.verdict.class, scope: input.verdict.scope, promptVersion: input.promptVersion }
 		: null;
@@ -215,26 +223,37 @@ export function lookupCrash(raw: string, path: string = crashesFilePath()): Cras
 }
 
 /** Look up a crash by short-hash prefix. Throws when ambiguous or unknown. */
-export function findCrashByShortHash(shortHashValue: string, path: string = crashesFilePath()): { hash: string; entry: CrashEntry } {
+export function findCrashByShortHash(
+	shortHashValue: string,
+	path: string = crashesFilePath(),
+): { hash: string; entry: CrashEntry } {
 	const map = readRaw(path);
 	const matches: { hash: string; entry: CrashEntry }[] = [];
 	for (const [hash, entry] of Object.entries(map)) {
 		if (hash.startsWith(shortHashValue)) matches.push({ hash, entry });
 	}
 	if (matches.length === 0) throw new CrashError(`no crash with short-hash prefix "${shortHashValue}"`);
-	if (matches.length > 1) throw new CrashError(`ambiguous short-hash prefix "${shortHashValue}": ${matches.length} matches`);
+	if (matches.length > 1)
+		throw new CrashError(`ambiguous short-hash prefix "${shortHashValue}": ${matches.length} matches`);
 	return matches[0]!;
 }
 
 /** Annotate a crash with a user-confirmed class. Tier 2b cache. */
-export function annotateCrash(shortHashValue: string, klass: ErrorClass, note: string, now: number = Date.now(), path: string = crashesFilePath()): CrashEntry {
+export function annotateCrash(
+	shortHashValue: string,
+	klass: ErrorClass,
+	note: string,
+	now: number = Date.now(),
+	path: string = crashesFilePath(),
+): CrashEntry {
 	const map = readRaw(path);
 	const matches: string[] = [];
 	for (const hash of Object.keys(map)) {
 		if (hash.startsWith(shortHashValue)) matches.push(hash);
 	}
 	if (matches.length === 0) throw new CrashError(`no crash with short-hash prefix "${shortHashValue}"`);
-	if (matches.length > 1) throw new CrashError(`ambiguous short-hash prefix "${shortHashValue}": ${matches.length} matches`);
+	if (matches.length > 1)
+		throw new CrashError(`ambiguous short-hash prefix "${shortHashValue}": ${matches.length} matches`);
 	const hash = matches[0]!;
 	const entry = map[hash]!;
 	entry.annotated = { class: klass, note, at: now };
@@ -242,7 +261,13 @@ export function annotateCrash(shortHashValue: string, klass: ErrorClass, note: s
 	return entry;
 }
 
-const VALID_ANNOTATION_CLASSES: ReadonlySet<ErrorClass> = new Set<ErrorClass>(["quota", "auth", "transient", "overflow", "unknown"]);
+const VALID_ANNOTATION_CLASSES: ReadonlySet<ErrorClass> = new Set<ErrorClass>([
+	"quota",
+	"auth",
+	"transient",
+	"overflow",
+	"unknown",
+]);
 
 export function isValidAnnotationClass(value: string): value is ErrorClass {
 	return VALID_ANNOTATION_CLASSES.has(value as ErrorClass);

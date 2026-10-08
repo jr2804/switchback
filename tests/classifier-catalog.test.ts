@@ -22,7 +22,13 @@ function provider(overrides: Partial<ClassifierProviderSource> & { id: string })
 describe("classifier-catalog: provider choices", () => {
 	it("offers only providers that ship classifier models, sorted by id", () => {
 		const options = buildClassifierProviders([
-			provider({ id: "zeta", classifiers: [{ id: "z-2", api: "typesafe-system-one" }, { id: "z-1", api: "typesafe-system-one" }] }),
+			provider({
+				id: "zeta",
+				classifiers: [
+					{ id: "z-2", api: "typesafe-system-one" },
+					{ id: "z-1", api: "typesafe-system-one" },
+				],
+			}),
 			provider({ id: "alpha", classifiers: [{ id: "a-1", api: "typesafe-system-one" }] }),
 			provider({ id: "chat-only", chatModels: 12 }),
 		]);
@@ -33,7 +39,12 @@ describe("classifier-catalog: provider choices", () => {
 
 	it("carries pi's display name and base URL through, inventing neither", () => {
 		const options = buildClassifierProviders([
-			provider({ id: "hosted", name: "Hosted Classifiers", baseUrl: "https://example.invalid/v1/", classifiers: [{ id: "m", api: "typesafe-system-one" }] }),
+			provider({
+				id: "hosted",
+				name: "Hosted Classifiers",
+				baseUrl: "https://example.invalid/v1/",
+				classifiers: [{ id: "m", api: "typesafe-system-one" }],
+			}),
 			provider({ id: "no-url", name: "No URL", classifiers: [{ id: "m", api: "typesafe-system-one" }] }),
 		]);
 		expect(options[0]).toMatchObject({
@@ -70,13 +81,20 @@ describe("classifier-catalog: provider choices", () => {
 
 describe("classifier-catalog: base URL notes", () => {
 	it("points at pi's catalog when the provider declares no endpoint", () => {
-		const [option] = buildClassifierProviders([provider({ id: "p", name: "P", classifiers: [{ id: "m", api: "typesafe-system-one" }] })]);
+		const [option] = buildClassifierProviders([
+			provider({ id: "p", name: "P", classifiers: [{ id: "m", api: "typesafe-system-one" }] }),
+		]);
 		expect(classifierBaseUrlNote(option!)).toMatch(/resolved from pi's model catalog/);
 	});
 
 	it("quotes pi's catalog value when there is one", () => {
 		const [option] = buildClassifierProviders([
-			provider({ id: "p", name: "P", baseUrl: "https://api.example/v1/", classifiers: [{ id: "m", api: "typesafe-system-one" }] }),
+			provider({
+				id: "p",
+				name: "P",
+				baseUrl: "https://api.example/v1/",
+				classifiers: [{ id: "m", api: "typesafe-system-one" }],
+			}),
 		]);
 		const note = classifierBaseUrlNote(option!);
 		expect(note).toMatch(/from pi's model catalog/);

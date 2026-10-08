@@ -116,7 +116,12 @@ function describeSpawnFailure(error: unknown): SecretsError {
 	if (info.killed === true) {
 		return new SecretsError(`powershell DPAPI call exceeded ${PS_TIMEOUT_MS}ms and was killed`, { cause: error });
 	}
-	const stderr = typeof info.stderr === "string" ? info.stderr : info.stderr !== undefined ? new TextDecoder().decode(info.stderr) : "";
+	const stderr =
+		typeof info.stderr === "string"
+			? info.stderr
+			: info.stderr !== undefined
+				? new TextDecoder().decode(info.stderr)
+				: "";
 	const tail = stderr
 		.split("\n")
 		.map((line) => line.trim())
@@ -125,7 +130,9 @@ function describeSpawnFailure(error: unknown): SecretsError {
 		.join(" ")
 		.slice(0, 400);
 	const exit = typeof info.status === "number" ? ` (exit ${info.status})` : "";
-	return new SecretsError(`DPAPI round-trip failed${exit}${tail.length > 0 ? `: ${tail}` : " with no diagnostics"}`, { cause: error });
+	return new SecretsError(`DPAPI round-trip failed${exit}${tail.length > 0 ? `: ${tail}` : " with no diagnostics"}`, {
+		cause: error,
+	});
 }
 
 /**
@@ -152,7 +159,9 @@ function runPowerShell(script: string, payload: string): string {
 	}
 	const out = stdout.replace(/^\uFEFF/, "").trim();
 	if (!BASE64_OUTPUT.test(out)) {
-		throw new SecretsError("powershell DPAPI round-trip produced empty or non-base64 output (encoding or PowerShell version problem)");
+		throw new SecretsError(
+			"powershell DPAPI round-trip produced empty or non-base64 output (encoding or PowerShell version problem)",
+		);
 	}
 	return out;
 }
@@ -219,7 +228,9 @@ function readStore(path: string): SecretsFile {
 	const version = parsed["version"];
 	if (typeof version === "number" && version !== SECRETS_VERSION) {
 		// Incompatible, not corrupt: leave it for the build that wrote it.
-		throw new SecretsError(`store has version ${version}, this build reads version ${SECRETS_VERSION} - leaving the file untouched`);
+		throw new SecretsError(
+			`store has version ${version}, this build reads version ${SECRETS_VERSION} - leaving the file untouched`,
+		);
 	}
 	if (typeof version !== "number") {
 		quarantineCorruptFile(path);
@@ -293,9 +304,12 @@ export function createSecretStore(dpapi: Dpapi = powershellDpapi, path: string =
 			try {
 				return dpapi.unprotect(blob);
 			} catch (error) {
-				throw new SecretsError(`cannot decrypt secret "${name}" - stored for another Windows account, or the blob is damaged`, {
-					cause: error,
-				});
+				throw new SecretsError(
+					`cannot decrypt secret "${name}" - stored for another Windows account, or the blob is damaged`,
+					{
+						cause: error,
+					},
+				);
 			}
 		},
 		delete(name: string): void {

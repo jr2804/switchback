@@ -79,7 +79,15 @@ describe("context-fit: candidate choice", () => {
 	});
 
 	it("keeps the deterministic pick when the classifier is unavailable", async () => {
-		const choice = await chooseContextCandidate(input({ registry: { find: () => undefined, findOfType: () => undefined, classify: async () => null } as unknown as ClassifierRegistry }));
+		const choice = await chooseContextCandidate(
+			input({
+				registry: {
+					find: () => undefined,
+					findOfType: () => undefined,
+					classify: async () => null,
+				} as unknown as ClassifierRegistry,
+			}),
+		);
 		expect(choice.modelId).toBe("zai/glm-5.3");
 		expect(choice.source).toBe("preferred");
 		expect(choice.reason).toBe("unresolvable");
@@ -89,7 +97,9 @@ describe("context-fit: candidate choice", () => {
 		const silent = await chooseContextCandidate(input({ registry: registryAnswering(undefined) }));
 		expect(silent.modelId).toBe("zai/glm-5.3");
 		expect(silent.reason).toBe("timeout");
-		const outside = await chooseContextCandidate(input({ registry: registryAnswering("ollama-cloud/glm-5.3-flash") }));
+		const outside = await chooseContextCandidate(
+			input({ registry: registryAnswering("ollama-cloud/glm-5.3-flash") }),
+		);
 		expect(outside.modelId).toBe("zai/glm-5.3");
 		expect(outside.reason).toBe("unparseable");
 	});

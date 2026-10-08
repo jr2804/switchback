@@ -151,6 +151,11 @@ export async function simulateRetry(
 		messages: [],
 		state: { current: firstFallback, transientRetries: 0 },
 	};
-	const result = await decide("retry", fakeRequest, modelConfig, registry, { now, blocked, simulateErrorMessage: scenarioMessage, ...(inputs.notify ? { notify: inputs.notify } : {}) });
+	const result = await decide("retry", fakeRequest, modelConfig, registry, {
+		now,
+		blocked,
+		simulateErrorMessage: scenarioMessage,
+		...(inputs.notify ? { notify: inputs.notify } : {}),
+	});
 	return { decision: result.decision, blocked: firstFallback, now };
 }

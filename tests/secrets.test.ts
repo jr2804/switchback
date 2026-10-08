@@ -159,7 +159,10 @@ describe("secret store — on-disk format", () => {
 	it("creates secrets.json under <piConfigDir>/switchback/ with version 1", () => {
 		const store = createSecretStore(mockDpapi);
 		store.set("alpha", SECRET);
-		const parsed = JSON.parse(readFileSync(secretsFilePath(), "utf8")) as { version: number; entries: Record<string, string> };
+		const parsed = JSON.parse(readFileSync(secretsFilePath(), "utf8")) as {
+			version: number;
+			entries: Record<string, string>;
+		};
 		expect(parsed.version).toBe(1);
 		expect(Object.keys(parsed.entries)).toEqual(["alpha"]);
 	});

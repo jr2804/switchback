@@ -11,7 +11,6 @@ import { tmpdir } from "node:os";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { resolveFallbacks } from "../src/availability.ts";
 import { isBlocked, readBlockedMap } from "../src/state.ts";
-import { loadConfig } from "../src/config.ts";
 
 let originalCwd: string;
 
@@ -34,7 +33,6 @@ function fakeRegistry(entries: { provider: string; id: string }[]): {
 	hasConfiguredAuth(): boolean;
 	getProviderAuthStatus(provider: string): { configured: boolean; label?: string };
 } {
-	const set = new Set(entries.map((e) => `${e.provider}/${e.id}`));
 	const providers = new Set(entries.map((e) => e.provider));
 	const byKey = new Map<string, Model<Api>>();
 	for (const e of entries) byKey.set(`${e.provider}/${e.id}`, fakeModel(e.provider, e.id));
@@ -46,7 +44,10 @@ function fakeRegistry(entries: { provider: string; id: string }[]): {
 			return true;
 		},
 		getProviderAuthStatus(provider: string): { configured: boolean; label?: string } {
-			return { configured: providers.has(provider), label: providers.has(provider) ? "environment" : "no-credentials" };
+			return {
+				configured: providers.has(provider),
+				label: providers.has(provider) ? "environment" : "no-credentials",
+			};
 		},
 	};
 }
@@ -96,7 +97,7 @@ describe("command output capture", () => {
 		const now = Date.now();
 		const blocked = readBlockedMap(now);
 		const lines: string[] = [];
-		lines.push(`switchback config: <cwd>/.pi/switchback.yaml`);
+		lines.push("switchback config: <cwd>/.pi/switchback.yaml");
 		lines.push(`fallbacks (${resolved.effectiveCount} effective, ${resolved.greyedCount} greyed):`);
 		for (const entry of resolved.entries) {
 			if (entry.availability === "effective") {
@@ -118,7 +119,10 @@ describe("command output capture", () => {
 		const now = Date.now();
 		const blocked = readBlockedMap(now);
 		const entries = Object.entries(blocked).filter(([, ts]) => ts > now);
-		const text = entries.length === 0 ? "(no models currently blocked)" : entries.map(([id, ts]) => `  ${id}  (resets in ${Math.ceil((ts - now) / 60_000)} min)`).join("\n");
+		const text =
+			entries.length === 0
+				? "(no models currently blocked)"
+				: entries.map(([id, ts]) => `  ${id}  (resets in ${Math.ceil((ts - now) / 60_000)} min)`).join("\n");
 		expect(text).toMatchSnapshot();
 	});
 
@@ -141,7 +145,6 @@ describe("command output capture", () => {
 		const parsedGood = parseAnnotateArgsForTest("abcdef quota some note text");
 		expect(parsedGood).toEqual({ hash: "abcdef", klass: "quota", note: "some note text" });
 	});
-
 });
 
 // Re-implementation of the parseAnnotateArgs helper from index.ts. The real

@@ -8,7 +8,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { DEFAULT_CONFIG, findModelConfig, loadConfig, ConfigError, SWITCHBACK_PROVIDER, SWITCHBACK_VIRTUAL_ID } from "../src/config.ts";
+import {
+	DEFAULT_CONFIG,
+	findModelConfig,
+	loadConfig,
+	ConfigError,
+	SWITCHBACK_PROVIDER,
+	SWITCHBACK_VIRTUAL_ID,
+} from "../src/config.ts";
 import { groupLocalEndpoints, registerLocalClassifier } from "../src/local-classifier.ts";
 
 let originalCwd: string;
@@ -38,7 +45,9 @@ describe("DEFAULT_CONFIG", () => {
 	});
 
 	it("findModelConfig on DEFAULT_CONFIG throws ConfigError naming the fix", () => {
-		expect(() => findModelConfig(DEFAULT_CONFIG, `${SWITCHBACK_PROVIDER}/${SWITCHBACK_VIRTUAL_ID}`)).toThrow(ConfigError);
+		expect(() => findModelConfig(DEFAULT_CONFIG, `${SWITCHBACK_PROVIDER}/${SWITCHBACK_VIRTUAL_ID}`)).toThrow(
+			ConfigError,
+		);
 		try {
 			findModelConfig(DEFAULT_CONFIG, `${SWITCHBACK_PROVIDER}/${SWITCHBACK_VIRTUAL_ID}`);
 		} catch (err) {
@@ -138,9 +147,12 @@ describe("loadConfig - yaml-only lookup (no JSON user config)", () => {
 		// Ship a switchback.json next to the project-local yaml slot. The loader
 		// should NOT pick it up - user config is YAML only.
 		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-		writeFileSync(join(tmpDir, ".pi", "switchback.json"), JSON.stringify({
-			models: [{ id: "switchback/auto", name: "should be ignored", fallbacks: ["zai/glm-5.3"] }],
-		}));
+		writeFileSync(
+			join(tmpDir, ".pi", "switchback.json"),
+			JSON.stringify({
+				models: [{ id: "switchback/auto", name: "should be ignored", fallbacks: ["zai/glm-5.3"] }],
+			}),
+		);
 		const { config, source } = loadConfig();
 		expect(source).toBe("<default>");
 		expect(config.models[0]?.name).toBe("Auto (Switchback)");
@@ -151,10 +163,7 @@ describe("loadConfig - yaml-only lookup (no JSON user config)", () => {
 describe("loadConfig - bare ids and decisionModel references", () => {
 	const writeWith = (modelsYaml: string, decisionModelsYaml = ""): void => {
 		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-		writeFileSync(
-			join(tmpDir, ".pi", "switchback.yaml"),
-			`models:\n  ${modelsYaml}\n${decisionModelsYaml}`,
-		);
+		writeFileSync(join(tmpDir, ".pi", "switchback.yaml"), `models:\n  ${modelsYaml}\n${decisionModelsYaml}`);
 	};
 
 	it("normalises a bare model id (auto → switchback/auto)", () => {
@@ -245,21 +254,24 @@ describe("loadConfig - debug flag", () => {
 	};
 
 	it("parses a top-level debug flag", () => {
-		writeWith("debug: true\nmodels:\n  - id: switchback/auto\n    name: A\n    fallbacks: [\"zai/glm-5.3\"]\n");
+		writeWith('debug: true\nmodels:\n  - id: switchback/auto\n    name: A\n    fallbacks: ["zai/glm-5.3"]\n');
 		const { config } = loadConfig();
 		expect(config.debug).toBe(true);
 	});
 
 	it("rejects a non-boolean debug value", () => {
-		writeWith("debug: verbose\nmodels:\n  - id: switchback/auto\n    name: A\n    fallbacks: [\"zai/glm-5.3\"]\n");
+		writeWith('debug: verbose\nmodels:\n  - id: switchback/auto\n    name: A\n    fallbacks: ["zai/glm-5.3"]\n');
 		expect(() => loadConfig()).toThrow(/debug must be a boolean/);
 	});
 
 	it("the project layer's debug flag wins over the global layer's", () => {
-		writeWith("debug: false\nmodels:\n  - id: switchback/auto\n    name: A\n    fallbacks: [\"zai/glm-5.3\"]\n");
+		writeWith('debug: false\nmodels:\n  - id: switchback/auto\n    name: A\n    fallbacks: ["zai/glm-5.3"]\n');
 		mkdirSync(join(tmpDir, "agent"), { recursive: true });
 		process.env["PI_CODING_AGENT_DIR"] = join(tmpDir, "agent");
-		writeFileSync(join(tmpDir, "agent", "switchback.yaml"), "debug: true\nmodels:\n  - id: switchback/auto\n    name: B\n    fallbacks: [\"zai/glm-5.3\"]\n");
+		writeFileSync(
+			join(tmpDir, "agent", "switchback.yaml"),
+			'debug: true\nmodels:\n  - id: switchback/auto\n    name: B\n    fallbacks: ["zai/glm-5.3"]\n',
+		);
 		const { config } = loadConfig();
 		expect(config.debug).toBe(false);
 	});
@@ -307,7 +319,9 @@ describe("loadConfig - classifier endpoint fields (jev.baseUrl)", () => {
 	});
 
 	it("rejects an unsupported api", () => {
-		writeConfig("      provider: x\n      id: y\n      baseUrl: http://localhost:1/v1\n      api: openai-completions\n");
+		writeConfig(
+			"      provider: x\n      id: y\n      baseUrl: http://localhost:1/v1\n      api: openai-completions\n",
+		);
 		expect(() => loadConfig()).toThrow(/jev\.api must be one of/);
 	});
 
@@ -365,10 +379,12 @@ describe("groupLocalEndpoints", () => {
 	});
 
 	it("skips catalog classifiers: a jev without a baseUrl is not switchback's to register", () => {
-		expect(groupLocalEndpoints([
-			{ provider: "typesafe", id: "jev-latest" },
-			{ provider: "ollama", id: "tev1:0.8b", baseUrl: "http://localhost:11434/v1" },
-		])).toHaveLength(1);
+		expect(
+			groupLocalEndpoints([
+				{ provider: "typesafe", id: "jev-latest" },
+				{ provider: "ollama", id: "tev1:0.8b", baseUrl: "http://localhost:11434/v1" },
+			]),
+		).toHaveLength(1);
 		expect(groupLocalEndpoints([])).toEqual([]);
 	});
 });
@@ -376,7 +392,12 @@ describe("groupLocalEndpoints", () => {
 describe("registerLocalClassifier", () => {
 	interface Captured {
 		id: string;
-		cfg: { baseUrl?: string; apiKey?: string; models?: { type?: string; id: string }[]; classifiers?: Record<string, unknown> };
+		cfg: {
+			baseUrl?: string;
+			apiKey?: string;
+			models?: { type?: string; id: string }[];
+			classifiers?: Record<string, unknown>;
+		};
 	}
 
 	function capture() {

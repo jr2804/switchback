@@ -58,11 +58,20 @@ function type(picker: { handleInput(data: string): void }, text: string): void {
 
 describe("model-picker: items", () => {
 	it("lists provider/id, describes each model and marks availability", () => {
-		const items = buildModelItems({ models: MODELS, ready: (provider) => provider === "zai", current: ["zai/glm-5.3"] });
+		const items = buildModelItems({
+			models: MODELS,
+			ready: (provider) => provider === "zai",
+			current: ["zai/glm-5.3"],
+		});
 		// Credentialed models first, then the rest, each group alphabetical.
-		expect(items.map((item) => item.value)).toEqual(["zai/glm-5.3", "minimax/MiniMax-M3", "opencode-go/mimo-v2.6-flash"]);
+		expect(items.map((item) => item.value)).toEqual([
+			"zai/glm-5.3",
+			"minimax/MiniMax-M3",
+			"opencode-go/mimo-v2.6-flash",
+		]);
 		expect(items[0]?.label).toBe("zai/glm-5.3");
-		expect(items[0]?.description).toBe("GLM 5.3 · 1M context · in the list");		expect(items[1]?.description).toBe("MiniMax M3 · 1M context · no credentials");
+		expect(items[0]?.description).toBe("GLM 5.3 · 1M context · in the list");
+		expect(items[1]?.description).toBe("MiniMax M3 · 1M context · no credentials");
 		expect(items[2]?.description).toBe("MiMo 2.6 Flash · 128k context · no credentials");
 	});
 });

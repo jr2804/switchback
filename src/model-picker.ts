@@ -90,7 +90,9 @@ export function buildModelItems(source: ModelPickerSource): SelectItem[] {
 		ready: source.ready(model.provider),
 		description: [
 			model.name,
-			contextLabel(model.contextWindow) === undefined ? undefined : `${contextLabel(model.contextWindow)} context`,
+			contextLabel(model.contextWindow) === undefined
+				? undefined
+				: `${contextLabel(model.contextWindow)} context`,
 			source.ready(model.provider) ? undefined : "no credentials",
 			current.has(`${model.provider}/${model.id}`) ? "in the list" : undefined,
 		]
@@ -180,11 +182,7 @@ export function createModelPicker(opts: ModelPickerOptions): Container & { focus
 			this.addChild(listHolder);
 			this.addChild(new Spacer(1));
 			this.addChild(
-				new Text(
-					theme.fg("dim", "type to filter · ↑/↓ move · Tab or Enter accept · Esc cancel"),
-					1,
-					0,
-				),
+				new Text(theme.fg("dim", "type to filter · ↑/↓ move · Tab or Enter accept · Esc cancel"), 1, 0),
 			);
 		}
 

@@ -54,7 +54,12 @@ import {
 	type LoadedLayer,
 } from "./config-editor.ts";
 import { LOCAL_CLASSIFIER_APIS } from "./config.ts";
-import { classifierBaseUrlNote, defaultDecisionModelName, directEndpointWouldClobber, type ClassifierProviderOption } from "./classifier-catalog.ts";
+import {
+	classifierBaseUrlNote,
+	defaultDecisionModelName,
+	directEndpointWouldClobber,
+	type ClassifierProviderOption,
+} from "./classifier-catalog.ts";
 import { discoverOllamaModels } from "./classifier-discovery.ts";
 import { formatProbeReport, type ProbeResult } from "./classifier-probe.ts";
 import { createSecretStore, type SecretStore } from "./secrets.ts";
@@ -157,7 +162,10 @@ async function selectLayer(ctx: DialogueContext, current: ConfigLayer | undefine
 		`  project: ${projectConfigPath()}`,
 		"Project entries override global entries with the same model id.",
 	].join("\n");
-	const choice = await ctx.ui.select(title, order.map((layer) => labels[layer]));
+	const choice = await ctx.ui.select(
+		title,
+		order.map((layer) => labels[layer]),
+	);
 	if (choice === undefined) return undefined;
 	return choice === labels["global"] ? "global" : "project";
 }
@@ -322,10 +330,11 @@ async function mainMenu(ctx: DialogueContext, session: DialogueSession): Promise
 		// A layer with no content yet (first save) has no valid config to read;
 		// offer the reduced menu until the first virtual model exists.
 		if (session.loaded.doc.contents === undefined || session.loaded.doc.contents === null) {
-			const choice = await ctx.ui.select(
-				screenTitle(session.loaded, "no config in this layer yet"),
-				["Add virtual model...", "Switch layer...", "Done"],
-			);
+			const choice = await ctx.ui.select(screenTitle(session.loaded, "no config in this layer yet"), [
+				"Add virtual model...",
+				"Switch layer...",
+				"Done",
+			]);
 			if (choice === undefined || choice === "Done") return "done";
 			if (choice.startsWith("Switch layer")) return "switch";
 			await addVirtualModelWizard(ctx, session);
@@ -361,7 +370,11 @@ async function mainMenu(ctx: DialogueContext, session: DialogueSession): Promise
 	}
 }
 
-async function toggleDebug(ctx: DialogueContext, session: DialogueSession, config: SwitchbackFileConfig): Promise<void> {
+async function toggleDebug(
+	ctx: DialogueContext,
+	session: DialogueSession,
+	config: SwitchbackFileConfig,
+): Promise<void> {
 	const next = !(config.debug === true);
 	setDebug(session.loaded, next);
 	if (await saveOrRevert(ctx, session)) {
@@ -373,7 +386,11 @@ function findModel(config: SwitchbackFileConfig, id: string): SwitchbackConfig |
 	return config.models.find((m) => m.id === id);
 }
 
-async function virtualModelMenu(ctx: DialogueContext, session: DialogueSession, model: SwitchbackConfig): Promise<void> {
+async function virtualModelMenu(
+	ctx: DialogueContext,
+	session: DialogueSession,
+	model: SwitchbackConfig,
+): Promise<void> {
 	const renameIdOption = "Rename model id (pi restart required)";
 	const renameNameOption = "Change display name";
 	const editFallbacks = (n: number): string => `Edit fallbacks (${n})`;
@@ -387,25 +404,29 @@ async function virtualModelMenu(ctx: DialogueContext, session: DialogueSession, 
 		if (current === undefined) return; // removed elsewhere in this session
 		const fallbacksOption = editFallbacks(current.fallbacks.length);
 		const decisionLabel = decisionOption(current);
-		const choice = await ctx.ui.select(
-			screenTitle(session.loaded, `${current.id} - ${current.name}`),
-			[renameIdOption, renameNameOption, fallbacksOption, decisionLabel, removeOption, backOption],
-		);
+		const choice = await ctx.ui.select(screenTitle(session.loaded, `${current.id} - ${current.name}`), [
+			renameIdOption,
+			renameNameOption,
+			fallbacksOption,
+			decisionLabel,
+			removeOption,
+			backOption,
+		]);
 		if (choice === undefined || choice === backOption) return;
 		if (choice === renameIdOption) {
 			const newId = await promptRequired(
 				ctx,
-				screenTitle(session.loaded, `rename ${current.id} - new model id (bare "auto" becomes "switchback/auto")`),
+				screenTitle(
+					session.loaded,
+					`rename ${current.id} - new model id (bare "auto" becomes "switchback/auto")`,
+				),
 				current.id,
 			);
 			if (newId === undefined) continue;
 			renameVirtualModel(session.loaded, current.id, newId);
 			if (await saveOrRevert(ctx, session)) {
 				model.id = newId;
-				ctx.ui.notify(
-					`renamed to ${newId} - the running pi keeps the old id until restart`,
-					"info",
-				);
+				ctx.ui.notify(`renamed to ${newId} - the running pi keeps the old id until restart`, "info");
 			}
 			continue;
 		}
@@ -460,7 +481,9 @@ async function fallbacksEditor(ctx: DialogueContext, session: DialogueSession, v
 		if (config === undefined) return;
 		const model = findModel(config, virtualId);
 		if (model === undefined) return;
-		const body = ["Fallbacks (first = preferred):", ...model.fallbacks.map((f, i) => `  ${i + 1}. ${f}`)].join("\n");
+		const body = ["Fallbacks (first = preferred):", ...model.fallbacks.map((f, i) => `  ${i + 1}. ${f}`)].join(
+			"\n",
+		);
 		const choice = await ctx.ui.select(screenTitle(session.loaded, body), [
 			addOption,
 			removeOption,
@@ -561,7 +584,8 @@ async function decisionModelPicker(ctx: DialogueContext, session: DialogueSessio
 			}
 			continue;
 		}
-		const name = dmLabels.indexOf(choice) >= 0 ? (config.decisionModels ?? [])[dmLabels.indexOf(choice)]?.name : undefined;
+		const name =
+			dmLabels.indexOf(choice) >= 0 ? (config.decisionModels ?? [])[dmLabels.indexOf(choice)]?.name : undefined;
 		const entry = name !== undefined ? (config.decisionModels ?? []).find((d) => d.name === name) : undefined;
 		if (entry === undefined) continue;
 		setDecisionModel(session.loaded, virtualId, { decisionModel: entry.name });
@@ -682,7 +706,10 @@ async function decisionModelEntryMenu(
  * the whole flow when accepting the defaults; the only prompt that requires a
  * real decision is the apiKey action (new secret, keep existing, or none).
  */
-async function decisionModelWizard(ctx: DialogueContext, session: DialogueSession): Promise<DecisionModelInput | undefined> {
+async function decisionModelWizard(
+	ctx: DialogueContext,
+	session: DialogueSession,
+): Promise<DecisionModelInput | undefined> {
 	// Tolerant read: on a fresh layer there is no config yet and no name to clash with;
 	// addDecisionModel + the save gate still own the uniqueness rule.
 	const config = tryReadConfig(session.loaded);
@@ -735,18 +762,13 @@ async function decisionModelWizard(ctx: DialogueContext, session: DialogueSessio
 	// literal token to disk in either path.
 
 	const suggestedName = defaultDecisionModelName(option.provider, id);
-	const name = await promptNameLast(
-		ctx,
-		session.loaded,
-		suggestedName,
-		knownNames,
-	);
+	const name = await promptNameLast(ctx, session.loaded, suggestedName, knownNames);
 	if (name === undefined) return undefined;
 
 	// Commit the apiKey value (if any) under the now-known name, then build the
-// DecisionModelInput. Deferring the write keeps the secret name aligned with
-// the decision-model name regardless of whether the user kept the suggested
-// default or typed their own.
+	// DecisionModelInput. Deferring the write keeps the secret name aligned with
+	// the decision-model name regardless of whether the user kept the suggested
+	// default or typed their own.
 	let finalRest: Partial<DecisionModelInput> = rest;
 	if (apiKeyResult.kind === "secret") {
 		const secretName = secretNameFor(name);
@@ -814,11 +836,7 @@ async function chooseClassifierProvider(
 ): Promise<ClassifierProviderOption | undefined> {
 	const options = ctx.classifierProviders ?? [];
 	if (options.length === 0) {
-		const provider = await promptRequired(
-			ctx,
-			screenTitle(session.loaded, "classifier provider"),
-			current ?? "",
-		);
+		const provider = await promptRequired(ctx, screenTitle(session.loaded, "classifier provider"), current ?? "");
 		if (provider === undefined) return undefined;
 		return declaredEndpoint(provider);
 	}
@@ -827,15 +845,16 @@ async function chooseClassifierProvider(
 	const otherOption = "Other (type a provider id)...";
 	const backOption = "Back";
 	const choice = await ctx.ui.select(
-		screenTitle(
-			session.loaded,
-			`classifier provider${current === undefined ? "" : ` (current: ${current})`}`,
-		),
+		screenTitle(session.loaded, `classifier provider${current === undefined ? "" : ` (current: ${current})`}`),
 		[...ordered.map((option) => option.label), otherOption, backOption],
 	);
 	if (choice === undefined || choice === backOption) return undefined;
 	if (choice === otherOption) {
-		const provider = await promptRequired(ctx, screenTitle(session.loaded, "classifier provider id"), current ?? "");
+		const provider = await promptRequired(
+			ctx,
+			screenTitle(session.loaded, "classifier provider id"),
+			current ?? "",
+		);
 		if (provider === undefined) return undefined;
 		return declaredEndpoint(provider);
 	}
@@ -869,11 +888,7 @@ async function chooseClassifierModel(
 	baseUrl: string | undefined,
 ): Promise<string | undefined> {
 	const prompt = (): Promise<string | undefined> =>
-		promptRequired(
-			ctx,
-			screenTitle(session.loaded, `classifier model id for ${option.provider}`),
-			current ?? "",
-		);
+		promptRequired(ctx, screenTitle(session.loaded, `classifier model id for ${option.provider}`), current ?? "");
 
 	let liveModels: readonly string[] = option.models;
 	if (liveModels.length === 0 && baseUrl !== undefined) {
@@ -888,10 +903,11 @@ async function chooseClassifierModel(
 	if (liveModels.length === 0) return prompt();
 	const otherOption = "Other (type a model id)...";
 	const backOption = "Back";
-	const choice = await ctx.ui.select(
-		screenTitle(session.loaded, `classifier model for ${option.provider}`),
-		[...liveModels, otherOption, backOption],
-	);
+	const choice = await ctx.ui.select(screenTitle(session.loaded, `classifier model for ${option.provider}`), [
+		...liveModels,
+		otherOption,
+		backOption,
+	]);
 	if (choice === undefined || choice === backOption) return undefined;
 	if (choice === otherOption) return prompt();
 	return choice;
@@ -1017,12 +1033,7 @@ async function collectJevFields(
  * as user cancellation). The hint should be the decision-model name when one
  * exists, or the provider id for inline jev.
  */
-function commitSecret(
-	ctx: DialogueContext,
-	session: DialogueSession,
-	hint: string,
-	value: string,
-): string | undefined {
+function commitSecret(ctx: DialogueContext, session: DialogueSession, hint: string, value: string): string | undefined {
 	const name = secretNameFor(hint);
 	try {
 		session.secrets.set(name, value);
@@ -1147,7 +1158,10 @@ async function apiKeyAction(
 	if (choice !== newOption) return { kind: "cancel" }; // an option this flow does not know: back out
 	const value = await promptRequired(
 		ctx,
-		screenTitle(session.loaded, `API key for ${hint} - the store name is derived from the decision model, not shown again`),
+		screenTitle(
+			session.loaded,
+			`API key for ${hint} - the store name is derived from the decision model, not shown again`,
+		),
 		"secret value",
 	);
 	if (value === undefined) return { kind: "cancel" };
@@ -1197,6 +1211,9 @@ async function addVirtualModelWizard(ctx: DialogueContext, session: DialogueSess
 		return;
 	}
 	if (await saveOrRevert(ctx, session)) {
-		ctx.ui.notify(`${id} added with ${fallbacks.length} fallback(s) - use its menu to attach a decision model`, "info");
+		ctx.ui.notify(
+			`${id} added with ${fallbacks.length} fallback(s) - use its menu to attach a decision model`,
+			"info",
+		);
 	}
 }

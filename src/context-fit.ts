@@ -31,7 +31,13 @@
  */
 
 import type { Api, ClassifierContext, ClassifierQuestion, Model } from "@earendil-works/pi-ai";
-import { callClassifier, readChoice, readConfidence, type ClassifierRegistry, type NoClassifierReason } from "./classify.ts";
+import {
+	callClassifier,
+	readChoice,
+	readConfidence,
+	type ClassifierRegistry,
+	type NoClassifierReason,
+} from "./classify.ts";
 import type { JevConfig, ModelId } from "./types.ts";
 
 /**

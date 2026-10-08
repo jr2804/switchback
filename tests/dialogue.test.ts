@@ -40,7 +40,14 @@ import {
 	setDebug,
 	type LoadedLayer,
 } from "../src/config-editor.ts";
-import { describeJev, layerOptionLabel, runDialogue, secretNameFor, type DialogueContext, type DialogueUi } from "../src/dialogue.ts";
+import {
+	describeJev,
+	layerOptionLabel,
+	runDialogue,
+	secretNameFor,
+	type DialogueContext,
+	type DialogueUi,
+} from "../src/dialogue.ts";
 import type { ClassifierProviderOption } from "../src/classifier-catalog.ts";
 import type { ProbeResult } from "../src/classifier-probe.ts";
 import type { JevConfig } from "../src/types.ts";
@@ -69,11 +76,14 @@ debug: false
 `;
 
 /** SAMPLE with a second model so one can be removed without emptying the file. */
-const TWO_MODELS = SAMPLE.replace("decisionModels:", `  - id: switchback/alt
+const TWO_MODELS = SAMPLE.replace(
+	"decisionModels:",
+	`  - id: switchback/alt
     name: Alt
     fallbacks:
       - ollama-cloud/m1
-decisionModels:`);
+decisionModels:`,
+);
 
 /** Invalid YAML (unclosed flow sequence) for the loadLayer error path. */
 const BROKEN_YAML = "models: [unclosed\n";
@@ -140,7 +150,9 @@ class ScriptedUi implements DialogueUi {
 	private readonly inputQueue: Array<string | undefined>;
 	private readonly confirmQueue: boolean[];
 
-	constructor(script: { select?: Array<string | undefined>; input?: Array<string | undefined>; confirm?: boolean[] } = {}) {
+	constructor(
+		script: { select?: Array<string | undefined>; input?: Array<string | undefined>; confirm?: boolean[] } = {},
+	) {
 		this.selectQueue = [...(script.select ?? [])];
 		this.inputQueue = [...(script.input ?? [])];
 		this.confirmQueue = [...(script.confirm ?? [])];
@@ -292,14 +304,18 @@ describe("config-editor: the loader's gate owns every rule", () => {
 		seed(SAMPLE);
 		const loaded = load();
 		setDecisionModel(loaded, "switchback/auto", { decisionModel: "missing" });
-		expect(() => saveLayer(loaded)).toThrow(/not referenced by any model\.jev\.decisionModel|is not defined in decisionModels/);
+		expect(() => saveLayer(loaded)).toThrow(
+			/not referenced by any model\.jev\.decisionModel|is not defined in decisionModels/,
+		);
 	});
 
 	it("rejects removing a still-referenced decision model at save time", () => {
 		seed(SAMPLE);
 		const loaded = load();
 		removeDecisionModel(loaded, "local");
-		expect(() => saveLayer(loaded)).toThrow(/not referenced by any model\.jev\.decisionModel|is not defined in decisionModels/);
+		expect(() => saveLayer(loaded)).toThrow(
+			/not referenced by any model\.jev\.decisionModel|is not defined in decisionModels/,
+		);
 	});
 
 	it("reads an invalid file through the loader's message and refuses to open it", () => {
@@ -361,7 +377,13 @@ describe("dialogue", () => {
 
 	it("walks the add-virtual-model wizard into a saved file", async () => {
 		const ui = new ScriptedUi({
-			select: [layerOptionLabel("global"), "Add virtual model...", "Add fallback...", "Done (needs at least one)", "Done"],
+			select: [
+				layerOptionLabel("global"),
+				"Add virtual model...",
+				"Add fallback...",
+				"Done (needs at least one)",
+				"Done",
+			],
 			input: ["auto", "Auto (fast)", "zai/glm-5.3"],
 		});
 		await run(ui);
@@ -375,7 +397,13 @@ describe("dialogue", () => {
 	it("reverts a failed wizard (duplicate id) and leaves the file unchanged", async () => {
 		seed(SAMPLE);
 		const ui = new ScriptedUi({
-			select: [layerOptionLabel("global"), "Add virtual model...", "Add fallback...", "Done (needs at least one)", "Done"],
+			select: [
+				layerOptionLabel("global"),
+				"Add virtual model...",
+				"Add fallback...",
+				"Done (needs at least one)",
+				"Done",
+			],
 			input: ["auto", "Dup", "zai/glm-5.3"],
 		});
 		await run(ui);
@@ -385,13 +413,9 @@ describe("dialogue", () => {
 
 	it("toggles debug on and back off", async () => {
 		seed(SAMPLE);
-		await run(
-			new ScriptedUi({ select: [layerOptionLabel("global"), "Toggle debug (currently off)", "Done"] }),
-		);
+		await run(new ScriptedUi({ select: [layerOptionLabel("global"), "Toggle debug (currently off)", "Done"] }));
 		expect(readLayerConfig(load()).debug).toBe(true);
-		await run(
-			new ScriptedUi({ select: [layerOptionLabel("global"), "Toggle debug (currently on)", "Done"] }),
-		);
+		await run(new ScriptedUi({ select: [layerOptionLabel("global"), "Toggle debug (currently on)", "Done"] }));
 		expect(readLayerConfig(load()).debug).toBe(false);
 	});
 
@@ -399,13 +423,23 @@ describe("dialogue", () => {
 		seed(SAMPLE);
 		await run(
 			new ScriptedUi({
-				select: [layerOptionLabel("global"), MODEL_LABEL, "Edit fallbacks (2)", "Move down...", "1. zai/glm-5.3", "Done", "Back", "Done"],
+				select: [
+					layerOptionLabel("global"),
+					MODEL_LABEL,
+					"Edit fallbacks (2)",
+					"Move down...",
+					"1. zai/glm-5.3",
+					"Done",
+					"Back",
+					"Done",
+				],
 			}),
 		);
 		expect(readLayerConfig(load()).models[0]?.fallbacks).toEqual(["minimax/MiniMax-M3", "zai/glm-5.3"]);
 		await run(
 			new ScriptedUi({
-				select: [layerOptionLabel("global"), 
+				select: [
+					layerOptionLabel("global"),
 					"switchback/auto - Auto",
 					"Edit fallbacks (2)",
 					"Remove fallback...",
@@ -420,9 +454,17 @@ describe("dialogue", () => {
 	});
 
 	it("guards the last remaining fallback", async () => {
-		seed(`models:\n  - id: switchback/auto\n    name: Auto\n    fallbacks:\n      - zai/glm-5.3\n`);
+		seed("models:\n  - id: switchback/auto\n    name: Auto\n    fallbacks:\n      - zai/glm-5.3\n");
 		const ui = new ScriptedUi({
-			select: [layerOptionLabel("global"), MODEL_LABEL, "Edit fallbacks (1)", "Remove fallback...", undefined, undefined, "Done"],
+			select: [
+				layerOptionLabel("global"),
+				MODEL_LABEL,
+				"Edit fallbacks (1)",
+				"Remove fallback...",
+				undefined,
+				undefined,
+				"Done",
+			],
 		});
 		await run(ui);
 		expect(ui.notifications.some((n) => n.message.includes("at least one fallback"))).toBe(true);
@@ -433,7 +475,8 @@ describe("dialogue", () => {
 		seed(SAMPLE);
 		const store = new FakeSecretStore();
 		const ui = new ScriptedUi({
-			select: [layerOptionLabel("global"),
+			select: [
+				layerOptionLabel("global"),
 				"Decision models (1)...",
 				"Add decision model...",
 				"New secret...",
@@ -464,7 +507,15 @@ describe("dialogue", () => {
 	it("blocks deleting a decision model that is still referenced", async () => {
 		seed(SAMPLE);
 		const ui = new ScriptedUi({
-			select: [layerOptionLabel("global"), "Decision models (1)...", "local - ollama/tev1", "Delete", undefined, undefined, "Done"],
+			select: [
+				layerOptionLabel("global"),
+				"Decision models (1)...",
+				"local - ollama/tev1",
+				"Delete",
+				undefined,
+				undefined,
+				"Done",
+			],
 		});
 		await run(ui);
 		expect(ui.notifications.some((n) => n.message.includes("still referenced"))).toBe(true);
@@ -528,7 +579,13 @@ describe("dialogue", () => {
 	it("edits the project layer when <cwd>/.pi exists", async () => {
 		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
 		const ui = new ScriptedUi({
-			select: [layerOptionLabel("project"), "Add virtual model...", "Add fallback...", "Done (needs at least one)", "Done"],
+			select: [
+				layerOptionLabel("project"),
+				"Add virtual model...",
+				"Add fallback...",
+				"Done (needs at least one)",
+				"Done",
+			],
 			input: ["auto", "Auto (project)", "zai/glm-5.3"],
 		});
 		await run(ui);
@@ -601,7 +658,15 @@ describe("dialogue: catalog-assisted setup", () => {
 		const picked: { title: string; current: readonly string[] }[] = [];
 		await run(
 			new ScriptedUi({
-				select: [layerOptionLabel("global"), MODEL_LABEL, "Edit fallbacks (2)", "Add fallback...", "Done", "Back", "Done"],
+				select: [
+					layerOptionLabel("global"),
+					MODEL_LABEL,
+					"Edit fallbacks (2)",
+					"Add fallback...",
+					"Done",
+					"Back",
+					"Done",
+				],
 			}),
 			undefined,
 			{
@@ -629,7 +694,15 @@ describe("dialogue: catalog-assisted setup", () => {
 			// resolution), modelId (from the provider's own classifier list), then the
 			// name LAST. There is no apiKey step: pi holds the credential, so
 			// switchback neither asks for one nor writes a secret reference.
-			select: [layerOptionLabel("global"), "Decision models (1)...", "Add decision model...", CATALOG_PROVIDER.label, "jev-latest", "Back", "Done"],
+			select: [
+				layerOptionLabel("global"),
+				"Decision models (1)...",
+				"Add decision model...",
+				CATALOG_PROVIDER.label,
+				"jev-latest",
+				"Back",
+				"Done",
+			],
 			input: ["", "dm2"],
 			confirm: [true],
 		});
@@ -670,8 +743,22 @@ describe("dialogue: catalog-assisted setup", () => {
 			const ui = new ScriptedUi({
 				// provider ("Other"), provider id, baseUrl, modelId (live list),
 				// apiKey action, apiKey value, name LAST.
-				select: [layerOptionLabel("global"), "Decision models (1)...", "Add decision model...", "Other (type a provider id)...", "tev1:0.8b", "New secret...", "Back", "Done"],
-				input: ["local-ollama", "http://localhost:11434/v1", "sk-switchback-TESTVALUE-42-not-a-real-key", "dm3"],
+				select: [
+					layerOptionLabel("global"),
+					"Decision models (1)...",
+					"Add decision model...",
+					"Other (type a provider id)...",
+					"tev1:0.8b",
+					"New secret...",
+					"Back",
+					"Done",
+				],
+				input: [
+					"local-ollama",
+					"http://localhost:11434/v1",
+					"sk-switchback-TESTVALUE-42-not-a-real-key",
+					"dm3",
+				],
 			});
 			await run(ui, store, { classifierProviders: [CATALOG_PROVIDER] });
 			const entry = readLayerConfig(load()).decisionModels?.find((d) => d.name === "dm3");
@@ -692,7 +779,16 @@ describe("dialogue: catalog-assisted setup", () => {
 			new ScriptedUi({
 				// Wizard order: provider, model id (from the catalog list), apiKey
 				// action "(no API key)", baseUrl (Enter = keep pi's catalog), name LAST.
-				select: [layerOptionLabel("global"), "Decision models (1)...", "Add decision model...", CATALOG_PROVIDER.label, "jev-1.13", "(no API key)", "Back", "Done"],
+				select: [
+					layerOptionLabel("global"),
+					"Decision models (1)...",
+					"Add decision model...",
+					CATALOG_PROVIDER.label,
+					"jev-1.13",
+					"(no API key)",
+					"Back",
+					"Done",
+				],
 				input: ["", "dm4"],
 			}),
 			undefined,
@@ -708,8 +804,8 @@ describe("describeJev", () => {
 	it("formats none, reference and inline forms", () => {
 		expect(describeJev(undefined)).toBe("(none - report and cycle)");
 		expect(describeJev({ decisionModel: "x" })).toBe('decision model "x"');
-		expect(
-			describeJev({ provider: "ollama", id: "tev1", baseUrl: "http://localhost:11434/v1" }),
-		).toBe("ollama/tev1 (direct: http://localhost:11434/v1)");
+		expect(describeJev({ provider: "ollama", id: "tev1", baseUrl: "http://localhost:11434/v1" })).toBe(
+			"ollama/tev1 (direct: http://localhost:11434/v1)",
+		);
 	});
 });

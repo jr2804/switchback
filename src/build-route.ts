@@ -22,7 +22,12 @@ import type { ExtensionContext, ModelRoute, ModelRouteRequest } from "@earendil-
 import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import type { Api, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { AvailabilityRegistry } from "./availability.ts";
-import { availableCategories, chooseThinkingLevel, type ThinkingLevelContext, type ThinkingLevelSource } from "./thinking.ts";
+import {
+	availableCategories,
+	chooseThinkingLevel,
+	type ThinkingLevelContext,
+	type ThinkingLevelSource,
+} from "./thinking.ts";
 import type { ModelId, ResolvedSwitchbackConfig, SwitchbackState } from "./types.ts";
 
 /** The subset of the pi modelRegistry that the router needs. */
@@ -95,8 +100,7 @@ export async function resolveDispatchLevel(
 	// A manual change (sticky `user`/`direct`) only needs resolution when the staying
 	// model cannot express the requested category at all; every other sticky route is
 	// left untouched (the level is part of the thinking signature / prompt cache).
-	const isStickyManualChange =
-		kind === "stick" && (request.reason === "user" || request.reason === "direct");
+	const isStickyManualChange = kind === "stick" && (request.reason === "user" || request.reason === "direct");
 	if (!isStickyManualChange && kind === "stick") return outcome;
 	const requested = outcome.thinkingLevel;
 	const context: ThinkingLevelContext = {
@@ -123,7 +127,12 @@ export async function resolveDispatchLevel(
 			? `stays on ${outcome.decision.modelId}`
 			: `switch ${from} → ${outcome.decision.modelId}`;
 		const conf = choice.confidence === undefined ? "" : `, confidence ${choice.confidence.toFixed(2)}`;
-		const source = choice.source === "classifier" ? `classifier${conf}` : choice.reason === undefined ? "clamp" : `clamp (${choice.reason})`;
+		const source =
+			choice.source === "classifier"
+				? `classifier${conf}`
+				: choice.reason === undefined
+					? "clamp"
+					: `clamp (${choice.reason})`;
 		inputs.notify?.(
 			`switchback: ${head} [${outcome.decision.reason}] · level ${requested} → ${choice.level} (${source}; model offers: ${availableCategories(model).join(", ")})`,
 			"info",
@@ -153,7 +162,10 @@ export function buildRoute(
 		throw new Error(`switchback: ${decision.reason}`);
 	}
 	const model = lookupModel(registry, decision.modelId);
-	if (!model) throw new Error(`switchback: model "${decision.modelId}" not in catalog (lost between decide() and buildRoute())`);
+	if (!model)
+		throw new Error(
+			`switchback: model "${decision.modelId}" not in catalog (lost between decide() and buildRoute())`,
+		);
 	// Clamp to the routed model. A virtual level the physical model does not implement
 	// (zai has no "medium" and cannot disable thinking at all) is otherwise sent as the
 	// provider default, which is what makes "I changed reasoning effort and nothing
@@ -167,7 +179,9 @@ export function buildRoute(
 export class ConfigInvalidError extends Error {
 	readonly decision: Extract<Decision, { kind: "config-invalid" }>;
 	constructor(decision: Extract<Decision, { kind: "config-invalid" }>) {
-		super(`switchback: config invalid (${decision.reason}); effective=[${decision.effective.join(", ")}] greyed=[${decision.greyed.map((g) => `${g.id}:${g.reason}`).join(", ")}]`);
+		super(
+			`switchback: config invalid (${decision.reason}); effective=[${decision.effective.join(", ")}] greyed=[${decision.greyed.map((g) => `${g.id}:${g.reason}`).join(", ")}]`,
+		);
 		this.name = "ConfigInvalidError";
 		this.decision = decision;
 	}

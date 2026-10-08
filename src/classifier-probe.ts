@@ -158,7 +158,7 @@ export interface ProbeResult {
 export function summarizeProbe(result: ClassifierResult, ms: number): ProbeResult {
 	const answers = readProbeAnswers(result);
 	const missing = missingProbeShapes(answers);
-	const error = result.stopReason === "error" ? result.errorMessage ?? "classifier reported an error" : undefined;
+	const error = result.stopReason === "error" ? (result.errorMessage ?? "classifier reported an error") : undefined;
 	return {
 		ok: missing.length === 0 && error === undefined,
 		answers,
@@ -169,10 +169,7 @@ export function summarizeProbe(result: ClassifierResult, ms: number): ProbeResul
 }
 
 /** Human-readable one-block report for `ui.notify`. */
-export function formatProbeReport(opts: {
-	label: string;
-	result: ProbeResult;
-}): string {
+export function formatProbeReport(opts: { label: string; result: ProbeResult }): string {
 	const { label, result } = opts;
 	const lines = [
 		`switchback decision-model test: ${label} (${result.ms} ms)`,
@@ -183,7 +180,7 @@ export function formatProbeReport(opts: {
 	if (result.error !== undefined) lines.push(`  error   ${result.error}`);
 	if (!result.ok && result.error === undefined) {
 		lines.push(
-			`  the endpoint answered, but not in all three shapes - the model may not be a System One decision model`,
+			"  the endpoint answered, but not in all three shapes - the model may not be a System One decision model",
 		);
 	}
 	return lines.join("\n");

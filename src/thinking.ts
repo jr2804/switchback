@@ -36,7 +36,13 @@
 
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { Api, ClassifierContext, ClassifierQuestion, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { callClassifier, readChoice, readConfidence, type ClassifierRegistry, type NoClassifierReason } from "./classify.ts";
+import {
+	callClassifier,
+	readChoice,
+	readConfidence,
+	type ClassifierRegistry,
+	type NoClassifierReason,
+} from "./classify.ts";
 
 /**
  * The reasoning levels every switchback virtual model offers, independent of
@@ -131,8 +137,7 @@ export async function chooseThinkingLevel(opts: {
 
 	const criteria: ClassifierQuestion = {
 		type: "choice",
-		instructions:
-			`Choose the reasoning effort to use for the requested work. The user selected "${opts.requested}" on switchback's category scale (${SWITCHBACK_THINKING_LEVELS.join(", ")}). This model does not implement every category, so choose the supported level that best matches the user's intent and the work described in the state.`,
+		instructions: `Choose the reasoning effort to use for the requested work. The user selected "${opts.requested}" on switchback's category scale (${SWITCHBACK_THINKING_LEVELS.join(", ")}). This model does not implement every category, so choose the supported level that best matches the user's intent and the work described in the state.`,
 		criteria: Object.fromEntries(available.map((level) => [level, LEVEL_CRITERIA[level] ?? level])),
 	};
 	const state: ClassifierContext["state"] = {
@@ -157,5 +162,9 @@ export async function chooseThinkingLevel(opts: {
 		return { level: fallback, source: "requested", reason: "unparseable" };
 	}
 	const confidence = readConfidence(call.result, "level");
-	return { level: answer as ModelThinkingLevel, source: "classifier", ...(confidence !== undefined ? { confidence } : {}) };
+	return {
+		level: answer as ModelThinkingLevel,
+		source: "classifier",
+		...(confidence !== undefined ? { confidence } : {}),
+	};
 }

@@ -57,8 +57,15 @@
  * `crashes.json` so a future bump to v1.1 can invalidate stale verdicts.
  */
 
-import type { ClassifierAnswer, ClassifierApi, ClassifierContext, ClassifierModel, ClassifierResult, StopReason } from "@earendil-works/pi-ai";
-import { hashSample, lookupCrash } from "./crashes.ts";
+import type {
+	ClassifierAnswer,
+	ClassifierApi,
+	ClassifierContext,
+	ClassifierModel,
+	ClassifierResult,
+	StopReason,
+} from "@earendil-works/pi-ai";
+import { lookupCrash } from "./crashes.ts";
 import { classifierState } from "./systemone.ts";
 import type { ClassifiedError, ErrorClass, ErrorScope } from "./types.ts";
 
@@ -128,7 +135,7 @@ function clampReset(at: number, now: number): number {
  * rejected request yields no answers at all, so every message classifies as
  * `unknown`. Keep the rubric at or below this.
  */
-const MAX_SCORE_LEVELS = 10;
+export const MAX_SCORE_LEVELS = 10;
 
 /**
  * The reset rubric. A SystemOne `score` question answers with the
@@ -182,8 +189,10 @@ const JEV_QUESTIONS = {
 		criteria: {
 			quota: "Rejection for hitting a 5h/daily/weekly/monthly token, request-rate, or capacity budget. May mention quota, usage, rate limit, exhausted, exceeded, 429.",
 			auth: "Rejection for invalid credentials, missing key, account suspended/disabled, payment required, 401/403.",
-			transient: "Network failure, timeout, 5xx server error, or a 'try again' message indicating a recoverable infrastructure issue.",
-			overflow: "Input context window exceeded: the request was too long for the model's context. May mention context, window, length, prompt, input too long.",
+			transient:
+				"Network failure, timeout, 5xx server error, or a 'try again' message indicating a recoverable infrastructure issue.",
+			overflow:
+				"Input context window exceeded: the request was too long for the model's context. May mention context, window, length, prompt, input too long.",
 			unknown: "Anything that does not clearly fit the four categories above.",
 		},
 	},
@@ -278,19 +287,22 @@ function fromJevResult(message: string, result: unknown, now: number): Classifie
 	if (!answers || typeof answers !== "object") return null;
 	const a = answers as Record<string, unknown>;
 	const classAnswer = a["class"];
-	const classChoice = typeof classAnswer === "object" && classAnswer !== null && "choice" in classAnswer
-		? (classAnswer as Record<string, unknown>)["choice"]
-		: undefined;
+	const classChoice =
+		typeof classAnswer === "object" && classAnswer !== null && "choice" in classAnswer
+			? (classAnswer as Record<string, unknown>)["choice"]
+			: undefined;
 	const cls = normaliseClass(classChoice);
 	const scopeAnswer = a["scope"];
-	const scopeChoice = typeof scopeAnswer === "object" && scopeAnswer !== null && "choice" in scopeAnswer
-		? (scopeAnswer as Record<string, unknown>)["choice"]
-		: undefined;
+	const scopeChoice =
+		typeof scopeAnswer === "object" && scopeAnswer !== null && "choice" in scopeAnswer
+			? (scopeAnswer as Record<string, unknown>)["choice"]
+			: undefined;
 	const scope = normaliseScope(scopeChoice);
 	const resetAnswer = a["reset"];
-	const resetScore = typeof resetAnswer === "object" && resetAnswer !== null && "score" in resetAnswer
-		? (resetAnswer as Record<string, unknown>)["score"]
-		: undefined;
+	const resetScore =
+		typeof resetAnswer === "object" && resetAnswer !== null && "score" in resetAnswer
+			? (resetAnswer as Record<string, unknown>)["score"]
+			: undefined;
 	const resetAtMs = scoreToResetAtMs(resetScore, now);
 	return {
 		class: cls,
@@ -305,20 +317,14 @@ function fromJevResult(message: string, result: unknown, now: number): Classifie
  * Reasons a classifier decision was unavailable. Surfaced to the caller and
  * the UI so the user knows the router is operating without classification.
  */
-export type NoClassifierReason =
-	| "not-configured"
-	| "unresolvable"
-	| "timeout"
-	| "threw"
-	| "unparseable";
+export type NoClassifierReason = "not-configured" | "unresolvable" | "timeout" | "threw" | "unparseable";
 
 /**
  * The result of one classification attempt. `null` means "no classifier
  * decision available"; the caller should report and cycle.
  */
 export type ClassificationResult =
-	| { kind: "classified"; classified: ClassifiedError }
-	| { kind: "no-classifier"; reason: NoClassifierReason };
+	{ kind: "classified"; classified: ClassifiedError } | { kind: "no-classifier"; reason: NoClassifierReason };
 
 /**
  * The result of one classifier call, before any interpretation.
@@ -327,8 +333,7 @@ export type ClassificationResult =
  * answer was obtained. Never a thrown error: every failure mode is a reason.
  */
 export type ClassifierCallResult =
-	| { kind: "answer"; result: ClassifierResult }
-	| { kind: "no-classifier"; reason: NoClassifierReason };
+	{ kind: "answer"; result: ClassifierResult } | { kind: "no-classifier"; reason: NoClassifierReason };
 
 /**
  * Resolve the configured classifier and ask it one set of questions.

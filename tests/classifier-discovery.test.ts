@@ -7,11 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import {
-	decisionCapableModels,
-	discoverOllamaModels,
-	OllamaModelSummary,
-} from "../src/classifier-discovery.ts";
+import { decisionCapableModels, discoverOllamaModels, OllamaModelSummary } from "../src/classifier-discovery.ts";
 import type { FetchLike } from "../src/systemone.ts";
 
 const MODELS: OllamaModelSummary[] = [
@@ -22,7 +18,7 @@ const MODELS: OllamaModelSummary[] = [
 
 /** A fetch that ignores the URL and returns a canned `/api/tags` body. */
 function fakeTagsFetch(body: unknown): FetchLike {
-	return async (url) => ({
+	return async () => ({
 		ok: true,
 		status: 200,
 		text: async () => JSON.stringify(body),

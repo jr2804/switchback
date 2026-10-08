@@ -170,7 +170,7 @@ export function readPinMap(path: string = pinFilePath()): PinMap {
 /** The pinned physical model for a virtual model, when one is set. */
 export function getPinnedModel(virtualId: string, path: string = pinFilePath()): ModelId | undefined {
 	const pin = readPinRaw(path)[virtualId];
-	return pin === undefined ? undefined : pin ?? undefined;
+	return pin === undefined ? undefined : (pin ?? undefined);
 }
 
 /** Set (or clear, with null) the pinned physical model for a virtual model. */

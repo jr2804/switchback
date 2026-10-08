@@ -31,12 +31,19 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { decide, buildRoute, observeUnretriedFailure, MAX_TRANSIENT_RETRIES, type Decision, type RouterRegistry } from "../src/routing.ts";
+import {
+	decide,
+	buildRoute,
+	observeUnretriedFailure,
+	MAX_TRANSIENT_RETRIES,
+	type Decision,
+	type RouterRegistry,
+} from "../src/routing.ts";
 import { readCrashMap } from "../src/crashes.ts";
-import { stateFilePath, readBlockedMap, isBlocked, unblockModel, blockModel, getPinnedModel, setPinnedModel } from "../src/state.ts";
+import { stateFilePath, readBlockedMap, isBlocked, unblockModel, blockModel, setPinnedModel } from "../src/state.ts";
 import { simulateRetry, loadSimulate, getScenario, SimulateError } from "../src/simulate.ts";
 import { findModelConfig, loadConfig } from "../src/config.ts";
-import { callClassifier, classifyError, type NoClassifierReason } from "../src/classify.ts";
+import { callClassifier, classifyError, MAX_SCORE_LEVELS, type NoClassifierReason } from "../src/classify.ts";
 import { ConfigInvalidError } from "../src/routing.ts";
 import type { SwitchbackConfig } from "../src/types.ts";
 
@@ -88,7 +95,9 @@ interface FakeRegistryOpts {
 	candidateAnswer?: string;
 }
 
-function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: (...args: unknown[]) => Promise<unknown> } {
+function makeFakeRegistry(
+	opts: FakeRegistryOpts,
+): RouterRegistry & { classify: (...args: unknown[]) => Promise<unknown> } {
 	const byKey = new Map<string, Model<Api>>();
 	const providers = new Set<string>();
 	for (const e of opts.entries) {
@@ -113,7 +122,14 @@ function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: 
 	// returns. Tests that want the classifier path to be exercisable must set
 	// answer / throw / hang / unparseable; tests that want the no-classifier path
 	// leave those unset and findOfType returns undefined.
-	const classifierConfigured = opts.answer !== undefined || opts.throw !== undefined || opts.hang === true || opts.unparseable === true || opts.levelAnswer !== undefined || opts.idleAnswer !== undefined || opts.candidateAnswer !== undefined;
+	const classifierConfigured =
+		opts.answer !== undefined ||
+		opts.throw !== undefined ||
+		opts.hang === true ||
+		opts.unparseable === true ||
+		opts.levelAnswer !== undefined ||
+		opts.idleAnswer !== undefined ||
+		opts.candidateAnswer !== undefined;
 	const fakeClassifierHandle = classifierConfigured
 		? { provider: "typesafe", id: "jev-latest", api: "classifier" as const, input: ["text" as const] }
 		: undefined;
@@ -123,13 +139,20 @@ function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: 
 		},
 		findOfType(_type: string, provider: string, id: string): Model<Api> | undefined {
 			if (fakeClassifierHandle === undefined) return undefined;
-			if (provider === fakeClassifierHandle.provider && id === fakeClassifierHandle.id) return fakeClassifierHandle as unknown as Model<Api>;
+			if (provider === fakeClassifierHandle.provider && id === fakeClassifierHandle.id)
+				return fakeClassifierHandle as unknown as Model<Api>;
 			return undefined;
 		},
-		hasConfiguredAuth(): boolean { return true; },
+		hasConfiguredAuth(): boolean {
+			return true;
+		},
 		getProviderAuthStatus(provider: string): { configured: boolean; source?: string; label?: string } {
 			const configured = opts.auth?.[provider] ?? providers.has(provider);
-			return { configured, source: configured ? "environment" : undefined, label: configured ? "fake-credentials" : "no-credentials" };
+			return {
+				configured,
+				source: configured ? "environment" : undefined,
+				label: configured ? "fake-credentials" : "no-credentials",
+			};
 		},
 		classify: async (_model: unknown, context: unknown) => {
 			const questions = (context as { questions?: Record<string, unknown> } | undefined)?.questions ?? {};
@@ -141,7 +164,9 @@ function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: 
 				if (opts.levelAnswer === undefined) return null;
 				return {
 					stopReason: "stop" as const,
-					answers: { level: { type: "choice" as const, choice: opts.levelAnswer, probabilities: {}, confidence: 1 } },
+					answers: {
+						level: { type: "choice" as const, choice: opts.levelAnswer, probabilities: {}, confidence: 1 },
+					},
 				};
 			}
 			// The idle-reset question is its own prompt (src/idle.ts), answered
@@ -151,7 +176,12 @@ function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: 
 				return {
 					stopReason: "stop" as const,
 					answers: {
-						idle_reset: { type: "choice" as const, choice: opts.idleAnswer, probabilities: {}, confidence: 1 },
+						idle_reset: {
+							type: "choice" as const,
+							choice: opts.idleAnswer,
+							probabilities: {},
+							confidence: 1,
+						},
 					},
 				};
 			}
@@ -162,7 +192,12 @@ function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: 
 				return {
 					stopReason: "stop" as const,
 					answers: {
-						candidate: { type: "choice" as const, choice: opts.candidateAnswer, probabilities: {}, confidence: 1 },
+						candidate: {
+							type: "choice" as const,
+							choice: opts.candidateAnswer,
+							probabilities: {},
+							confidence: 1,
+						},
 					},
 				};
 			}
@@ -176,7 +211,12 @@ function makeFakeRegistry(opts: FakeRegistryOpts): RouterRegistry & { classify: 
 			if (opts.answer === undefined || opts.answer === null) return null;
 			const answers: Record<string, unknown> = {
 				class: { type: "choice" as const, choice: opts.answer.class, probabilities: {}, confidence: 1 },
-				scope: { type: "choice" as const, choice: opts.answer.scope ?? "unknown", probabilities: {}, confidence: 1 },
+				scope: {
+					type: "choice" as const,
+					choice: opts.answer.scope ?? "unknown",
+					probabilities: {},
+					confidence: 1,
+				},
 			};
 			if (opts.answer.resetScore !== undefined) {
 				answers["reset"] = { type: "score" as const, score: opts.answer.resetScore };
@@ -236,7 +276,12 @@ const MINIMAX_TOKEN_PLAN_MESSAGE =
 function buildFakeRequest(overrides: {
 	reason: "user" | "continuation" | "retry" | "direct";
 	previous?: { provider: string; id: string };
-	failed?: { provider: string; id: string; errorMessage: string; stopReason?: "error" | "length" | "aborted" | "stop" | "toolUse" | "deferred" | "pending" };
+	failed?: {
+		provider: string;
+		id: string;
+		errorMessage: string;
+		stopReason?: "error" | "length" | "aborted" | "stop" | "toolUse" | "deferred" | "pending";
+	};
 	stateCurrent?: string;
 	transientRetries?: number;
 	/** When true the branch has no router state yet (first request of a session). */
@@ -277,17 +322,25 @@ function buildFakeRequest(overrides: {
 							api: "openai-completions" as const,
 							provider: overrides.failed.provider,
 							model: overrides.failed.id,
-							usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-							stopReason: overrides.failed.stopReason ?? "error" as const,
+							usage: {
+								input: 0,
+								output: 0,
+								cacheRead: 0,
+								cacheWrite: 0,
+								totalTokens: 0,
+								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+							},
+							stopReason: overrides.failed.stopReason ?? ("error" as const),
 							errorMessage: overrides.failed.errorMessage,
 							timestamp: Date.now(),
 						},
 					},
 				}
 			: {}),
-		messages: overrides.lastMessageAt === undefined ? [] : [
-			{ role: "user" as const, content: "hello", timestamp: overrides.lastMessageAt },
-		],
+		messages:
+			overrides.lastMessageAt === undefined
+				? []
+				: [{ role: "user" as const, content: "hello", timestamp: overrides.lastMessageAt }],
 		...(overrides.noState
 			? {}
 			: {
@@ -416,7 +469,13 @@ describe("router — continuation reason", () => {
 });
 
 describe("router — retry reason: blind cycle (no classifier)", () => {
-	const noClassifierReasons: NoClassifierReason[] = ["not-configured", "unresolvable", "timeout", "threw", "unparseable"];
+	const noClassifierReasons: NoClassifierReason[] = [
+		"not-configured",
+		"unresolvable",
+		"timeout",
+		"threw",
+		"unparseable",
+	];
 
 	for (const reason of noClassifierReasons) {
 		it(`cycles to the next effective model on no-classifier (${reason})`, { timeout: 15_000 }, async () => {
@@ -447,7 +506,11 @@ describe("router — retry reason: blind cycle (no classifier)", () => {
 				failed: { provider: "zai", id: "glm-4.7", errorMessage: "anything goes; no classification happens" },
 			});
 			const now = Date.now();
-			const result = await decide("retry", request, modelConfig, registry, { now, blocked: {}, notify: () => {} });
+			const result = await decide("retry", request, modelConfig, registry, {
+				now,
+				blocked: {},
+				notify: () => {},
+			});
 			expect(result.decision.kind).toBe("switch");
 			if (result.decision.kind === "switch") {
 				expect(result.decision.modelId).toBe("ollama-cloud/pro");
@@ -480,7 +543,11 @@ describe("router — retry reason: blind cycle (no classifier)", () => {
 			reason: "retry",
 			failed: { provider: "zai", id: "glm-4.7", errorMessage: "any message" },
 		});
-		await decide("retry", request, FALLBACKS, registry, { now: Date.now(), blocked: {}, notify: (message, type) => notifications.push({ message, type }) });
+		await decide("retry", request, FALLBACKS, registry, {
+			now: Date.now(),
+			blocked: {},
+			notify: (message, type) => notifications.push({ message, type }),
+		});
 		expect(notifications.length).toBe(1);
 		expect(notifications[0]!.type).toBe("warning");
 		expect(notifications[0]!.message).toMatch(/no classifier decision/);
@@ -502,7 +569,11 @@ describe("router — retry reason: blind cycle (no classifier)", () => {
 		for (const failedId of ["zai/glm-4.7", "ollama-cloud/pro"] as const) {
 			const request = buildFakeRequest({
 				reason: "retry",
-				failed: { provider: failedId.split("/")[0]!, id: failedId.split("/")[1]!, errorMessage: "still nothing" },
+				failed: {
+					provider: failedId.split("/")[0]!,
+					id: failedId.split("/")[1]!,
+					errorMessage: "still nothing",
+				},
 			});
 			await decide("retry", request, FALLBACKS, registry, { now: Date.now(), blocked: {}, notify: () => {} });
 		}
@@ -515,9 +586,21 @@ describe("router — retry reason: classifier says quota", () => {
 	for (const scenario of [
 		// resetScore is a RESET_RUBRIC index (0..8), not a percentage: e.g. 4
 		// is "about 6 hours", which is the closest level to a 5-hour window.
-		{ name: "z.ai 5h hit", message: "429 Too Many Requests: z.ai GLM 5h window exceeded. Resets at 2026-10-04T15:30:00Z.", resetScore: 4 },
-		{ name: "ollama-cloud weekly", message: "429: weekly token limit exhausted for ollama-cloud. Try again in 1d 2h.", resetScore: 5.1 },
-		{ name: "opencode-go monthly", message: "Rate limit reached: opencode-go monthly cap. Retry after 30s.", resetScore: 1 },
+		{
+			name: "z.ai 5h hit",
+			message: "429 Too Many Requests: z.ai GLM 5h window exceeded. Resets at 2026-10-04T15:30:00Z.",
+			resetScore: 4,
+		},
+		{
+			name: "ollama-cloud weekly",
+			message: "429: weekly token limit exhausted for ollama-cloud. Try again in 1d 2h.",
+			resetScore: 5.1,
+		},
+		{
+			name: "opencode-go monthly",
+			message: "Rate limit reached: opencode-go monthly cap. Retry after 30s.",
+			resetScore: 1,
+		},
 	]) {
 		it(`blocks failed model and switches next: ${scenario.name}`, async () => {
 			const registry = makeFakeRegistry({
@@ -727,7 +810,17 @@ describe("step 8 — catalog validity & degraded lists", () => {
 		const dynamicRegistry = {
 			find(provider: string, modelId: string): Model<Api> | undefined {
 				if (registered && provider === "zai" && modelId === "glm-4.7") {
-					return { provider: "zai", id: "glm-4.7", api: "openai-completions", baseUrl: "x", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, contextWindow: 128_000, maxTokens: 16_000 } as unknown as Model<Api>;
+					return {
+						provider: "zai",
+						id: "glm-4.7",
+						api: "openai-completions",
+						baseUrl: "x",
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						contextWindow: 128_000,
+						maxTokens: 16_000,
+					} as unknown as Model<Api>;
 				}
 				return undefined;
 			},
@@ -737,11 +830,20 @@ describe("step 8 — catalog validity & degraded lists", () => {
 			classify: async () => null,
 		} as unknown as Parameters<typeof decide>[3];
 
-		const r1 = await decide("user", buildFakeRequest({ reason: "user" }), FALLBACKS, dynamicRegistry, { now: 1, blocked: {} });
+		const r1 = await decide("user", buildFakeRequest({ reason: "user" }), FALLBACKS, dynamicRegistry, {
+			now: 1,
+			blocked: {},
+		});
 		expect(r1.decision.kind).toBe("config-invalid");
 
 		registered = true;
-		const r2 = await decide("user", buildFakeRequest({ reason: "user", stateCurrent: "nonexistent/model" }), FALLBACKS, dynamicRegistry, { now: 2, blocked: {} });
+		const r2 = await decide(
+			"user",
+			buildFakeRequest({ reason: "user", stateCurrent: "nonexistent/model" }),
+			FALLBACKS,
+			dynamicRegistry,
+			{ now: 2, blocked: {} },
+		);
 		expect(r2.decision.kind).toBe("switch");
 		if (r2.decision.kind === "switch") {
 			expect(r2.decision.modelId).toBe("zai/glm-4.7");
@@ -865,7 +967,13 @@ describe("simulate mode — end-to-end", () => {
 		const notifications: { message: string; type: "info" | "warning" | "error" }[] = [];
 		const cfg = loadSimulate(fixturePath);
 		const message = getScenario(cfg, "auth-zai-token-expired")!;
-		const result = await simulateRetry(message, FALLBACKS, registry, { notify: (msg, type) => notifications.push({ message: msg, type }) }, Date.now());
+		const result = await simulateRetry(
+			message,
+			FALLBACKS,
+			registry,
+			{ notify: (msg, type) => notifications.push({ message: msg, type }) },
+			Date.now(),
+		);
 		expect(result.decision.kind).toBe("switch");
 		if (result.decision.kind === "switch") {
 			expect(result.decision.reason.startsWith("blind-cycle-")).toBe(true);
@@ -878,7 +986,10 @@ describe("F2 — context overflow (pi's typed stopReason)", () => {
 	it("structured stopReason='length' short-circuits to overflow regardless of message text", async () => {
 		// The message body has "exceeded" but the typed stopReason wins.
 		const registry = makeFakeRegistry({
-			entries: [{ provider: "zai", id: "glm-4.7" }, { provider: "ollama-cloud", id: "pro" }],
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			],
 		});
 		const result = await classifyError(
 			"Request exceeded the context window of 128k tokens.",
@@ -946,7 +1057,12 @@ describe("classifyError — direct unit tests for the three branches", () => {
 			findOfType: () => ({ provider: "typesafe", id: "jev-latest", api: "classifier" }),
 			classify: async () => ({ not_an_answer: true }),
 		};
-		const result = await classifyError("any", registry as unknown as Parameters<typeof classifyError>[1], { provider: "typesafe", id: "jev-latest" }, Date.now());
+		const result = await classifyError(
+			"any",
+			registry as unknown as Parameters<typeof classifyError>[1],
+			{ provider: "typesafe", id: "jev-latest" },
+			Date.now(),
+		);
 		expect(result.kind).toBe("no-classifier");
 		if (result.kind === "no-classifier") {
 			expect(result.reason).toBe("unparseable");
@@ -1044,7 +1160,7 @@ describe("classifyError — direct unit tests for the three branches", () => {
 		});
 		await classifyError("any", registry, { provider: "typesafe", id: "jev-latest" }, 1_000_000_000);
 		expect(criteria).toBeDefined();
-		expect(criteria!.length).toBeLessThanOrEqual(10);
+		expect(criteria!.length).toBeLessThanOrEqual(MAX_SCORE_LEVELS);
 	});
 });
 
@@ -1055,7 +1171,7 @@ describe("observeUnretriedFailure — failures pi will not retry", () => {
 	// saw nothing and the model was never blocked. This is the fallback.
 	const OLLAMA_QUOTA =
 		'429: {"message":"You reached your Pro 5-hour limit. Max is $100/month for $300 of usage, ' +
-		"with no 5-hour or weekly caps: https://ollama.com/settings/billing (ref: abc)\",\"type\":\"api_error\"}";
+		'with no 5-hour or weekly caps: https://ollama.com/settings/billing (ref: abc)","type":"api_error"}';
 
 	it("blocks the failed model, so the next user turn walks forward past it", async () => {
 		const registry = makeFakeRegistry({
@@ -1082,7 +1198,10 @@ describe("observeUnretriedFailure — failures pi will not retry", () => {
 		const later = now + 1_000;
 		expect(isBlocked("zai/glm-4.7", later, readBlockedMap(later))).toBe(true);
 		const request = buildFakeRequest({ reason: "user", stateCurrent: "zai/glm-4.7" });
-		const result = await decide("user", request, FALLBACKS, registry, { now: later, blocked: readBlockedMap(later) });
+		const result = await decide("user", request, FALLBACKS, registry, {
+			now: later,
+			blocked: readBlockedMap(later),
+		});
 		expect(result.decision.kind).toBe("switch");
 		expect(result.decision.kind === "switch" ? result.decision.modelId : "").toBe("ollama-cloud/pro");
 	});
@@ -1244,7 +1363,11 @@ describe("router — multi-model failover walk", () => {
 		// Retry exhausted on the second entry: must reach the THIRD, not bounce back.
 		const third = await decide(
 			"retry",
-			buildFakeRequest({ ...failed("ollama-cloud", "pro"), stateCurrent: "ollama-cloud/pro", transientRetries: 1 }),
+			buildFakeRequest({
+				...failed("ollama-cloud", "pro"),
+				stateCurrent: "ollama-cloud/pro",
+				transientRetries: 1,
+			}),
 			FALLBACKS,
 			registry,
 			{ now, blocked: {} },
@@ -1503,7 +1626,8 @@ describe("router — context-window fit on a switch (preference, not a filter)",
 		if (result.decision.kind === "switch") expect(result.decision.modelId).toBe("ollama-cloud/pro");
 	});
 
-	it("never re-routes a sticky session, however large the context", async () => {		const result = await decide(
+	it("never re-routes a sticky session, however large the context", async () => {
+		const result = await decide(
 			"user",
 			buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro" }),
 			FALLBACKS,
@@ -1533,10 +1657,12 @@ describe("router — idle reset (switch to initial)", () => {
 			"user",
 			buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro", lastMessageAt: sixHoursAgo }),
 			FALLBACKS,
-			makeFakeRegistry({ entries: [
-				{ provider: "zai", id: "glm-4.7" },
-				{ provider: "ollama-cloud", id: "pro" },
-			] }),
+			makeFakeRegistry({
+				entries: [
+					{ provider: "zai", id: "glm-4.7" },
+					{ provider: "ollama-cloud", id: "pro" },
+				],
+			}),
 			{ now: NOW, blocked: {} },
 		);
 		expect(result.decision.kind).toBe("stick");
@@ -1548,10 +1674,12 @@ describe("router — idle reset (switch to initial)", () => {
 			"user",
 			buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro", lastMessageAt: sixHoursAgo }),
 			withIdleReset("5h"),
-			makeFakeRegistry({ entries: [
-				{ provider: "zai", id: "glm-4.7" },
-				{ provider: "ollama-cloud", id: "pro" },
-			] }),
+			makeFakeRegistry({
+				entries: [
+					{ provider: "zai", id: "glm-4.7" },
+					{ provider: "ollama-cloud", id: "pro" },
+				],
+			}),
 			{ now: NOW, blocked: {} },
 		);
 		expect(result.decision.kind).toBe("switch");
@@ -1567,10 +1695,12 @@ describe("router — idle reset (switch to initial)", () => {
 			"user",
 			buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro", lastMessageAt: NOW - 1 * HOUR_MS }),
 			withIdleReset("5h"),
-			makeFakeRegistry({ entries: [
-				{ provider: "zai", id: "glm-4.7" },
-				{ provider: "ollama-cloud", id: "pro" },
-			] }),
+			makeFakeRegistry({
+				entries: [
+					{ provider: "zai", id: "glm-4.7" },
+					{ provider: "ollama-cloud", id: "pro" },
+				],
+			}),
 			{ now: NOW, blocked: {} },
 		);
 		expect(result.decision.kind).toBe("stick");
@@ -1623,10 +1753,12 @@ describe("router — idle reset (switch to initial)", () => {
 			"user",
 			buildFakeRequest({ reason: "user", stateCurrent: "ollama-cloud/pro", lastMessageAt: NOW - 10 * 60_000 }),
 			withIdleReset("classifier"),
-			makeFakeRegistry({ entries: [
-				{ provider: "zai", id: "glm-4.7" },
-				{ provider: "ollama-cloud", id: "pro" },
-			] }),
+			makeFakeRegistry({
+				entries: [
+					{ provider: "zai", id: "glm-4.7" },
+					{ provider: "ollama-cloud", id: "pro" },
+				],
+			}),
 			{ now: NOW, blocked: {} },
 		);
 		expect(result.decision.kind).toBe("stick");
@@ -1638,11 +1770,13 @@ describe("router — idle reset (switch to initial)", () => {
 			"user",
 			buildFakeRequest({ reason: "user", stateCurrent: "minimax/plus", lastMessageAt: sixHoursAgo }),
 			withIdleReset("5h"),
-			makeFakeRegistry({ entries: [
-				{ provider: "zai", id: "glm-4.7" },
-				{ provider: "ollama-cloud", id: "pro" },
-				{ provider: "minimax", id: "plus" },
-			] }),
+			makeFakeRegistry({
+				entries: [
+					{ provider: "zai", id: "glm-4.7" },
+					{ provider: "ollama-cloud", id: "pro" },
+					{ provider: "minimax", id: "plus" },
+				],
+			}),
 			{ now: NOW, blocked: {} },
 		);
 		expect(result.decision.kind).toBe("switch");
@@ -1658,11 +1792,13 @@ describe("router — idle reset (switch to initial)", () => {
 			"user",
 			buildFakeRequest({ reason: "user", stateCurrent: "minimax/plus", lastMessageAt: sixHoursAgo }),
 			withIdleReset("5h"),
-			makeFakeRegistry({ entries: [
-				{ provider: "zai", id: "glm-4.7" },
-				{ provider: "ollama-cloud", id: "pro" },
-				{ provider: "minimax", id: "plus" },
-			] }),
+			makeFakeRegistry({
+				entries: [
+					{ provider: "zai", id: "glm-4.7" },
+					{ provider: "ollama-cloud", id: "pro" },
+					{ provider: "minimax", id: "plus" },
+				],
+			}),
 			{ now: NOW, blocked: { "zai/glm-4.7": NOW + HOUR_MS } },
 		);
 		expect(result.decision.kind).toBe("switch");
@@ -1679,10 +1815,12 @@ describe("router — idle reset (switch to initial)", () => {
 				lastMessageAt: sixHoursAgo,
 			}),
 			withIdleReset("5h"),
-			makeFakeRegistry({ entries: [
-				{ provider: "zai", id: "glm-4.7" },
-				{ provider: "ollama-cloud", id: "pro" },
-			] }),
+			makeFakeRegistry({
+				entries: [
+					{ provider: "zai", id: "glm-4.7" },
+					{ provider: "ollama-cloud", id: "pro" },
+				],
+			}),
 			{ now: NOW, blocked: {} },
 		);
 		expect(continuation.decision.kind).toBe("stick");
@@ -1728,13 +1866,10 @@ describe("router — pin (manual override via /switchback-next)", () => {
 				{ provider: "ollama-cloud", id: "pro" },
 			],
 		});
-		const result = await decide(
-			"user",
-			buildFakeRequest({ reason: "user" }),
-			FALLBACKS,
-			registry,
-			{ now: 1_000_000, blocked: { "ollama-cloud/pro": 2_000_000 } },
-		);
+		const result = await decide("user", buildFakeRequest({ reason: "user" }), FALLBACKS, registry, {
+			now: 1_000_000,
+			blocked: { "ollama-cloud/pro": 2_000_000 },
+		});
 		// Pinned model is blocked; fall through to stickiness on the head (which
 		// happens to be the same head, so the result is a stick on the head).
 		expect(result.decision.kind).toBe("stick");
@@ -1747,13 +1882,12 @@ describe("router — pin (manual override via /switchback-next)", () => {
 		const registry = makeFakeRegistry({
 			entries: [{ provider: "zai", id: "glm-4.7", thinkingLevelMap: { off: null, minimal: null, medium: null } }],
 		});
-		await decide(
-			"user",
-			buildFakeRequest({ reason: "user", stateCurrent: "zai/glm-4.7" }),
-			FALLBACKS,
-			registry,
-			{ now: 1_000_000, blocked: {}, notify, debug: true },
-		);
+		await decide("user", buildFakeRequest({ reason: "user", stateCurrent: "zai/glm-4.7" }), FALLBACKS, registry, {
+			now: 1_000_000,
+			blocked: {},
+			notify,
+			debug: true,
+		});
 		expect(messages).toHaveLength(1);
 		expect(messages[0]?.text).toMatch(/stays on zai\/glm-4\.7/);
 		expect(messages[0]?.text).toMatch(/level medium →/);
@@ -1763,13 +1897,12 @@ describe("router — pin (manual override via /switchback-next)", () => {
 		messages.length = 0;
 		writePin("switchback/auto", "zai/glm-4.7");
 		const registry = makeFakeRegistry({ entries: [{ provider: "zai", id: "glm-4.7" }] });
-		await decide(
-			"user",
-			buildFakeRequest({ reason: "user", stateCurrent: "zai/glm-4.7" }),
-			FALLBACKS,
-			registry,
-			{ now: 1_000_000, blocked: {}, notify, debug: true },
-		);
+		await decide("user", buildFakeRequest({ reason: "user", stateCurrent: "zai/glm-4.7" }), FALLBACKS, registry, {
+			now: 1_000_000,
+			blocked: {},
+			notify,
+			debug: true,
+		});
 		expect(messages).toHaveLength(0);
 	});
 });
@@ -1825,13 +1958,12 @@ describe("router — debug diagnostics on a switch", () => {
 
 	it("does not emit when the decision is a sticky same-model route", async () => {
 		const sticky = makeFakeRegistry({ entries: [{ provider: "zai", id: "glm-4.7" }], levelAnswer: "high" });
-		await decide(
-			"user",
-			buildFakeRequest({ reason: "user", stateCurrent: "zai/glm-4.7" }),
-			FALLBACKS,
-			sticky,
-			{ now: 1_000_000, blocked: {}, notify, debug: true },
-		);
+		await decide("user", buildFakeRequest({ reason: "user", stateCurrent: "zai/glm-4.7" }), FALLBACKS, sticky, {
+			now: 1_000_000,
+			blocked: {},
+			notify,
+			debug: true,
+		});
 		expect(messages).toHaveLength(0);
 	});
 
@@ -1846,7 +1978,11 @@ describe("router — debug diagnostics on a switch", () => {
 		});
 		await decide(
 			"retry",
-			buildFakeRequest({ reason: "retry", failed: { provider: "zai", id: "glm-4.7", errorMessage: "429" }, stateCurrent: "zai/glm-4.7" }),
+			buildFakeRequest({
+				reason: "retry",
+				failed: { provider: "zai", id: "glm-4.7", errorMessage: "429" },
+				stateCurrent: "zai/glm-4.7",
+			}),
 			FALLBACKS,
 			switching,
 			{ now: 1_000_000, blocked: {}, notify },

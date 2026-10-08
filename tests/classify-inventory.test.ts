@@ -42,19 +42,31 @@ interface CorpusEntry {
 const EXPECTED_CORPUS: readonly CorpusEntry[] = [
 	// z.ai GLM - passively collected
 	{ provider: "zai", scenario: "quota-5h-zai", note: "5h window" },
-	{ provider: "zai", scenario: "transient-5xx", note: "Connection error / Request timed out (provider-agnostic synthetics)" },
+	{
+		provider: "zai",
+		scenario: "transient-5xx",
+		note: "Connection error / Request timed out (provider-agnostic synthetics)",
+	},
 	{ provider: "zai", scenario: "transient-timeout", note: "Request timed out" },
 	// 2026-10-04 deliberate capture - the zai 401 probe.
 	{ provider: "zai", scenario: "auth-zai-token-expired", note: "401 probe, 2026-10-04, pi-rendered form" },
 	// Ollama Cloud Pro - passively collected
 	{ provider: "ollama-cloud", scenario: "quota-weekly-ollama", note: "weekly usage limit" },
 	// MiniMax Plus - passively collected
-	{ provider: "minimax", scenario: "quota-minimax-token-plan", note: "Token Plan usage limit reached (captured 2026-10-04)" },
+	{
+		provider: "minimax",
+		scenario: "quota-minimax-token-plan",
+		note: "Token Plan usage limit reached (captured 2026-10-04)",
+	},
 	// OpenCode-Go - passively collected
 	{ provider: "opencode-go", scenario: "quota-monthly-opencode", note: "monthly cap" },
 	// Auth and unknown standard synthetics
 	{ provider: "any", scenario: "auth-failure", note: "401 Unauthorized: invalid API key (standard synthetic)" },
-	{ provider: "any", scenario: "auth-account-suspended", note: "403 Forbidden: account suspended (standard synthetic)" },
+	{
+		provider: "any",
+		scenario: "auth-account-suspended",
+		note: "403 Forbidden: account suspended (standard synthetic)",
+	},
 	{ provider: "any", scenario: "unknown-html", note: "500 HTML error page (standard synthetic)" },
 ];
 
@@ -107,14 +119,17 @@ describe("optional live Jev validation", () => {
 		// against the corpus and assert the answers match the README's coverage
 		// matrix. Without the key, no work is done; the test name is the honest
 		// record of the gap.
-		const keyPresent = typeof process.env["TYPESAFE_API_KEY"] === "string" && process.env["TYPESAFE_API_KEY"]!.length > 0;
+		const keyPresent =
+			typeof process.env["TYPESAFE_API_KEY"] === "string" && process.env["TYPESAFE_API_KEY"]!.length > 0;
 		if (!keyPresent) {
-			// eslint-disable-next-line no-console
-			console.log("[classify-inventory] TYPESAFE_API_KEY not set; live Jev validation skipped. The locked prompt has not been re-validated against the corpus since lock.");
+			console.log(
+				"[classify-inventory] TYPESAFE_API_KEY not set; live Jev validation skipped. The locked prompt has not been re-validated against the corpus since lock.",
+			);
 			expect(keyPresent).toBe(false);
 		} else {
-			// eslint-disable-next-line no-console
-			console.log("[classify-inventory] TYPESAFE_API_KEY present; live Jev validation SHOULD run here in a future iteration.");
+			console.log(
+				"[classify-inventory] TYPESAFE_API_KEY present; live Jev validation SHOULD run here in a future iteration.",
+			);
 			expect(keyPresent).toBe(true);
 		}
 	});

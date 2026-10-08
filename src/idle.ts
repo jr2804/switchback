@@ -29,7 +29,13 @@
  */
 
 import type { ClassifierContext, ClassifierQuestion, Message } from "@earendil-works/pi-ai";
-import { callClassifier, readChoice, readConfidence, type ClassifierRegistry, type NoClassifierReason } from "./classify.ts";
+import {
+	callClassifier,
+	readChoice,
+	readConfidence,
+	type ClassifierRegistry,
+	type NoClassifierReason,
+} from "./classify.ts";
 import type { IdleResetConfig, JevConfig, ModelId } from "./types.ts";
 
 /** Every accepted `idleReset:` value, in menu order. */
@@ -88,7 +94,12 @@ export function lastMessageTimestamp(messages: readonly Message[]): number | und
 	let latest: number | undefined;
 	for (const message of messages) {
 		const stamp = message.timestamp;
-		if (typeof stamp === "number" && Number.isFinite(stamp) && stamp > 0 && (latest === undefined || stamp > latest)) {
+		if (
+			typeof stamp === "number" &&
+			Number.isFinite(stamp) &&
+			stamp > 0 &&
+			(latest === undefined || stamp > latest)
+		) {
 			latest = stamp;
 		}
 	}
@@ -192,7 +203,8 @@ async function askClassifier(input: IdleResetInput, idle: number): Promise<IdleR
 		criteria: {
 			return_to_initial:
 				"Switch back to the first model in the list. Prefer this when the idle gap is long enough that no cache remains, and the first model is available.",
-			keep_current: "Stay on the current model. Prefer this when the idle gap is short enough that the cache may still be warm.",
+			keep_current:
+				"Stay on the current model. Prefer this when the idle gap is short enough that the cache may still be warm.",
 		},
 	};
 	const state: ClassifierContext["state"] = {

@@ -55,17 +55,31 @@
  */
 
 import type { ModelRouteRequest } from "@earendil-works/pi-coding-agent";
-import type { Api, Model, ModelThinkingLevel, StopReason } from "@earendil-works/pi-ai";
-import { resolveDispatchLevel, type Decision, type DecisionOutcome, type NotifyFn, type RouterRegistry } from "./build-route.ts";
+import type { Api, Model, StopReason } from "@earendil-works/pi-ai";
+import { resolveDispatchLevel, type DecisionOutcome, type NotifyFn, type RouterRegistry } from "./build-route.ts";
 import { pickNextEffective, resolveFallbacks, type AvailabilityRegistry } from "./availability.ts";
 import { classifyError, PROMPT_VERSION, type NoClassifierReason } from "./classify.ts";
 import { chooseContextCandidate, fitsContext } from "./context-fit.ts";
 import { decideIdleReset } from "./idle.ts";
-import { blockModel, getPinnedModel, isBlocked, readBlockedMap, unblockModel } from "./state.ts";
+import { blockModel, getPinnedModel, unblockModel } from "./state.ts";
 import { recordCrash, type CrashAction } from "./crashes.ts";
-import type { BlockedMap, ClassifiedError, JevConfig, ModelId, ResolvedSwitchbackConfig, SwitchbackState } from "./types.ts";
+import type {
+	BlockedMap,
+	ClassifiedError,
+	JevConfig,
+	ModelId,
+	ResolvedSwitchbackConfig,
+	SwitchbackState,
+} from "./types.ts";
 
-export { ConfigInvalidError, buildRoute, type Decision, type DecisionOutcome, type NotifyFn, type RouterRegistry } from "./build-route.ts";
+export {
+	ConfigInvalidError,
+	buildRoute,
+	type Decision,
+	type DecisionOutcome,
+	type NotifyFn,
+	type RouterRegistry,
+} from "./build-route.ts";
 
 /** Maximum number of transient retries on the same model before the router moves on. */
 export const MAX_TRANSIENT_RETRIES = 1;
@@ -172,12 +186,6 @@ function modelOf(registry: RouterRegistry, modelId: ModelId): Model<Api> | undef
 	return registry.find(modelId.slice(0, slash), modelId.slice(slash + 1));
 }
 
-/** Whether the named physical model can hold `tokens` of context (false when unknown). */
-function fitsModel(registry: RouterRegistry, modelId: ModelId, tokens: number): boolean {
-	const model = modelOf(registry, modelId);
-	return model === undefined ? false : fitsContext(model, tokens);
-}
-
 /**
  * Record a crash for the current retry. Called once per decideRetry invocation
  * that carries a real failure (i.e. the no-failure-marker early-return did not
@@ -277,7 +285,11 @@ export async function decide(
 
 	if (reason === "continuation") {
 		const previousId = physicalId(request.previous?.model);
-		if (previousId && resolved.entries.some((e) => e.id === previousId && e.availability === "effective") && !isBlockedNow(previousId, blocked, now)) {
+		if (
+			previousId &&
+			resolved.entries.some((e) => e.id === previousId && e.availability === "effective") &&
+			!isBlockedNow(previousId, blocked, now)
+		) {
 			return {
 				decision: { kind: "stick", modelId: previousId, reason: "continuation" },
 				thinkingLevel: request.previous?.thinkingLevel ?? request.thinkingLevel,
@@ -335,7 +347,17 @@ export async function decide(
 			.map((e) => `${e.id} (resets in ${Math.max(1, Math.round(((blocked[e.id] ?? now) - now) / 60_000))} min)`),
 	});
 	if (idle.reset) {
-		const pick = await pickWithContextFit({ resolved, skip: undefined, blocked, now, startAfter: undefined, registry, jev: modelConfig.jev, reason: "idle-reset", contextTokens: inputs.contextTokens });
+		const pick = await pickWithContextFit({
+			resolved,
+			skip: undefined,
+			blocked,
+			now,
+			startAfter: undefined,
+			registry,
+			jev: modelConfig.jev,
+			reason: "idle-reset",
+			contextTokens: inputs.contextTokens,
+		});
 		if (pick) {
 			const nextState = buildStateAfterSwitch(pick.modelId, request.state);
 			if (pick.degraded && resolved.effectiveCount === 1 && !nextState.degradedWarned) {
@@ -376,12 +398,24 @@ export async function decide(
 
 	// Nothing usable yet: continue forward from where the session was (wrapping), else
 	// start at the head of the configured list.
-	const pick = await pickWithContextFit({ resolved, skip: undefined, blocked, now, startAfter: current, registry, jev: modelConfig.jev, contextTokens: inputs.contextTokens });
+	const pick = await pickWithContextFit({
+		resolved,
+		skip: undefined,
+		blocked,
+		now,
+		startAfter: current,
+		registry,
+		jev: modelConfig.jev,
+		contextTokens: inputs.contextTokens,
+	});
 	if (!pick) {
 		// No non-blocked effective entry AND multiple effective entries exist: the user
 		// is quota-locked-out across all configured fallbacks. Surface "exhausted" rather
 		// than the generic config-invalid (the config is valid, all entries are just blocked).
-		return { decision: { kind: "exhausted", reason: "all-effective-blocked" }, thinkingLevel: request.thinkingLevel };
+		return {
+			decision: { kind: "exhausted", reason: "all-effective-blocked" },
+			thinkingLevel: request.thinkingLevel,
+		};
 	}
 	const stateCurrent = request.state?.current;
 	const nextState = buildStateAfterSwitch(pick.modelId, request.state);
@@ -459,21 +493,50 @@ export async function assessFailure(opts: {
 	if (result.kind === "no-classifier") {
 		// The universal cycle: advance, but never fabricate a class and never write a
 		// block - there is nothing to justify one with.
-		return { failedId, errorMessage, verdict: undefined, noClassifierReason: result.reason, transientRetryLeft: false, touchedBlocks: false };
+		return {
+			failedId,
+			errorMessage,
+			verdict: undefined,
+			noClassifierReason: result.reason,
+			transientRetryLeft: false,
+			touchedBlocks: false,
+		};
 	}
 	const classified = result.classified;
 	if (classified.class === "overflow") {
 		if (failedId !== undefined) unblockModel(failedId);
-		return { failedId, errorMessage, verdict: classified, noClassifierReason: undefined, transientRetryLeft: false, touchedBlocks: true };
+		return {
+			failedId,
+			errorMessage,
+			verdict: classified,
+			noClassifierReason: undefined,
+			transientRetryLeft: false,
+			touchedBlocks: true,
+		};
 	}
 	if (classified.class === "transient") {
 		const retries = opts.transientRetries;
-		const left = retries < MAX_TRANSIENT_RETRIES && (failedId === undefined || !isBlockedNow(failedId, blocked, now));
-		return { failedId, errorMessage, verdict: classified, noClassifierReason: undefined, transientRetryLeft: left, touchedBlocks: false };
+		const left =
+			retries < MAX_TRANSIENT_RETRIES && (failedId === undefined || !isBlockedNow(failedId, blocked, now));
+		return {
+			failedId,
+			errorMessage,
+			verdict: classified,
+			noClassifierReason: undefined,
+			transientRetryLeft: left,
+			touchedBlocks: false,
+		};
 	}
 	// Quota / auth / unknown: block with the classifier-supplied reset window.
 	if (failedId !== undefined) blockModel(failedId, classified.resetAtMs, now);
-	return { failedId, errorMessage, verdict: classified, noClassifierReason: undefined, transientRetryLeft: false, touchedBlocks: true };
+	return {
+		failedId,
+		errorMessage,
+		verdict: classified,
+		noClassifierReason: undefined,
+		transientRetryLeft: false,
+		touchedBlocks: true,
+	};
 }
 
 /**
@@ -564,9 +627,21 @@ async function decideRetry(
 				thinkingLevel: request.thinkingLevel,
 			};
 		}
-		const pick = await pickWithContextFit({ resolved, skip: undefined, blocked, now, startAfter: advanceFrom, registry, jev: modelConfig.jev, contextTokens: inputs.contextTokens });
+		const pick = await pickWithContextFit({
+			resolved,
+			skip: undefined,
+			blocked,
+			now,
+			startAfter: advanceFrom,
+			registry,
+			jev: modelConfig.jev,
+			contextTokens: inputs.contextTokens,
+		});
 		if (!pick) {
-			return { decision: { kind: "exhausted", reason: "all-effective-blocked" }, thinkingLevel: request.thinkingLevel };
+			return {
+				decision: { kind: "exhausted", reason: "all-effective-blocked" },
+				thinkingLevel: request.thinkingLevel,
+			};
 		}
 		return {
 			decision: { kind: "switch", modelId: pick.modelId, reason: "no-prior-state" },
@@ -585,9 +660,10 @@ async function decideRetry(
 		blocked,
 		transientRetries: priorState?.transientRetries ?? 0,
 	});
-	const result = assessed.verdict === undefined && assessed.noClassifierReason !== undefined
-		? ({ kind: "no-classifier", reason: assessed.noClassifierReason } as const)
-		: undefined;
+	const result =
+		assessed.verdict === undefined && assessed.noClassifierReason !== undefined
+			? ({ kind: "no-classifier", reason: assessed.noClassifierReason } as const)
+			: undefined;
 	const classified = assessed.verdict;
 
 	// No-classifier path: the universal cycle. Report visibly (when notify is
@@ -596,8 +672,20 @@ async function decideRetry(
 	// heuristic; no class label is fabricated.
 	if (result !== undefined) {
 		const reasonText = describeNoClassifier(result.reason);
-		inputs.notify?.(`switchback: no classifier decision (${result.reason}) - cycling without classification`, "warning");
-		const pick = await pickWithContextFit({ resolved, skip: failedId, blocked, now, startAfter: advanceFrom, registry, jev: modelConfig.jev, contextTokens: inputs.contextTokens });
+		inputs.notify?.(
+			`switchback: no classifier decision (${result.reason}) - cycling without classification`,
+			"warning",
+		);
+		const pick = await pickWithContextFit({
+			resolved,
+			skip: failedId,
+			blocked,
+			now,
+			startAfter: advanceFrom,
+			registry,
+			jev: modelConfig.jev,
+			contextTokens: inputs.contextTokens,
+		});
 		recordDecideCrash(failedId, registry, errorMessage, now, null, result.reason, "blind-cycle");
 		if (pick) {
 			const nextState = buildStateAfterSwitch(pick.modelId, priorState);
@@ -614,7 +702,10 @@ async function decideRetry(
 				thinkingLevel: request.thinkingLevel,
 			};
 		}
-		return { decision: { kind: "exhausted", reason: `blind-cycle-${result.reason}-no-fallback` }, thinkingLevel: request.thinkingLevel };
+		return {
+			decision: { kind: "exhausted", reason: `blind-cycle-${result.reason}-no-fallback` },
+			thinkingLevel: request.thinkingLevel,
+		};
 	}
 
 	// Overflow: pi already compacted; the route stays as the router chose it. Stick
@@ -624,7 +715,11 @@ async function decideRetry(
 		recordDecideCrash(failedId, registry, errorMessage, now, classified, undefined, "stuck-stayed");
 		return {
 			decision: { kind: "stick", modelId, reason: "overflow-stick" },
-			nextState: keepState(failedId ?? priorState?.current ?? modelConfig.fallbacks[0]!, priorState, priorState?.transientRetries ?? 0),
+			nextState: keepState(
+				failedId ?? priorState?.current ?? modelConfig.fallbacks[0]!,
+				priorState,
+				priorState?.transientRetries ?? 0,
+			),
 			thinkingLevel: request.thinkingLevel,
 		};
 	}
@@ -639,38 +734,88 @@ async function decideRetry(
 				thinkingLevel: request.thinkingLevel,
 			};
 		}
-		const pick = await pickWithContextFit({ resolved, skip: failedId, blocked, now, startAfter: advanceFrom, registry, jev: modelConfig.jev, contextTokens: inputs.contextTokens });
-		recordDecideCrash(failedId, registry, errorMessage, now, classified, undefined, pick ? "blocked+advanced" : "stuck-stayed");
+		const pick = await pickWithContextFit({
+			resolved,
+			skip: failedId,
+			blocked,
+			now,
+			startAfter: advanceFrom,
+			registry,
+			jev: modelConfig.jev,
+			contextTokens: inputs.contextTokens,
+		});
+		recordDecideCrash(
+			failedId,
+			registry,
+			errorMessage,
+			now,
+			classified,
+			undefined,
+			pick ? "blocked+advanced" : "stuck-stayed",
+		);
 		if (pick) {
 			const nextState = buildStateAfterSwitch(pick.modelId, priorState);
 			if (pick.degraded && resolved.effectiveCount === 1 && !nextState.degradedWarned) {
 				nextState.degradedWarned = true;
 			}
 			return {
-				decision: { kind: "switch", modelId: pick.modelId, reason: pick.degraded ? "transient-exhausted-degraded" : "transient-exhausted" },
+				decision: {
+					kind: "switch",
+					modelId: pick.modelId,
+					reason: pick.degraded ? "transient-exhausted-degraded" : "transient-exhausted",
+				},
 				nextState,
 				thinkingLevel: request.thinkingLevel,
 			};
 		}
-		return { decision: { kind: "exhausted", reason: "transient-exhausted-no-fallback" }, thinkingLevel: request.thinkingLevel };
+		return {
+			decision: { kind: "exhausted", reason: "transient-exhausted-no-fallback" },
+			thinkingLevel: request.thinkingLevel,
+		};
 	}
 
 	// Quota / auth / unknown: assessFailure has already blocked the failed model
 	// with the classifier-supplied reset time; pick the next non-blocked.
-	const pick = await pickWithContextFit({ resolved, skip: failedId, blocked, now, startAfter: advanceFrom, registry, jev: modelConfig.jev, contextTokens: inputs.contextTokens });
-	recordDecideCrash(failedId, registry, errorMessage, now, classified ?? null, undefined, pick ? "blocked+advanced" : "stuck-stayed");
+	const pick = await pickWithContextFit({
+		resolved,
+		skip: failedId,
+		blocked,
+		now,
+		startAfter: advanceFrom,
+		registry,
+		jev: modelConfig.jev,
+		contextTokens: inputs.contextTokens,
+	});
+	recordDecideCrash(
+		failedId,
+		registry,
+		errorMessage,
+		now,
+		classified ?? null,
+		undefined,
+		pick ? "blocked+advanced" : "stuck-stayed",
+	);
 	if (pick) {
 		const nextState = buildStateAfterSwitch(pick.modelId, priorState);
 		if (pick.degraded && resolved.effectiveCount === 1 && !nextState.degradedWarned) {
 			nextState.degradedWarned = true;
 		}
 		return {
-			decision: { kind: "switch", modelId: pick.modelId, reason: (pick.degraded ? `${classified!.class}-fallback-degraded` : `${classified!.class}-fallback`) + resetSuffix(classified!.resetAtMs, now) },
+			decision: {
+				kind: "switch",
+				modelId: pick.modelId,
+				reason:
+					(pick.degraded ? `${classified!.class}-fallback-degraded` : `${classified!.class}-fallback`) +
+					resetSuffix(classified!.resetAtMs, now),
+			},
 			nextState,
 			thinkingLevel: request.thinkingLevel,
 		};
 	}
-	return { decision: { kind: "exhausted", reason: `${classified!.class}-no-fallback` }, thinkingLevel: request.thinkingLevel };
+	return {
+		decision: { kind: "exhausted", reason: `${classified!.class}-no-fallback` },
+		thinkingLevel: request.thinkingLevel,
+	};
 }
 
 /** Human suffix for the reset window a blocked model got, empty when there is none. */

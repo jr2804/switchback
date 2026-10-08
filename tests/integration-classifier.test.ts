@@ -148,7 +148,6 @@ const FIXTURE_PATH = fileURLToPath(new URL("../switchback.simulate.json", import
 
 it("classifier integration is opt-in", () => {
 	if (!enabled) {
-		// eslint-disable-next-line no-console
 		console.log(
 			"[integration-classifier] SKIPPED: set SWITCHBACK_CLASSIFIER_API, _PROVIDER, _MODEL and _BASE_URL (optional _API_KEY) to run the live SystemOne validation.",
 		);
@@ -183,22 +182,26 @@ describe.runIf(enabled)("classifier integration — live corpus validation", () 
 		// (classifyError enforces a 10s classifier timeout; a cold start may exceed it).
 		// Mirrors the real request shape - choice + score + bool - so the model and
 		// its shared prompt prefix are resident before the first measured case.
-		await classifier.classify(model, {
-			state: { prompt: "warm-up" },
-			questions: {
-				class: {
-					type: "choice",
-					instructions: "Pick one.",
-					criteria: { a: "first", b: "second", c: "third" },
-				},
-				reset: { type: "score", instructions: "Pick a level.", criteria: ["none", "soon", "later"] },
-				ready: {
-					type: "bool",
-					instructions: "Does the state contain any keys?",
-					criteria: { true: "the state has keys", false: "the state is empty" },
+		await classifier.classify(
+			model,
+			{
+				state: { prompt: "warm-up" },
+				questions: {
+					class: {
+						type: "choice",
+						instructions: "Pick one.",
+						criteria: { a: "first", b: "second", c: "third" },
+					},
+					reset: { type: "score", instructions: "Pick a level.", criteria: ["none", "soon", "later"] },
+					ready: {
+						type: "bool",
+						instructions: "Does the state contain any keys?",
+						criteria: { true: "the state has keys", false: "the state is empty" },
+					},
 				},
 			},
-		}, env.apiKey !== undefined ? { apiKey: env.apiKey } : undefined);
+			env.apiKey !== undefined ? { apiKey: env.apiKey } : undefined,
+		);
 	}, 300_000);
 
 	afterAll(() => {

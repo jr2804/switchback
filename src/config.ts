@@ -80,7 +80,10 @@ export const DEFAULT_CONFIG: ResolvedSwitchbackFileConfig = {
 };
 
 export class ConfigError extends Error {
-	constructor(message: string, public readonly path: string) {
+	constructor(
+		message: string,
+		public readonly path: string,
+	) {
 		super(`switchback config error (${path}): ${message}`);
 		this.name = "ConfigError";
 	}
@@ -115,10 +118,7 @@ function candidatePaths(): string[] {
 	// state, the simulate fixture `switchback.simulate.json`).
 	// The project-local slot is `.pi/`, which git ignores, so a per-project
 	// override never lands in a repository.
-	return [
-		join(cwd, ".pi", `${CONFIG_BASENAME}.yaml`),
-		join(cfg, `${CONFIG_BASENAME}.yaml`),
-	];
+	return [join(cwd, ".pi", `${CONFIG_BASENAME}.yaml`), join(cfg, `${CONFIG_BASENAME}.yaml`)];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -229,11 +229,13 @@ function parseSwitchbackModel(value: unknown, index: number): SwitchbackConfig {
 	const id = value["id"];
 	const name = value["name"];
 	const fallbacks = value["fallbacks"];
-	if (typeof id !== "string" || id.length === 0) throw new ConfigError(`${where}.id must be a non-empty string`, where);
+	if (typeof id !== "string" || id.length === 0)
+		throw new ConfigError(`${where}.id must be a non-empty string`, where);
 	// Bare ids are shorthand: `auto` normalises to `switchback/auto`. Physical
 	// fallbacks always stay full "provider/id" - they name other providers' models.
 	const fullId = id.includes("/") ? id : `${PROVIDER}/${id}`;
-	if (typeof name !== "string" || name.length === 0) throw new ConfigError(`${where}.name must be a non-empty string`, where);
+	if (typeof name !== "string" || name.length === 0)
+		throw new ConfigError(`${where}.name must be a non-empty string`, where);
 	if (!Array.isArray(fallbacks) || fallbacks.length === 0) {
 		throw new ConfigError(`${where}.fallbacks must be a non-empty array of "provider/id" strings`, where);
 	}
@@ -253,10 +255,7 @@ function parseSwitchbackModel(value: unknown, index: number): SwitchbackConfig {
 function parseIdleReset(value: unknown, where: string): IdleResetConfig | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "string" || !IDLE_RESET_OPTIONS.includes(value as IdleResetConfig)) {
-		throw new ConfigError(
-			`${where}.idleReset must be one of ${IDLE_RESET_OPTIONS.join(", ")}`,
-			where,
-		);
+		throw new ConfigError(`${where}.idleReset must be one of ${IDLE_RESET_OPTIONS.join(", ")}`, where);
 	}
 	return value as IdleResetConfig;
 }
@@ -331,10 +330,7 @@ export function resolveSecretApiKey(
 	}
 	const value = secrets.get(name);
 	if (value === undefined) {
-		throw new ConfigError(
-			`apiKey "${apiKey}" does not resolve (secret "${name}" is not in the store)`,
-			"<config>",
-		);
+		throw new ConfigError(`apiKey "${apiKey}" does not resolve (secret "${name}" is not in the store)`, "<config>");
 	}
 	return value;
 }
@@ -414,9 +410,9 @@ function parseFileConfig(value: unknown, path: string): SwitchbackFileConfig {
 		const orphans = decisionModels.filter((d) => !referenced.has(d.name));
 		if (orphans.length === decisionModels.length) {
 			throw new ConfigError(
-				`decisionModels entries are not referenced by any model.jev.decisionModel: ` +
+				"decisionModels entries are not referenced by any model.jev.decisionModel: " +
 					`${orphans.map((d) => `"${d.name}"`).join(", ")}. ` +
-					`A decisionModels entry must be referenced by at least one model.jev.decisionModel, otherwise the router sees no classifier and reports it as "not configured" - ` +
+					'A decisionModels entry must be referenced by at least one model.jev.decisionModel, otherwise the router sees no classifier and reports it as "not configured" - ' +
 					`reference one from a model ("${parsed[0]?.id ?? "<first model>"}".jev.decisionModel: <name>) or remove the decisionModels block.`,
 				path,
 			);
@@ -472,8 +468,16 @@ function aggregateConfigs(global: SwitchbackFileConfig, project: SwitchbackFileC
 		// Decision models follow the same layering rule as debug: the project list
 		// replaces the global list when present, so references resolve against one
 		// predictable set. (A project layer without decisionModels keeps the global set.)
-		...(project.decisionModels !== undefined ? { decisionModels: project.decisionModels } : global.decisionModels !== undefined ? { decisionModels: global.decisionModels } : {}),
-		...(project.debug !== undefined ? { debug: project.debug } : global.debug !== undefined ? { debug: global.debug } : {}),
+		...(project.decisionModels !== undefined
+			? { decisionModels: project.decisionModels }
+			: global.decisionModels !== undefined
+				? { decisionModels: global.decisionModels }
+				: {}),
+		...(project.debug !== undefined
+			? { debug: project.debug }
+			: global.debug !== undefined
+				? { debug: global.debug }
+				: {}),
 	};
 }
 

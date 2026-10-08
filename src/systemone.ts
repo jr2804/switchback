@@ -54,7 +54,10 @@ export function classifierState(text: string): ClassifierContext["state"] {
 const REQUEST_TIMEOUT_MS = 30_000;
 
 /** The subset of `fetch` this transport uses, injectable for tests. */
-export type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }) => Promise<{
+export type FetchLike = (
+	url: string,
+	init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal },
+) => Promise<{
 	ok: boolean;
 	status: number;
 	text(): Promise<string>;
@@ -169,7 +172,8 @@ export function systemOneClassifier(baseUrl: string, options: SystemOneOptions =
 					signal,
 				});
 				const bodyText = response.ok ? "" : await response.text();
-				if (!response.ok) throw new Error(`${label} returned ${response.status}${bodyText ? `: ${bodyText}` : ""}`);
+				if (!response.ok)
+					throw new Error(`${label} returned ${response.status}${bodyText ? `: ${bodyText}` : ""}`);
 				const body: unknown = await response.json();
 				if (!isRecord(body)) throw new Error(`${label} returned an unexpected response`);
 				result.answers = parseAnswers(label, body["answers"], context);

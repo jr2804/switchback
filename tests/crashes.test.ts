@@ -12,7 +12,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { Api, Model } from "@earendil-works/pi-ai";
 import {
 	annotateCrash,
 	crashesFilePath,
@@ -53,12 +52,30 @@ describe("crashes store — roundtrip", () => {
 	it("creates crashes.json under <piConfigDir>/switchback/ on first record", () => {
 		const path = crashesFilePath();
 		expect(existsSync(path)).toBe(false);
-		recordCrash({ raw: "msg-A", provider: "zai", model: "glm-5.3", now: 1, action: "blind-cycle", verdict: null, noClassifierReason: "not-configured", promptVersion: PROMPT_VERSION });
+		recordCrash({
+			raw: "msg-A",
+			provider: "zai",
+			model: "glm-5.3",
+			now: 1,
+			action: "blind-cycle",
+			verdict: null,
+			noClassifierReason: "not-configured",
+			promptVersion: PROMPT_VERSION,
+		});
 		expect(existsSync(path)).toBe(true);
 	});
 
 	it("atomic write: the on-disk file is never an empty tmp (rename moves the real file)", () => {
-		recordCrash({ raw: "msg-A", provider: "zai", model: "glm-5.3", now: 1, action: "blind-cycle", verdict: null, noClassifierReason: "not-configured", promptVersion: PROMPT_VERSION });
+		recordCrash({
+			raw: "msg-A",
+			provider: "zai",
+			model: "glm-5.3",
+			now: 1,
+			action: "blind-cycle",
+			verdict: null,
+			noClassifierReason: "not-configured",
+			promptVersion: PROMPT_VERSION,
+		});
 		const path = crashesFilePath();
 		expect(existsSync(`${path}.tmp`)).toBe(false); // tmp is moved
 		const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
@@ -66,8 +83,26 @@ describe("crashes store — roundtrip", () => {
 	});
 
 	it("dedup: a second record with the same raw updates count and last, does not duplicate", () => {
-		recordCrash({ raw: "msg-A", provider: "zai", model: "glm-5.3", now: 1, action: "blind-cycle", verdict: null, noClassifierReason: "not-configured", promptVersion: PROMPT_VERSION });
-		recordCrash({ raw: "msg-A", provider: "zai", model: "glm-5.3", now: 2, action: "blind-cycle", verdict: null, noClassifierReason: "not-configured", promptVersion: PROMPT_VERSION });
+		recordCrash({
+			raw: "msg-A",
+			provider: "zai",
+			model: "glm-5.3",
+			now: 1,
+			action: "blind-cycle",
+			verdict: null,
+			noClassifierReason: "not-configured",
+			promptVersion: PROMPT_VERSION,
+		});
+		recordCrash({
+			raw: "msg-A",
+			provider: "zai",
+			model: "glm-5.3",
+			now: 2,
+			action: "blind-cycle",
+			verdict: null,
+			noClassifierReason: "not-configured",
+			promptVersion: PROMPT_VERSION,
+		});
 		const map = readCrashMap();
 		expect(Object.keys(map)).toHaveLength(1);
 		const entry = Object.values(map)[0]!;
@@ -77,15 +112,42 @@ describe("crashes store — roundtrip", () => {
 	});
 
 	it("different raw strings produce different keys", () => {
-		recordCrash({ raw: "msg-A", provider: "zai", model: "glm-5.3", now: 1, action: "blind-cycle", verdict: null, noClassifierReason: "not-configured", promptVersion: PROMPT_VERSION });
-		recordCrash({ raw: "msg-B", provider: "zai", model: "glm-5.3", now: 2, action: "blind-cycle", verdict: null, noClassifierReason: "not-configured", promptVersion: PROMPT_VERSION });
+		recordCrash({
+			raw: "msg-A",
+			provider: "zai",
+			model: "glm-5.3",
+			now: 1,
+			action: "blind-cycle",
+			verdict: null,
+			noClassifierReason: "not-configured",
+			promptVersion: PROMPT_VERSION,
+		});
+		recordCrash({
+			raw: "msg-B",
+			provider: "zai",
+			model: "glm-5.3",
+			now: 2,
+			action: "blind-cycle",
+			verdict: null,
+			noClassifierReason: "not-configured",
+			promptVersion: PROMPT_VERSION,
+		});
 		const map = readCrashMap();
 		expect(Object.keys(map)).toHaveLength(2);
 	});
 
 	it("verdictHistory appends and is bounded at 50 entries", () => {
 		for (let i = 0; i < 60; i++) {
-			recordCrash({ raw: "msg-A", provider: "zai", model: "glm-5.3", now: i, action: "blind-cycle", verdict: null, noClassifierReason: "not-configured", promptVersion: PROMPT_VERSION });
+			recordCrash({
+				raw: "msg-A",
+				provider: "zai",
+				model: "glm-5.3",
+				now: i,
+				action: "blind-cycle",
+				verdict: null,
+				noClassifierReason: "not-configured",
+				promptVersion: PROMPT_VERSION,
+			});
 		}
 		const map = readCrashMap();
 		const entry = Object.values(map)[0]!;
@@ -113,7 +175,16 @@ describe("crashes store — roundtrip", () => {
 
 describe("crashes store — annotation cache (Tier 2b)", () => {
 	it("annotateCrash writes the annotation onto the entry", () => {
-		recordCrash({ raw: "msg-A", provider: "zai", model: "glm-5.3", now: 1, action: "blind-cycle", verdict: null, noClassifierReason: "not-configured", promptVersion: PROMPT_VERSION });
+		recordCrash({
+			raw: "msg-A",
+			provider: "zai",
+			model: "glm-5.3",
+			now: 1,
+			action: "blind-cycle",
+			verdict: null,
+			noClassifierReason: "not-configured",
+			promptVersion: PROMPT_VERSION,
+		});
 		annotateCrash(shortHash(hashSample("msg-A")), "quota", "zai 5h window", 100);
 		const entry = lookupCrash("msg-A");
 		expect(entry?.annotated).toBeDefined();
@@ -122,31 +193,64 @@ describe("crashes store — annotation cache (Tier 2b)", () => {
 	});
 
 	it("unannotated entry: classifier still gets called (Tier 2b is annotation-only)", async () => {
-		recordCrash({ raw: "msg-A", provider: "zai", model: "glm-5.3", now: 1, action: "blind-cycle", verdict: null, noClassifierReason: "not-configured", promptVersion: PROMPT_VERSION });
+		recordCrash({
+			raw: "msg-A",
+			provider: "zai",
+			model: "glm-5.3",
+			now: 1,
+			action: "blind-cycle",
+			verdict: null,
+			noClassifierReason: "not-configured",
+			promptVersion: PROMPT_VERSION,
+		});
 		let classifierCalled = 0;
 		const fakeRegistry = {
 			findOfType: () => ({ provider: "typesafe", id: "jev-latest", api: "classifier", input: ["text"] }),
 			classify: async () => {
 				classifierCalled++;
-				return { stopReason: "stop", answers: { class: { type: "choice", choice: "quota" }, scope: { type: "choice", choice: "model" } } };
+				return {
+					stopReason: "stop",
+					answers: { class: { type: "choice", choice: "quota" }, scope: { type: "choice", choice: "model" } },
+				};
 			},
 		};
-		await classifyError("msg-A", fakeRegistry as unknown as Parameters<typeof classifyError>[1], { provider: "typesafe", id: "jev-latest" });
+		await classifyError("msg-A", fakeRegistry as unknown as Parameters<typeof classifyError>[1], {
+			provider: "typesafe",
+			id: "jev-latest",
+		});
 		expect(classifierCalled).toBe(1);
 	});
 
 	it("annotated entry: classifier is NOT called (Tier 2b short-circuits)", async () => {
-		recordCrash({ raw: "msg-A", provider: "zai", model: "glm-5.3", now: 1, action: "blind-cycle", verdict: null, noClassifierReason: "not-configured", promptVersion: PROMPT_VERSION });
+		recordCrash({
+			raw: "msg-A",
+			provider: "zai",
+			model: "glm-5.3",
+			now: 1,
+			action: "blind-cycle",
+			verdict: null,
+			noClassifierReason: "not-configured",
+			promptVersion: PROMPT_VERSION,
+		});
 		annotateCrash(shortHash(hashSample("msg-A")), "quota", "zai 5h window", 100);
 		let classifierCalled = 0;
 		const fakeRegistry = {
 			findOfType: () => ({ provider: "typesafe", id: "jev-latest", api: "classifier", input: ["text"] }),
 			classify: async () => {
 				classifierCalled++;
-				return { stopReason: "stop", answers: { class: { type: "choice", choice: "auth" }, scope: { type: "choice", choice: "account" } } };
+				return {
+					stopReason: "stop",
+					answers: {
+						class: { type: "choice", choice: "auth" },
+						scope: { type: "choice", choice: "account" },
+					},
+				};
 			},
 		};
-		const result = await classifyError("msg-A", fakeRegistry as unknown as Parameters<typeof classifyError>[1], { provider: "typesafe", id: "jev-latest" });
+		const result = await classifyError("msg-A", fakeRegistry as unknown as Parameters<typeof classifyError>[1], {
+			provider: "typesafe",
+			id: "jev-latest",
+		});
 		expect(classifierCalled).toBe(0);
 		expect(result.kind).toBe("classified");
 		if (result.kind === "classified") {
@@ -174,10 +278,19 @@ describe("crashes store — annotation cache (Tier 2b)", () => {
 			findOfType: () => ({ provider: "typesafe", id: "jev-latest", api: "classifier", input: ["text"] }),
 			classify: async () => {
 				classifierCalled++;
-				return { stopReason: "stop", answers: { class: { type: "choice", choice: "auth" }, scope: { type: "choice", choice: "account" } } };
+				return {
+					stopReason: "stop",
+					answers: {
+						class: { type: "choice", choice: "auth" },
+						scope: { type: "choice", choice: "account" },
+					},
+				};
 			},
 		};
-		await classifyError("msg-A", fakeRegistry as unknown as Parameters<typeof classifyError>[1], { provider: "typesafe", id: "jev-latest" });
+		await classifyError("msg-A", fakeRegistry as unknown as Parameters<typeof classifyError>[1], {
+			provider: "typesafe",
+			id: "jev-latest",
+		});
 		expect(classifierCalled).toBe(1);
 	});
 });
@@ -198,8 +311,26 @@ describe("crashes store — annotation validation", () => {
 	});
 
 	it("annotateCrash: ambiguous short-hash throws", () => {
-		recordCrash({ raw: "msg-A", provider: "zai", model: "glm-5.3", now: 1, action: "blind-cycle", verdict: null, noClassifierReason: "not-configured", promptVersion: PROMPT_VERSION });
-		recordCrash({ raw: "msg-B", provider: "zai", model: "glm-5.3", now: 2, action: "blind-cycle", verdict: null, noClassifierReason: "not-configured", promptVersion: PROMPT_VERSION });
+		recordCrash({
+			raw: "msg-A",
+			provider: "zai",
+			model: "glm-5.3",
+			now: 1,
+			action: "blind-cycle",
+			verdict: null,
+			noClassifierReason: "not-configured",
+			promptVersion: PROMPT_VERSION,
+		});
+		recordCrash({
+			raw: "msg-B",
+			provider: "zai",
+			model: "glm-5.3",
+			now: 2,
+			action: "blind-cycle",
+			verdict: null,
+			noClassifierReason: "not-configured",
+			promptVersion: PROMPT_VERSION,
+		});
 		const a = shortHash(hashSample("msg-A"));
 		const b = shortHash(hashSample("msg-B"));
 		// Force a collision by using a single-character prefix that both share.
@@ -210,8 +341,26 @@ describe("crashes store — annotation validation", () => {
 	});
 
 	it("findCrashByShortHash: ambiguous short-hash throws", () => {
-		recordCrash({ raw: "msg-A", provider: "zai", model: "glm-5.3", now: 1, action: "blind-cycle", verdict: null, noClassifierReason: "not-configured", promptVersion: PROMPT_VERSION });
-		recordCrash({ raw: "msg-B", provider: "zai", model: "glm-5.3", now: 2, action: "blind-cycle", verdict: null, noClassifierReason: "not-configured", promptVersion: PROMPT_VERSION });
+		recordCrash({
+			raw: "msg-A",
+			provider: "zai",
+			model: "glm-5.3",
+			now: 1,
+			action: "blind-cycle",
+			verdict: null,
+			noClassifierReason: "not-configured",
+			promptVersion: PROMPT_VERSION,
+		});
+		recordCrash({
+			raw: "msg-B",
+			provider: "zai",
+			model: "glm-5.3",
+			now: 2,
+			action: "blind-cycle",
+			verdict: null,
+			noClassifierReason: "not-configured",
+			promptVersion: PROMPT_VERSION,
+		});
 		const a = shortHash(hashSample("msg-A"));
 		expect(() => findCrashByShortHash(a[0]!)).toThrow(/ambiguous/);
 	});
@@ -221,7 +370,16 @@ describe("crashes store — recording across all 5 no-classifier reasons", () =>
 	const reasons = ["not-configured", "unresolvable", "timeout", "threw", "unparseable"] as const;
 	for (const reason of reasons) {
 		it(`records a no-classifier reason (${reason}) with the action "blind-cycle"`, () => {
-			recordCrash({ raw: `raw-${reason}`, provider: "zai", model: "glm-5.3", now: 1, action: "blind-cycle", verdict: null, noClassifierReason: reason, promptVersion: PROMPT_VERSION });
+			recordCrash({
+				raw: `raw-${reason}`,
+				provider: "zai",
+				model: "glm-5.3",
+				now: 1,
+				action: "blind-cycle",
+				verdict: null,
+				noClassifierReason: reason,
+				promptVersion: PROMPT_VERSION,
+			});
 			const entry = lookupCrash(`raw-${reason}`);
 			expect(entry?.noClassifierReason).toBe(reason);
 			expect(entry?.verdict).toBeNull();

@@ -24,12 +24,12 @@
  * canonical reference).
  */
 
-import type { ExtensionAPI, ExtensionContext, ModelRoute } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resolveFallbacks, type AvailabilityRegistry } from "./src/availability.ts";
 import { SWITCHBACK_PROVIDER, findModelConfig, loadConfig } from "./src/config.ts";
 import { runDialogue } from "./src/dialogue.ts";
 import { createSecretStore } from "./src/secrets.ts";
-import { buildRoute, decide, observeUnretriedFailure, ConfigInvalidError, type RouterRegistry } from "./src/routing.ts";
+import { buildRoute, decide, observeUnretriedFailure, ConfigInvalidError } from "./src/routing.ts";
 import { buildClassifierProviders } from "./src/classifier-catalog.ts";
 import { buildProbeContext, probeLocalClassifier, summarizeProbe, type ProbeResult } from "./src/classifier-probe.ts";
 import { createModelPicker } from "./src/model-picker.ts";
@@ -37,7 +37,14 @@ import { groupLocalEndpoints, registerLocalClassifier } from "./src/local-classi
 import { SWITCHBACK_THINKING_LEVELS } from "./src/thinking.ts";
 import { getPinnedModel, isBlocked, readBlockedMap, readPinMap, setPinnedModel } from "./src/state.ts";
 import { annotateCrash, hashSample, isValidAnnotationClass, readCrashMap, shortHash } from "./src/crashes.ts";
-import type { ErrorClass, JevConfig, ModelId, ResolvedSwitchbackConfig, ResolvedSwitchbackFileConfig, SwitchbackState } from "./src/types.ts";
+import type {
+	ErrorClass,
+	JevConfig,
+	ModelId,
+	ResolvedSwitchbackConfig,
+	ResolvedSwitchbackFileConfig,
+	SwitchbackState,
+} from "./src/types.ts";
 
 export default function (pi: ExtensionAPI) {
 	// Secrets: `apiKey: secret:<name>` references in the config are resolved to
@@ -46,7 +53,6 @@ export default function (pi: ExtensionAPI) {
 	const secrets = createSecretStore();
 	const initial = safeLoad(pi, secrets);
 	const modelConfigs = initial.config.models;
-	const configSource = initial.source;
 	// Diagnostic switch notifications: the config's `debug: true`, overridden by the
 	// SWITCHBACK_DEBUG environment variable for quick toggling without a config edit.
 	const debug = debugFlag(process.env["SWITCHBACK_DEBUG"]) ?? initial.config.debug ?? false;
@@ -245,7 +251,12 @@ export default function (pi: ExtensionAPI) {
 					ui: ctx.ui,
 					// The searchable catalog picker is TUI-only; other modes fall back to
 					// the dialogue's text prompt for `provider/id`.
-					...(ctx.mode === "tui" ? { pickModel: (title: string, current: readonly string[]) => pickModelInteractive(ctx, title, current) } : {}),
+					...(ctx.mode === "tui"
+						? {
+								pickModel: (title: string, current: readonly string[]) =>
+									pickModelInteractive(ctx, title, current),
+							}
+						: {}),
 					classifierProviders: classifierProvidersFrom(ctx.modelRegistry),
 					probeClassifier: (jev: JevConfig) => probeClassifierConfig(ctx, jev),
 				},
@@ -341,7 +352,9 @@ export default function (pi: ExtensionAPI) {
 				const clsOrReason = e.verdict ? `${e.verdict.class}` : `no-classifier (${e.noClassifierReason ?? "?"})`;
 				const annotated = e.annotated ? "  [annot]" : "";
 				const lastMin = Math.max(0, Math.floor((Date.now() - e.last) / 60_000));
-				lines.push(`  ${shortHash(hash)}  ${e.provider}/${e.model}  ${clsOrReason}  count=${e.count}  last=${lastMin}m ago  action=${e.action}${annotated}`);
+				lines.push(
+					`  ${shortHash(hash)}  ${e.provider}/${e.model}  ${clsOrReason}  count=${e.count}  last=${lastMin}m ago  action=${e.action}${annotated}`,
+				);
 			}
 			await ctx.ui.notify(lines.join("\n"), "info");
 		},
@@ -370,7 +383,10 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			if (!isValidAnnotationClass(parsed.class)) {
-				await ctx.ui.notify(`class must be one of: ${["quota","auth","transient","overflow","unknown"].join(", ")}`, "warning");
+				await ctx.ui.notify(
+					`class must be one of: ${["quota", "auth", "transient", "overflow", "unknown"].join(", ")}`,
+					"warning",
+				);
 				return;
 			}
 			const first = matches[0];
@@ -418,9 +434,7 @@ function pickModelInteractive(
 	title: string,
 	current: readonly string[],
 ): Promise<string | undefined> {
-	const models = ctx.modelRegistry
-		.getModelsOfType("chat")
-		.filter((model) => model.provider !== SWITCHBACK_PROVIDER);
+	const models = ctx.modelRegistry.getModelsOfType("chat").filter((model) => model.provider !== SWITCHBACK_PROVIDER);
 	return ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) =>
 		createModelPicker({
 			tui,
@@ -501,18 +515,22 @@ function debugFlag(value: string | undefined): boolean | undefined {
  * Load the config; surfaces a no-config warning when no file is found rather than
  * throwing (commands run at any time, not just during routing).
  */
-function safeLoad(pi: ExtensionAPI, secrets?: { get(name: string): string | undefined }): {
+function safeLoad(
+	pi: ExtensionAPI,
+	secrets?: { get(name: string): string | undefined },
+): {
 	config: ResolvedSwitchbackFileConfig;
 	source: string;
 } {
 	try {
 		return loadConfig(secrets);
 	} catch (error) {
-		const message = error instanceof ConfigInvalidError
-			? error.message
-			: error instanceof Error
+		const message =
+			error instanceof ConfigInvalidError
 				? error.message
-				: String(error);
+				: error instanceof Error
+					? error.message
+					: String(error);
 		// Best-effort notify: commands only exist after this factory completes, so
 		// this path is only hit on a truly broken config. Fall back to stderr so the
 		// extension is at least visible in the host log.
@@ -526,7 +544,10 @@ function safeLoad(pi: ExtensionAPI, secrets?: { get(name: string): string | unde
 	}
 }
 
-function safeLoadForCommand(pi: ExtensionAPI, secrets?: { get(name: string): string | undefined }): {
+function safeLoadForCommand(
+	pi: ExtensionAPI,
+	secrets?: { get(name: string): string | undefined },
+): {
 	config: ResolvedSwitchbackFileConfig;
 	source: string;
 } {
@@ -552,14 +573,15 @@ interface ParsedAnnotateArgs {
 }
 
 function parseAnnotateArgs(args: string): ParsedAnnotateArgs | undefined {
-	const parts = args.trim().split(/\s+/u).filter((p) => p.length > 0);
+	const parts = args
+		.trim()
+		.split(/\s+/u)
+		.filter((p) => p.length > 0);
 	if (parts.length < 2) return undefined;
 	const [maybeHash, maybeClass, ...rest] = parts;
 	if (maybeHash === undefined || maybeClass === undefined) return undefined;
 	const hashOk = /^[0-9a-f]{4,}$/u.test(maybeHash);
 	if (!hashOk) return undefined;
 	const note = rest.length > 0 ? rest.join(" ") : undefined;
-	return note === undefined
-		? { hash: maybeHash, class: maybeClass }
-		: { hash: maybeHash, class: maybeClass, note };
+	return note === undefined ? { hash: maybeHash, class: maybeClass } : { hash: maybeHash, class: maybeClass, note };
 }

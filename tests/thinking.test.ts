@@ -25,7 +25,10 @@ const CONTEXT: ThinkingLevelContext = { routeReason: "user", failover: false };
 /** The real thinking-level map of zai GLM 5.3 and opencode-go deepseek-v4.1-flash. */
 const ZAI_MAP = { off: null, minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: "max" };
 
-function model(id: string, opts: { reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> } = {}): Model<Api> {
+function model(
+	id: string,
+	opts: { reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> } = {},
+): Model<Api> {
 	return {
 		type: "chat",
 		provider: "zai",
@@ -48,7 +51,10 @@ function classifier(level: string | undefined, calls: string[] = []): Classifier
 		classify: async (_model, context: ClassifierContext) => {
 			calls.push(Object.keys(context.questions).join(","));
 			if (level === undefined) return null as never;
-			return { stopReason: "stop", answers: { level: { type: "choice", choice: level, probabilities: {}, confidence: 1 } } } as never;
+			return {
+				stopReason: "stop",
+				answers: { level: { type: "choice", choice: level, probabilities: {}, confidence: 1 } },
+			} as never;
 		},
 	};
 }
@@ -141,7 +147,10 @@ describe("chooseThinkingLevel", () => {
 			findOfType: (_type, provider, id) => ({ provider, id, api: "classifier", input: ["text"] }) as never,
 			classify: async (_model, context) => {
 				seen = context;
-				return { stopReason: "stop", answers: { level: { type: "choice", choice: "high", probabilities: {}, confidence: 1 } } } as never;
+				return {
+					stopReason: "stop",
+					answers: { level: { type: "choice", choice: "high", probabilities: {}, confidence: 1 } },
+				} as never;
 			},
 		};
 		await chooseThinkingLevel({

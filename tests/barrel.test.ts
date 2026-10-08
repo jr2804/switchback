@@ -13,16 +13,25 @@
  * exports now fails here instead of shipping.
  */
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+
+/** The barrel exports types as well as values, so it is typed loosely on purpose. */
+type Barrel = Record<string, unknown>;
 
 describe("src/index.ts barrel", () => {
-	it("resolves every re-export", async () => {
-		const barrel = await import("../src/index.ts");
+	let barrel: Barrel;
+
+	// Loading the barrel pulls in every src/ module, which can exceed vitest's
+	// 5s default test timeout when 19 files run in parallel. Import once, here.
+	beforeAll(async () => {
+		barrel = await import("../src/index.ts");
+	}, 30_000);
+
+	it("resolves every re-export", () => {
 		expect(Object.keys(barrel).length).toBeGreaterThan(0);
 	});
 
-	it("exposes the documented entry surface", async () => {
-		const barrel: Record<string, unknown> = await import("../src/index.ts");
+	it("exposes the documented entry surface", () => {
 		// One name per seam that has moved at least once, so a future split
 		// that forgets the barrel is caught here.
 		const expected = [

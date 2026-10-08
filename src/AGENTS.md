@@ -56,10 +56,16 @@ downstream consumers only.
   genuinely different reasons to change. Do not split mechanically: moving
   code to hit a number costs a `FILES.md` row, a barrel edit and a
   verification gap (`tsc` only covers the entry graph), and buys nothing if
-  the result still has to be read together. Types that cross a seam move
-  with their consumer and get re-exported, so import sites do not change.
+  the result still has to be read together. A symbol that moves across a seam
+  updates its importers to name the module that now owns it; do not leave a
+  pass-through re-export behind purely so call sites keep compiling.
   A heavily commented file is not automatically over budget: `routing.ts`
   was 820 lines but 545 code, and the surplus was rationale a reader needs.
+  The seam may need a third module to stay acyclic: `src/dialogue.ts` became
+  a shell plus `src/dialogue-classifier.ts` (the wizard) plus
+  `src/dialogue-ui.ts` (session, screen titles, every prompt, shared
+  formatters), because the two halves both needed those primitives and a
+  direct import between them would have been a cycle.
 
 ## Verification
 
@@ -70,7 +76,8 @@ downstream consumers only.
   using the same flags (`npx tsc --noEmit --strict --target ES2022
   --module ESNext --moduleResolution bundler --allowImportingTsExtensions
   --noUncheckedIndexedAccess --exactOptionalPropertyTypes <files>`), and
-  say so in the milestone report.
+  say so in the milestone report. `src/index.ts` is outside that graph too,
+  which is why `tests/barrel.test.ts` imports it.
 
 ## Child DOX Index
 

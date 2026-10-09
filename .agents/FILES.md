@@ -19,6 +19,7 @@
 | …its shared session, screen-title and prompt primitives | `src/dialogue-ui.ts` |
 | …its decision-model wizard (`decisionModels`, provider/baseUrl/model prompts, API-key step) | `src/dialogue-classifier.ts` |
 | Shared types | `src/types.ts` |
+| Atomic store writes (per-write staging path, retried rename) | `src/atomic-write.ts` |
 | Blocked-until store (atomic) | `src/state.ts` |
 | Crash store + Tier 2b annotation cache | `src/crashes.ts` |
 | Encrypted API-key store (DPAPI at rest) | `src/secrets.ts` |

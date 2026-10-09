@@ -22,6 +22,10 @@ command output.
 - **Deterministic by default, live by opt-in.** Mocked classifier/backend
   fixtures for the default path; a real end-to-end path exists only behind
   an env switch that skips otherwise (pattern: `SWITCHBACK_SECRETS_LIVE` in
+  `tests/secrets.test.ts`). The one default-path process spawn is
+  `tests/atomic-write.test.ts` holding a file open in a PowerShell child -
+  the EPERM reproduction needs a real OS handle and has no credential or
+  backend behind it (`it.runIf(win32)`, like the powershell case in
   `tests/secrets.test.ts`).
 - **Synthetic values only.** Never a real credential, machine path,
   account handle or email in a fixture or assertion — assertion output is

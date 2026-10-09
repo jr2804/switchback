@@ -21,11 +21,16 @@ downstream consumers only.
   only; type-only subpath imports are fine. `tests/imports.test.ts` pins
   this (switchback v1 shipped broken over it).
 - **Account-scoped stores.** Runtime state lives under `piSwitchbackDir()`
-  (`<piConfigDir>/switchback/`) and is written atomically — tmp + rename,
-  the `state.ts` pattern (root AGENTS.md project rule 3 owns the location;
-  this owns the write pattern). Stores handle their own on-disk corruption
-  explicitly (quarantine or refuse, never silent overwrite of
-  irreplaceable data).
+  (`<piConfigDir>/switchback/`) and is written atomically by
+  `writeFileAtomic` (`src/atomic-write.ts`): a staging path per write —
+  `<file>.<pid>.<seq>.tmp`, never a fixed `<file>.tmp` two writers could share —
+  then a rename retried with a real backoff, because Windows refuses the rename
+  with `EPERM` while another process holds the destination (root AGENTS.md
+  project rule 3 owns the location; this owns the write pattern). Every store
+  goes through it; a store with its own error vocabulary wraps the failure
+  (`CrashError`, `SecretsError`, `ConfigError`). Stores handle their own
+  on-disk corruption explicitly (quarantine or refuse, never silent overwrite
+  of irreplaceable data).
 - **Typed errors at public boundaries** — `ConfigError`, `CrashError`,
   `SecretsError`, `SimulateError`: stable `name`, message prefix, `cause`
   retained. No bare `throw new Error` from an exported function.

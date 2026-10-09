@@ -4,6 +4,53 @@ Durable decisions, recorded with git refs. Add new entries at the top.
 Routine history stays in `git log`; only decisions that changed the
 project's direction, contract, or policy belong here.
 
+## 2026-10-09 — One atomic writer for every store (`src/atomic-write.ts`)
+
+`npx vitest run` failed intermittently with `EPERM: operation not permitted,
+rename '<...>\crashes.json.tmp' -> '<...>\crashes.json'` out of
+`tests/crashes.test.ts` ("verdictHistory appends and is bounded at 50 entries"),
+measured at roughly one full run in three and only under parallel load. Both
+defects the shape had were real:
+
+- The comment claimed "retry once after a small backoff"; the code slept
+  **zero** milliseconds between the two attempts. Measured on this host, holding
+  a file open for 150 ms from another process refuses every rename aimed at it
+  for the whole hold (Windows denies sharing deletion), and the hold lands at
+  230-260 ms of real time - so an immediate retry cannot win, ever.
+- The staging path was a fixed `<path>.tmp`, so two pi sessions sharing
+  `<piConfigDir>/switchback/` fought over one staging file: the first rename
+  moves the *other* writer's bytes away and the loser then fails on a source
+  that is gone.
+
+So all four stores now write through one exported writer,
+`writeFileAtomic(path, contents)`: staging path per write
+(`<file>.<pid>.<seq>.tmp`), 7 rename attempts with a doubling backoff
+(10...320 ms), the staging file removed on failure, and an `AtomicWriteError`
+carrying the last fs error as its `cause`. A store that has its own error
+vocabulary wraps it - `CrashError`, `SecretsError`, and `config-editor.ts`'s
+existing "cannot write config" message; `state.ts` has none today and lets
+`AtomicWriteError` out as it is.
+
+Scope was the whole set, not just `crashes.ts`: `src/AGENTS.md` already made
+"tmp + rename, the state.ts pattern" a contract shared by every store, and a
+fix in one store with the same latent bug in three others would have left the
+contract a lie - and `secrets.ts`, whose blobs are irreplaceable, had the bare
+rename with no retry at all.
+
+The regression test reproduces the failure rather than asserting the absence of
+one: `tests/atomic-write.test.ts` holds the destination open from a PowerShell
+child (no `FILE_SHARE_DELETE`), checks that a rename really does fail there,
+then calls the writer and requires it to complete. It **fails 5/5 against the
+old two-immediate-attempt shape** and passes with the backoff (re-measured
+independently: both old attempts land 2-14 ms into a ~312 ms EPERM window). Its
+reproduction guard is why the earlier draft was flaky: the child's `held` signal
+can arrive after the hold lapsed under load, so the test retries the round and
+fails if it never observes an active hold.
+
+After the change: **36 consecutive full-suite runs, zero failures** of this kind
+(one unrelated 30 s `tests/barrel.test.ts` import-timeout surfaced while the
+machine was saturated by that loop, then 26/26 clean).
+
 ## 2026-10-06 — Scope question anchored on lexical cues (PROMPT_VERSION v4)
 
 `scope` came back `unknown` for every message on every backend. Not a parsing

@@ -74,7 +74,6 @@ the command reports and exits without prompting.
   The `score` line is a **rubric index** (the probe's rubric has three levels,
   so a fair coin should land on index 1), which is why it is shown with the
   level it lands on rather than as a bare number.
-
 - **Debug** — toggles the top-level `debug:` flag (per-switch diagnostics).
 - **Layer switch** — the dialogue asks **which layer to edit before anything
   else**, and "Switch layer..." in the main menu asks again. The chooser shows

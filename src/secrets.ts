@@ -22,7 +22,7 @@
  * entry name and powershell diagnostics, never the value.
  *
  * File format: `{ "version": 1, "entries": { "<name>": "<dpapi base64>" } }`,
- * written atomically (tmp + rename, the state.ts pattern). A file that cannot
+ * written atomically (`writeFileAtomic`, src/atomic-write.ts). A file that cannot
  * be parsed or does not have that shape is quarantined to
  * `secrets.json.corrupt.<ts>` (the crashes.ts pattern) and the store starts
  * fresh - except the rename failure itself is NOT swallowed (unlike crashes):
@@ -37,8 +37,9 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, renameSync } from "node:fs";
+import { join } from "node:path";
+import { writeFileAtomic } from "./atomic-write.ts";
 import { piSwitchbackDir } from "./config.ts";
 
 /** Current on-disk format version of secrets.json. */
@@ -253,10 +254,11 @@ function readStore(path: string): SecretsFile {
 }
 
 function writeStore(path: string, store: SecretsFile): void {
-	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.tmp`;
-	writeFileSync(tmp, JSON.stringify(store, null, 2), "utf8");
-	renameSync(tmp, path);
+	try {
+		writeFileAtomic(path, JSON.stringify(store, null, 2));
+	} catch (error) {
+		throw new SecretsError(`cannot write secret store ${path}`, { cause: error });
+	}
 }
 
 function assertName(name: string): void {

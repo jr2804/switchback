@@ -79,6 +79,13 @@ function quarantinedFiles(): string[] {
 	return readdirSync(dir).filter((f) => f.startsWith("secrets.json.corrupt."));
 }
 
+/** Staging files `writeFileAtomic` uses, had it failed to rename one away. */
+function stagingFiles(): string[] {
+	const dir = piSwitchbackDir();
+	if (!existsSync(dir)) return [];
+	return readdirSync(dir).filter((f) => f.startsWith("secrets.json.") && f.endsWith(".tmp"));
+}
+
 describe("secret store — round-trip", () => {
 	it("set then get returns the value", () => {
 		const store = createSecretStore(mockDpapi);
@@ -175,9 +182,9 @@ describe("secret store — on-disk format", () => {
 		expect(bytes).toContain("enc:");
 	});
 
-	it("atomic write: no .tmp file is left behind", () => {
+	it("atomic write: no staging file is left behind", () => {
 		createSecretStore(mockDpapi).set("alpha", SECRET);
-		expect(existsSync(`${secretsFilePath()}.tmp`)).toBe(false);
+		expect(stagingFiles()).toEqual([]);
 	});
 });
 
@@ -260,7 +267,7 @@ describe("secret store — DPAPI unavailable", () => {
 		expect(String(caught)).not.toContain(OTHER_SECRET);
 		expect(readFileSync(secretsFilePath(), "utf8")).toBe(before);
 		expect(before).not.toContain(OTHER_SECRET);
-		expect(existsSync(`${secretsFilePath()}.tmp`)).toBe(false);
+		expect(stagingFiles()).toEqual([]);
 	});
 
 	it("get throws instead of returning anything when DPAPI is unavailable", () => {

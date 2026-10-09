@@ -26,12 +26,13 @@
  * promoted into the repo (no fixtures or seeds are derived from this
  * file at release time).
  *
- * Atomic write: tmp file + rename (same pattern as state.ts).
+ * Atomic write: `writeFileAtomic` (src/atomic-write.ts).
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, renameSync } from "node:fs";
+import { join } from "node:path";
+import { writeFileAtomic } from "./atomic-write.ts";
 import { piSwitchbackDir } from "./config.ts";
 import type { ClassifiedError, ErrorClass, ErrorScope } from "./types.ts";
 import type { NoClassifierReason } from "./classify.ts";
@@ -124,22 +125,11 @@ function quarantineCorruptFile(path: string): void {
 }
 
 function writeRaw(path: string, map: CrashMap): void {
-	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.tmp`;
-	writeFileSync(tmp, JSON.stringify(map, null, 2), "utf8");
-	// Windows can transiently fail rename on rapid successive writes (EPERM);
-	// retry once after a small backoff. The crash store is a side effect, so
-	// the worst case on persistent failure is the caller's try/catch swallowing.
-	let lastErr: unknown = undefined;
-	for (let attempt = 0; attempt < 2; attempt++) {
-		try {
-			renameSync(tmp, path);
-			return;
-		} catch (e) {
-			lastErr = e;
-		}
+	try {
+		writeFileAtomic(path, JSON.stringify(map, null, 2));
+	} catch (error) {
+		throw new CrashError(`cannot write crash store ${path}`, { cause: error });
 	}
-	throw lastErr;
 }
 
 /** Read the full crash store. Returns an empty map if the file is missing or corrupt. */
@@ -274,8 +264,8 @@ export function isValidAnnotationClass(value: string): value is ErrorClass {
 }
 
 export class CrashError extends Error {
-	constructor(message: string) {
-		super(`switchback: crashes: ${message}`);
+	constructor(message: string, options?: ErrorOptions) {
+		super(`switchback: crashes: ${message}`, options);
 		this.name = "CrashError";
 	}
 }

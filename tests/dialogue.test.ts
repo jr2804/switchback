@@ -20,7 +20,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -209,7 +209,7 @@ describe("config-editor: layer handling", () => {
 		expect(text).toContain("switchback configuration - see docs/configuration.md");
 		expect(text).toContain("id: switchback/auto");
 		expect(text).toContain("zai/glm-5.3");
-		expect(existsSync(`${globalPath()}.tmp`)).toBe(false);
+		expect(readdirSync(tmpDir).filter((name) => name.startsWith("switchback.yaml."))).toEqual([]);
 	});
 
 	it("prefers the global layer, falling back to a project-only file", () => {

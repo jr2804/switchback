@@ -4,6 +4,7 @@
  * can `import { decide, ... } from "..//src/index.ts"` without enumerating modules.
  */
 
+export { writeFileAtomic, AtomicWriteError } from "./atomic-write.ts";
 export { decide, observeUnretriedFailure, assessFailure, MAX_TRANSIENT_RETRIES } from "./routing.ts";
 export type { RouteInputs } from "./routing.ts";
 export { buildRoute, ConfigInvalidError } from "./build-route.ts";

@@ -9,8 +9,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
 	annotateCrash,
@@ -77,7 +77,7 @@ describe("crashes store — roundtrip", () => {
 			promptVersion: PROMPT_VERSION,
 		});
 		const path = crashesFilePath();
-		expect(existsSync(`${path}.tmp`)).toBe(false); // tmp is moved
+		expect(readdirSync(dirname(path))).toEqual(["crashes.json"]); // the staging file is renamed away
 		const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 		expect(Object.keys(raw)).toHaveLength(1);
 	});

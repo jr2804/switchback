@@ -2,7 +2,7 @@
  * Cross-session blocked-until map persisted to `<piConfigDir>/switchback/blocks.json`.
  *
  * The file is managed by the switchback runtime, not user-edited. Writes are atomic
- * (write to a temp file, then rename) so a crash during a write cannot corrupt the map.
+ * (`writeFileAtomic`, src/atomic-write.ts) so a crash during a write cannot corrupt the map.
  *
  * Path change: prior to v2026.10.5 the file lived at `<cwd>/.pi/switchback.json`.
  * Blocks are account-scoped (a hit on `zai/glm-5.3` 5h is a fact about the
@@ -16,8 +16,9 @@
  * a write actually changes the map.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { writeFileAtomic } from "./atomic-write.ts";
 import { piSwitchbackDir } from "./config.ts";
 import type { BlockedMap, ModelId } from "./types.ts";
 
@@ -50,10 +51,7 @@ function readRaw(path: string): BlockedMap {
 }
 
 function writeRaw(path: string, map: BlockedMap): void {
-	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.tmp`;
-	writeFileSync(tmp, JSON.stringify(map, null, 2), "utf8");
-	renameSync(tmp, path);
+	writeFileAtomic(path, JSON.stringify(map, null, 2));
 }
 
 /** Migrate the legacy project-local file into the new account-scoped path. Idempotent. */
@@ -156,10 +154,7 @@ function readPinRaw(path: string): PinMap {
 }
 
 function writePinRaw(path: string, map: PinMap): void {
-	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.tmp`;
-	writeFileSync(tmp, JSON.stringify(map, null, 2), "utf8");
-	renameSync(tmp, path);
+	writeFileAtomic(path, JSON.stringify(map, null, 2));
 }
 
 /** Read the whole pin map (mostly for status displays). */

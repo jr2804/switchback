@@ -32,8 +32,9 @@
  * project layer works without ceremony.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { writeFileAtomic } from "./atomic-write.ts";
 import { isMap, isSeq, parseDocument, type Document, type YAMLMap, type YAMLSeq } from "yaml";
 import { ConfigError, LOCAL_CLASSIFIER_APIS, piConfigDir, resolveJevConfig, validateFileConfig } from "./config.ts";
 import type { DecisionModelEntry, JevConfig, JevRef, ModelId, SwitchbackFileConfig } from "./types.ts";
@@ -439,11 +440,8 @@ export function saveLayer(loaded: LoadedLayer): void {
 	for (const model of parsed.models) {
 		resolveJevConfig(parsed.decisionModels, model.jev as JevRef | undefined);
 	}
-	mkdirSync(dirname(loaded.path), { recursive: true });
-	const tmp = `${loaded.path}.tmp`;
 	try {
-		writeFileSync(tmp, loaded.doc.toString(), "utf8");
-		renameSync(tmp, loaded.path);
+		writeFileAtomic(loaded.path, loaded.doc.toString());
 	} catch (error) {
 		throw new ConfigError(`cannot write config: ${errorMessage(error)}`, loaded.path);
 	}

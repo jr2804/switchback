@@ -26,8 +26,8 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { RouterRegistry } from "./routing.ts";
-import { decide, type Decision } from "./routing.ts";
+import type { Decision, NotifyFn, RouterRegistry } from "./build-route.ts";
+import { decide } from "./routing.ts";
 import type { BlockedMap, ModelId, ResolvedSwitchbackConfig } from "./types.ts";
 
 export interface SimulateConfig {
@@ -110,7 +110,7 @@ export async function simulateRetry(
 	scenarioMessage: string,
 	modelConfig: ResolvedSwitchbackConfig,
 	registry: RouterRegistry,
-	inputs: { now?: number; blocked?: BlockedMap; notify?: import("./routing.ts").NotifyFn } = {},
+	inputs: { now?: number; blocked?: BlockedMap; notify?: NotifyFn } = {},
 ): Promise<SimulateResult> {
 	const now = inputs.now ?? Date.now();
 	const blocked = inputs.blocked ?? {};

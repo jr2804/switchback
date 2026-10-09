@@ -31,20 +31,14 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import {
-	decide,
-	buildRoute,
-	observeUnretriedFailure,
-	MAX_TRANSIENT_RETRIES,
-	type Decision,
-	type RouterRegistry,
-} from "../src/routing.ts";
+import { buildRoute, ConfigInvalidError, type Decision, type RouterRegistry } from "../src/build-route.ts";
+import { observeUnretriedFailure, MAX_TRANSIENT_RETRIES } from "../src/failure.ts";
+import { decide } from "../src/routing.ts";
 import { readCrashMap } from "../src/crashes.ts";
 import { stateFilePath, readBlockedMap, isBlocked, unblockModel, blockModel, setPinnedModel } from "../src/state.ts";
 import { simulateRetry, loadSimulate, getScenario, SimulateError } from "../src/simulate.ts";
 import { findModelConfig, loadConfig } from "../src/config.ts";
 import { callClassifier, classifyError, MAX_SCORE_LEVELS, type NoClassifierReason } from "../src/classify.ts";
-import { ConfigInvalidError } from "../src/routing.ts";
 import type { SwitchbackConfig } from "../src/types.ts";
 
 interface FakeEntry {

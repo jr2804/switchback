@@ -39,7 +39,7 @@ describe("src/index.ts barrel", () => {
 			"describeJev", // src/dialogue-ui.ts (moved out of dialogue.ts)
 			"layerOptionLabel", // src/dialogue.ts
 			"decide", // src/routing.ts
-			"observeUnretriedFailure", // src/routing.ts
+			"observeUnretriedFailure", // src/failure.ts
 			"buildRoute", // src/build-route.ts (split out of routing.ts)
 			"ConfigInvalidError", // src/build-route.ts
 		];

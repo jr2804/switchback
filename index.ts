@@ -29,7 +29,9 @@ import { resolveFallbacks, type AvailabilityRegistry } from "./src/availability.
 import { SWITCHBACK_PROVIDER, findModelConfig, loadConfig } from "./src/config.ts";
 import { runDialogue } from "./src/dialogue.ts";
 import { createSecretStore } from "./src/secrets.ts";
-import { buildRoute, decide, observeUnretriedFailure, ConfigInvalidError } from "./src/routing.ts";
+import { buildRoute, ConfigInvalidError } from "./src/build-route.ts";
+import { observeUnretriedFailure } from "./src/failure.ts";
+import { decide } from "./src/routing.ts";
 import { buildClassifierProviders } from "./src/classifier-catalog.ts";
 import { buildProbeContext, probeLocalClassifier, summarizeProbe, type ProbeResult } from "./src/classifier-probe.ts";
 import { createModelPicker } from "./src/model-picker.ts";
@@ -94,7 +96,7 @@ export default function (pi: ExtensionAPI) {
 				// Wire the no-classifier report to ctx.ui.notify when pi is running
 				// in a UI-capable mode (TUI / RPC). In non-UI modes (print, RPC-no-ui)
 				// the call is a no-op so simulate/replay and headless runs are silent.
-				const notify: import("./src/routing.ts").NotifyFn = ctx.hasUI
+				const notify: import("./src/build-route.ts").NotifyFn = ctx.hasUI
 					? (message, type) => ctx.ui.notify(message, type)
 					: () => {};
 				// Live-reload the config so edits to switchback.yaml are picked up without

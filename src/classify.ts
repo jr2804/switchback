@@ -112,8 +112,22 @@ const MAX_RESET_MS = 31 * 24 * 3_600_000;
  * model the lexical cues an error message really carries (a named model, a key
  * or plan, an address) and asks for `unknown` only as a last resort. Verdicts
  * recorded under v1-v3 keep their old meaning.
+ *
+ * v5 (2026-10-09): v4's `scope` wording is kept but its worked examples are
+ * removed. Those examples (`'GLM 5h window'`, `'invalid API key'`, `'monthly
+ * cap'`, ...) were lifted verbatim from captured provider traffic, which makes
+ * them corpus-derived prompt criteria - forbidden by root AGENTS.md project
+ * rule 7. What survives is the general cue each option stands for (a named
+ * model or series / a credential, plan, balance or usage quota / an address or
+ * region), which is a property of the question rather than of any provider.
+ * Measured before and after on two held-out messages that were never in the
+ * corpus: `typesafe/jev-latest` 7/7 with and without the examples, so the
+ * hosted classifier never needed them; `parable/tinyjev:latest` drops 7/7 ->
+ * 5/7, losing `weekly token limit exhausted` and `monthly cap`, which the
+ * smaller model needed a concrete anchor for. The hosted path is what the
+ * shipped config uses. Verdicts recorded under v1-v4 keep their old meaning.
  */
-export const PROMPT_VERSION = "v4";
+export const PROMPT_VERSION = "v5";
 
 /** Clamp a reset timestamp to [now+1m, now+31d]. Inputs <= now are bumped to now+1m. */
 function clampReset(at: number, now: number): number {
@@ -205,11 +219,10 @@ const JEV_QUESTIONS = {
 	scope: {
 		type: "choice" as const,
 		instructions:
-			"Decide what the limit attaches to, using the wording of the message itself. A named model or series (GLM, claude-*, gpt-*, a specific model id) means 'model'; a key, plan, balance, credits or a usage quota means 'account'; an address or region means 'ip'. Choose 'unknown' only when the message names none of those.",
+			"Decide what the limit attaches to, using the wording of the message itself. A named model or series means 'model'; a key, plan, balance, credits or a usage quota means 'account'; an address or region means 'ip'. Choose 'unknown' only when the message names none of those.",
 		criteria: {
-			model: "The message names a specific model or series (e.g. 'GLM 5h window', 'model x is rate limited').",
-			account:
-				"The message refers to the key, plan, balance, credits or a usage quota (e.g. 'invalid API key', 'weekly token limit exhausted', 'insufficient credits', 'monthly cap').",
+			model: "The message names a specific model or series.",
+			account: "The message refers to a credential, a plan, a balance or a usage quota.",
 			ip: "The message mentions an IP address, a region, or per-address throttling.",
 			unknown: "The message names no model, no credential or plan, and no address - only a bare failure.",
 		},

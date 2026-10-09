@@ -29,12 +29,25 @@ command output.
   `tests/secrets.test.ts`).
 - **Synthetic values only.** Never a real credential, machine path,
   account handle or email in a fixture or assertion — assertion output is
-  printed, and the personal-data scrub (root AGENTS.md project rule 7)
+  printed, and the personal-data scrub (root AGENTS.md project rule 8)
   applies to anything derived from a test.
 - **Secret material is asserted absent, never printed.** Round-trip
   assertions use marked-fake sentinels; on-disk checks read the bytes and
   assert the value is missing. Snapshot updates are deliberate, reviewed
   diffs — never regenerated wholesale to make a run green.
+- **Keep a suite under ~500 lines of code** (comments and blank lines
+  excluded), the same heuristic `src/AGENTS.md` states for modules and for
+  the same reason: it is a readability limit carried over from
+  Python/Rust/C practice, not a TS idiom. Measure the suite alone; do not
+  add its subject module's size to it. When one exceeds the limit, split on
+  a **subject seam** — the suites already follow the module map, so
+  `router.test.ts` splits into `decide`, `build-route` and `failure` suites
+  rather than at an arbitrary line. Helpers two suites need move to a
+  shared test-helper module, the way `src/dialogue.ts` shares
+  `src/dialogue-ui.ts`; a pass-through re-export kept only so call sites
+  compile is not acceptable (`src/AGENTS.md` → Work Guidance). Test files
+  are outside the `tsc` graph, so a split that breaks an import surfaces
+  only in vitest — keep the suite green at every step.
 
 ## Verification
 

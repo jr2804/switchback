@@ -13,12 +13,15 @@ Build steps 1–8 are complete (per the design doc):
 - [x] **Step 3** — Atomic blocked-until store at `<piConfigDir>/switchback/blocks.json` (account-scoped; legacy `<cwd>/.pi/switchback.json` migrated on first read).
 - [x] **Step 4** — Classifier-only call via `ctx.modelRegistry.classify()`. The blind-cycle fallback
   replaces the heuristic: when the classifier is missing, unresolvable, or its call fails, the
-  router reports visibly and cycles. **Jev prompt v4 2026-10-06**: the reset
+  router reports visibly and cycles. **Jev prompt v5 2026-10-09**: the reset
   question is a 9-level rubric whose levels are the answer space (SystemOne `score`
   answers are weighted averages of level indices, not percentages), kept at or
   under `MAX_SCORE_LEVELS` = 10 because TypeSafe's hosted Jev rejects more with a
-  400 and returns no answers at all; and the `scope` question is anchored on
-  lexical cues rather than counterfactuals. v1 locked
+  400 and returns no answers at all; and the `scope` question is anchored on the
+  general cue each option stands for rather than counterfactuals, with **no worked
+  examples** — root AGENTS.md project rule 7 forbids prompt criteria derived from
+  collected provider traffic, so a captured message may only ever be a test input.
+  v1 locked
   2026-10-04 against 41 passively-collected real error samples (see
   [Classifier → Coverage matrix](classifier.md#coverage-matrix)).
 - [x] **Step 5** — `route()` reason dispatch (`user` / `continuation` / `retry` / `direct`) per design doc.
@@ -40,20 +43,24 @@ their environment gates are set:
 
 | File | Tests | Covers |
 |---|---|---|
-| `tests/router.test.ts` | 85 | routing, blind cycle, classifier-mocked verdicts, session stickiness, pin override, idle reset, context-window fit and the classifier's candidate choice, forward failover walk, catalog validity, exhaustion, thinking-level resolution, state, buildRoute |
+| `tests/router.test.ts` | 90 | routing, blind cycle, classifier-mocked verdicts, session stickiness, pin override, idle reset, context-window fit and the classifier's candidate choice, forward failover walk, catalog validity, exhaustion, thinking-level resolution, state, buildRoute, and the unretried-failure fallback (`observeUnretriedFailure` blocks and the next turn walks forward) |
+| `tests/config.test.ts` | 28 | `DEFAULT_CONFIG`, `findModelConfig`, layer aggregation, YAML-only, classifier-field validation, orphan `decisionModels` rejection, reserved-provider rejection, debug flag |
 | `tests/dialogue.test.ts` | 35 | config editor: comment-preserving round-trip, layers, decision models, secret references; dialogue flows incl. the layer chooser, the searchable picker and the classifier test offer (scripted UI, hermetic) |
-| `tests/classifier-probe.test.ts` | 11 | the capability probe: prompt shape, answer validation, verdict and report, local endpoint path (injected fetch) |
-| `tests/model-picker.test.ts` | 8 | picker items and key routing: fuzzy filtering, Tab/Enter accept, exact typed reference, cancel |
-| `tests/context-fit.test.ts` | 6 | window arithmetic and the candidate-choice question: classifier pick, no-classifier fallback, answer outside the offered set (hermetic) |
-| `tests/classifier-catalog.test.ts` | 6 | provider choices, local endpoint env defaults, base URL normalization |
-| `tests/crashes.test.ts` | 25 | crash store, dedup, Tier 2b cache, annotation, corrupt-file quarantine |
-| `tests/config.test.ts` | 23 | `DEFAULT_CONFIG`, `findModelConfig`, layer aggregation, YAML-only, classifier-field validation, debug flag |
 | `tests/secrets.test.ts` | 23 (1 opt-in) | encrypted DPAPI store: round-trip, corruption quarantine, version refuse; live DPAPI gated on `SWITCHBACK_SECRETS_LIVE` |
+| `tests/crashes.test.ts` | 25 | crash store, dedup, Tier 2b cache, annotation, corrupt-file quarantine |
 | `tests/classify-inventory.test.ts` | 15 | corpus-preservation in `switchback.simulate.json` |
+| `tests/idle.test.ts` | 15 | idle-reset thresholds, timestamp extraction, formatting, classifier contract (hermetic) |
+| `tests/classifier-probe.test.ts` | 11 | the capability probe: prompt shape, answer validation, verdict and report, local endpoint path (injected fetch) |
+| `tests/classifier-catalog.test.ts` | 9 | provider choices, local endpoint env defaults, base URL normalization |
+| `tests/model-picker.test.ts` | 8 | picker items and key routing: fuzzy filtering, Tab/Enter accept, exact typed reference, cancel |
+| `tests/classifier-discovery.test.ts` | 6 | live local-endpoint model discovery filtered by the `decision` capability |
+| `tests/context-fit.test.ts` | 6 | window arithmetic and the candidate-choice question: classifier pick, no-classifier fallback, answer outside the offered set (hermetic) |
+| `tests/atomic-write.test.ts` | 3 (1 win32-only) | the shared store writer: a fresh staging path per write, no staging file left behind, and a rename that survives a Windows handle held on the destination by a PowerShell child — the EPERM reproduction, which fails against the old two-immediate-attempt shape |
 | `tests/state-migration.test.ts` | 5 | legacy `<cwd>/.pi/switchback.json` → new path migration |
 | `tests/systemone.test.ts` | 5 | switchback's own System One transport (hermetic; injected fetch) |
+| `tests/commands.test.ts` | 4 | the registered command surface and its snapshot |
 | `tests/thinking.test.ts` | 10 | reasoning-level categories, availability, and classifier resolution (hermetic) |
-| `tests/idle.test.ts` | 15 | idle-reset thresholds, timestamp extraction, formatting, classifier contract (hermetic) |
+| `tests/barrel.test.ts` | 2 | `src/index.ts` resolves and exposes the documented entry surface — nothing else loads it, so a bad re-export would otherwise ship |
 | `tests/imports.test.ts` | 2 | shipped code never value-imports a host-package subpath (install-safe) |
 | `tests/integration-classifier.test.ts` | 1 (10 opt-in) | live classifier against the preserved corpus (gated on `SWITCHBACK_CLASSIFIER_*`) |
 

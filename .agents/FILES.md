@@ -8,6 +8,7 @@
 | tsconfig used for type-aware lint (covers `src/` + `tests/`) | `tsconfig.eslint.json` |
 | Lint / format tasks | `.config/mise/conf.d/ts.toml` |
 | Routing (`decide`) | `src/routing.ts` |
+| Failure assessment, blocking and crash recording (`assessFailure`, `observeUnretriedFailure`) | `src/failure.ts` |
 | Dispatch (`buildRoute`, reasoning-level resolution) | `src/build-route.ts` |
 | Classification (`classifyError`) | `src/classify.ts` |
 | Local-classifier provider registration | `src/local-classifier.ts` |

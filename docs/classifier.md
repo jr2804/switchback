@@ -3,11 +3,13 @@
 The router classifies every provider failure through the configured SystemOne
 classifier — a single source of truth for message-derived decisions. There are
 no keyword sets, no HTTP-code patterns, and no regex-based reset extractor in
-the production route. The prompt is Jev prompt **v2** (2026-10-06), which
-keeps the v1 class/scope questions and replaces the reset question with a
-rubric, both validated against 41 passively-collected real error samples.
+the production route, and no prompt criteria taken from collected provider
+traffic (root `AGENTS.md` project rule 7). The prompt is Jev prompt **v5**
+(2026-10-09). It was locked against 41 passively-collected real error samples,
+and the corpus is **test input only** — it is never a reason to change the
+prompt.
 
-### The `reset` answer is a rubric index
+## The `reset` answer is a rubric index
 
 A SystemOne `score` answer is the probability-weighted average of the rubric
 **level indices** — Ollama's `/v1/systemone` and TypeSafe's API say so
@@ -24,8 +26,34 @@ verified live against `tev1:0.8b`, where a five-level rubric plus the message
 
 Level count was chosen on measurement: against `tev1:0.8b`, a 5-level bucket
 rubric puts placement 11.3 bits (log2) off the true wait, a 9-level ladder 5.8
-and the shipped 21-level ladder 5.6. Note that a small decision model
+and a 21-level ladder 5.6. The shipped ladder is **9 levels**, not 21, because
+TypeSafe's hosted Jev rejects more than ten with `400 Too many score levels`
+and returns *no answers* — a rejected request silently classified every message
+as `unknown`. `MAX_SCORE_LEVELS = 10` guards it. Note that a small decision model
 systematically *under*-estimates; the 4B `tev1` or `nimble` places much better.
+
+### The `scope` question carries no worked examples
+
+v4 rewrote `scope` around the general cue each option stands for (a named model
+or series; a credential, plan, balance or usage quota; an address or region),
+because v3 named only `unknown` in its instructions and asked for counterfactual
+judgements — and `unknown` took the prior mass and won every case
+(`typesafe/jev-latest` answered 84-92% `unknown`).
+
+v4's wording also carried examples lifted verbatim out of the corpus
+(`'GLM 5h window'`, `'invalid API key'`, `'monthly cap'`), which is exactly what
+rule 7 forbids. v5 removed them and kept the general cues. Measured on two
+held-out messages never present in the corpus:
+
+| Backend | v4 (with examples) | v5 (general cues only) |
+|---|---|---|
+| `typesafe/jev-latest` | 7/7 | 7/7 |
+| `parable/tinyjev:latest` | 7/7 | 5/7 |
+
+The hosted classifier never needed the anchors; a 4.2B local model did. The
+shipped configuration uses the hosted path, so the recorded cost is confined to
+the local fallback. There is deliberately **no model-dependent prompt wording** —
+one prompt, whichever backend answers it.
 
 This page has two parts:
 

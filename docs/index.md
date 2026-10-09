@@ -9,7 +9,10 @@ quota / auth / unknown, retries on transient, sticks on context overflow.
 When no classifier is available the router visibly notifies and cycles to
 the next non-blocked entry — the cycle is the universal baseline.
 
-Classifier-only by design: no keyword sets, no regex, no heuristics.
+Classifier-only by design: no keyword sets, no regex, no heuristics, and no
+prompt criteria taken from collected provider traffic (root `AGENTS.md`
+project rule 7). A captured error message is a test input, never a reason to
+change the prompt.
 
 ## Start here
 
@@ -17,6 +20,9 @@ Classifier-only by design: no keyword sets, no regex, no heuristics.
   first-run verification.
 - **[Configuration](configuration.md)** — `switchback.yaml`, lookup order,
   greyed entries, `DEFAULT_CONFIG`, the `jev:` classifier config.
+- **[Interactive configuration](configuration-dialogue.md)** — the
+  `/switchback-config` wizard: layers, fallbacks, decision models, the
+  live model browse and the capability test.
 - **[Classifier](classifier.md)** — live classifier validation (env vars,
   TypeSafe hosted / OpenRouter / llama.cpp / Ollama) and the coverage
   matrix.

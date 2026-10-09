@@ -4,6 +4,88 @@ Durable decisions, recorded with git refs. Add new entries at the top.
 Routine history stays in `git log`; only decisions that changed the
 project's direction, contract, or policy belong here.
 
+## 2026-10-09 — Nothing decides from historical error text (project rule 7, prompt v5)
+
+A captured corpus of provider error messages is a **test input, never a source of truth for
+behaviour**. Root AGENTS.md gained project rule 7 to say so: no tuning of `JEV_QUESTIONS`
+criteria, `RESET_RUBRIC` levels or any threshold against collected messages or status codes,
+and no enumerating providers or codes - they drift, and the space of providers x models x codes
+is far too large to cover. Rule 1 now cross-references it, and rules were renumbered 1-10.
+
+The rule was not hypothetical. Prompt v4's `scope` question had been rewritten three days
+earlier and carried worked examples lifted verbatim out of the captured corpus
+(`'GLM 5h window'`, `'invalid API key'`, `'monthly cap'`, ...) - and that rewrite was what took
+scope from 0/5 to 5/5. v5 keeps v4's *general* cue for each option (a named model or series; a
+credential, plan, balance or usage quota; an address or region) and removes the examples.
+Measured on two held-out messages never present in the corpus:
+
+```text
+                            with examples   general-only
+typesafe/jev-latest              7/7            7/7
+parable/tinyjev:latest           7/7            5/7
+```
+
+The hosted classifier never needed the anchors; a 4.2B local model did, losing `weekly token
+limit exhausted` and `monthly cap`. The hosted path is what the shipped config uses, so the
+recorded cost is confined to the local fallback and the accuracy that matters is unchanged.
+There is deliberately **no model-dependent prompt wording**: one prompt, whatever the backend.
+
+What may still change a prompt is a general property of the question or the protocol - the
+three earlier revisions were each one: a `score` answer is a rubric index rather than a
+percentage (v2), TypeSafe rejects more than ten score levels (v3), `unknown` must not be the
+path of least resistance (v4).
+
+The bead tree was reframed to match. `switchback-bqq` was "Classifier validation & prompt
+hardening", whose stated method was to collect provider error shapes and re-lock the prompt when
+new ones arrived - the behaviour rule 7 forbids. It is now "Grow the real-error corpus used as
+classifier test input". The four user-gated captures remain legitimate *as fixtures*; what they
+may never do is change the prompt.
+
+## 2026-10-09 — `src/failure.ts`: what a failure means, split from `src/routing.ts`
+
+`routing.ts` passed the ~500-code-line rule in `src/AGENTS.md` at 458 and then
+blew past it at 605 without gaining a symbol - the `gts` formatting pass
+reflowed dense one-call lines into multi-line ones. The seam chosen is not the
+three-layer split the orchestrator hypothesised (state helpers / failure
+assessment / decision core, ~95 / 250 / 380) but a two-module one, because the
+graph supports it and the third layer was not a layer:
+
+- **`src/failure.ts`** owns what a failure *is*: `assessFailure()` (classify,
+  block / unblock, report), `observeUnretriedFailure()` (the `agent_end`
+  fallback), `MAX_TRANSIENT_RETRIES` and `recordDecideCrash()`. The reason this
+  is a real seam and not a size cut: one of its two callers is not routing at
+  all - the `agent_end` hook in `index.ts` calls `observeUnretriedFailure` for
+  failures pi declined to retry - and the blocking policy has its own reasons
+  to change (a classifier answer, a `stopReason`, a block-map write).
+- **`src/routing.ts`** keeps `decide()`, `decideRetry()`,
+  `pickWithContextFit()` and the state/id helpers: 451 code lines, down from
+  605.
+- The hypothesised "state/id bookkeeping" layer stayed put (95 lines of small
+  helpers, one consumer). Splitting it out would have cost a `FILES.md` row and
+  a barrel edit to hold code that only `decide()` calls.
+- The pass-through re-export at the old `routing.ts:75-82` is gone; `index.ts`,
+  `src/simulate.ts` and `tests/router.test.ts` now name `build-route.ts` or
+  `failure.ts` for what those modules own.
+- `routing.ts`'s private `isBlockedNow(modelId, blocked, now)` was deleted in
+  favour of `state.ts`'s already-exported
+  `isBlocked(modelId, now, map)` - the same predicate with the arguments the
+  other way round, already used by root `index.ts` and the tests. Both halves of
+  the new seam needed it, and `state.ts` owns `BlockedMap`; a third module for
+  four lines, or a copy in each, would have been worse.
+
+Verified as a move, not a rewrite: the bodies were sliced by line range and
+every non-blank body line of the old file is present in one of the two new
+modules - 712 checked, 0 lost. The 21 that differ are the deleted
+`isBlockedNow` and its six call sites (argument order), three doc comments
+(`recordDecideCrash` has two callers, not one; `describeNoClassifier` is used
+in one place, not three; `assessFailure`'s "unchanged from the retry path"
+policy note is now the module header's, so the duplicate was cut), `export`
+added to `recordDecideCrash`, and one statement `format-ts` rejoined after the
+argument reorder. The import graph over `index.ts` + `src/` (27 modules, 101
+edges) has no cycle involving either file; the only `classify.ts` <-> `crashes.ts`
+loop is `import type`, so it erases. `src/failure.ts` is inside the `tsc` graph
+(root `index.ts` imports it), so no targeted run was needed.
+
 ## 2026-10-09 — One atomic writer for every store (`src/atomic-write.ts`)
 
 `npx vitest run` failed intermittently with `EPERM: operation not permitted,

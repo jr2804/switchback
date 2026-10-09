@@ -58,23 +58,33 @@ downstream consumers only.
   When a module exceeds it, look for a **responsibility seam** first —
   `src/routing.ts` split into `decide()` (where to go) and
   `src/build-route.ts` (what that means on the wire) because the two had
-  genuinely different reasons to change. Do not split mechanically: moving
-  code to hit a number costs a `FILES.md` row, a barrel edit and a
-  verification gap (`tsc` only covers the entry graph), and buys nothing if
-  the result still has to be read together. A symbol that moves across a seam
-  updates its importers to name the module that now owns it; do not leave a
-  pass-through re-export behind purely so call sites keep compiling.
-  A heavily commented file is not automatically over budget: `routing.ts`
-  was 820 lines but 545 code, and the surplus was rationale a reader needs.
+  genuinely different reasons to change, then again into `src/failure.ts`
+  (what a failure means: the verdict, the block, the crash row) because that
+  half had a second caller outside routing — the `agent_end` hook — and its own
+  reason to change. Do not split mechanically: moving code to hit a number
+  costs a `FILES.md` row, a barrel edit and a verification gap (`tsc` only
+  covers the entry graph), and buys nothing if the result still has to be read
+  together. A symbol that moves across a seam updates its importers to name the
+  module that now owns it; do not leave a pass-through re-export behind
+  purely so call sites keep compiling. A helper that both sides of a seam need
+  moves to the module that owns its *data* rather than being duplicated or
+  creating a third module: the routing split deleted a private `isBlockedNow`
+  in favour of `state.ts`'s already-exported `isBlocked`.
+  A heavily commented file is not automatically over budget — measure code
+  lines, not total lines — but a formatter that reflows dense one-liners can
+  push a file over on its own (the `gts` pass took `routing.ts` from 458 to
+  605 code lines without adding a single symbol).
   The seam may need a third module to stay acyclic: `src/dialogue.ts` became
   a shell plus `src/dialogue-classifier.ts` (the wizard) plus
   `src/dialogue-ui.ts` (session, screen titles, every prompt, shared
   formatters), because the two halves both needed those primitives and a
-  direct import between them would have been a cycle.
+  direct import between them would have been a cycle. Check the graph, do not
+  assume: `build-route.ts` importing nothing from `routing.ts` is what makes
+  pulling the decision types down into it safe.
 
 ## Verification
 
-- `npx tsc --noEmit` and `npx vitest run` (root AGENTS.md project rule 8).
+- `npx tsc --noEmit` and `npx vitest run` (root AGENTS.md project rule 9).
 - **Graph nuance:** `tsconfig.json` includes only the root `index.ts`
   graph, so a module not (yet) imported from there is NOT type-checked by
   the gate. Until it is wired, check it explicitly with a targeted run

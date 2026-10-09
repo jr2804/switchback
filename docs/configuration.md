@@ -228,7 +228,7 @@ extension sets `models`). The check is derived from the registry - whatever pi
 has models for is reserved, by definition - not from a list of names, and it
 reads:
 
-```
+```text
 pi already serves 7 chat model(s) under "<provider>". A direct endpoint here
 would replace them with the classifier alone - pick a distinct provider id
 ("<provider>-<suffix>") instead.

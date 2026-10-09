@@ -57,9 +57,9 @@
 1. `npx tsc --noEmit` clean.
 2. `mise run lint-ts` clean for the code you touched.
 3. `npx vitest run` green.
-3. Relevant docs updated (DOX pass).
-4. No defensive-coding patterns introduced (`try { ... } catch {}` swallow,
+4. Relevant docs updated (DOX pass).
+5. No defensive-coding patterns introduced (`try { ... } catch {}` swallow,
    `hasattr` guards, `import` try/except).
-5. No fabricated wrappers, aliases, or compat claims to dodge honest gaps.
-6. If a bead exists for the work, status is correct (`bd update <id> --claim`
+6. No fabricated wrappers, aliases, or compat claims to dodge honest gaps.
+7. If a bead exists for the work, status is correct (`bd update <id> --claim`
    before starting, `bd close <id>` after verification).

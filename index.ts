@@ -309,6 +309,44 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	// `/switchback-model` sets the routed model directly: pick one of the current
+	// virtual model's fallbacks from a list (or clear the pin). Same pin as
+	// `/switchback-next`, without cycling through the list.
+	pi.registerCommand("switchback-model", {
+		description: "Choose the model the current switchback model routes to (or clear the pin)",
+		handler: async (_args, ctx) => {
+			if (!ctx.hasUI) {
+				await ctx.ui.notify("/switchback-model needs a UI-capable context (TUI or RPC)", "warning");
+				return;
+			}
+			const current = ctx.model;
+			if (current === undefined || current.provider !== SWITCHBACK_PROVIDER) {
+				await ctx.ui.notify(
+					`switchback-model only works on a switchback model; current is "${current?.provider ?? "(none)"}/${current?.id ?? ""}"`,
+					"warning",
+				);
+				return;
+			}
+			const virtualId = `${current.provider}/${current.id}`;
+			const reloaded = safeLoadForCommand(pi, secrets);
+			const modelConfig = findModelConfig(reloaded.config, virtualId);
+			const autoLabel = "(auto - clear the pin, route by stickiness and preference)";
+			const currentPin = getPinnedModel(virtualId);
+			const labels = modelConfig.fallbacks.map((id) => (id === currentPin ? `${id}  (current pin)` : id));
+			const choice = await ctx.ui.select(`${virtualId} routes to`, [autoLabel, ...labels]);
+			if (choice === undefined) return;
+			if (choice === autoLabel) {
+				setPinnedModel(virtualId, null);
+				await ctx.ui.notify(`${virtualId}: pin cleared`, "info");
+				return;
+			}
+			const picked = modelConfig.fallbacks[labels.indexOf(choice)];
+			if (picked === undefined) return;
+			setPinnedModel(virtualId, picked);
+			await ctx.ui.notify(`${virtualId}: routes to ${picked}`, "info");
+		},
+	});
+
 	// `/switchback-blocked` lists currently blocked models and their reset times.
 	pi.registerCommand("switchback-blocked", {
 		description: "List models currently blocked by the switchback router",

@@ -1984,3 +1984,202 @@ describe("router — debug diagnostics on a switch", () => {
 		expect(messages).toHaveLength(0);
 	});
 });
+
+describe("router — transient exhaustion never switches to the model that just failed", () => {
+	const NOW = 1_700_000_000_000;
+	const LONGCAT = "opencode-go/longcat-2.5-preview-free";
+	const STEP5 = "opencode-go/step-5-preview-free";
+	const BUNNY = "opencode-go/space-bunny-free";
+
+	it("moves past a blocked neighbour and never lands back on the failed model", async () => {
+		const config: SwitchbackConfig = {
+			id: "switchback/auto-flash",
+			name: "auto-flash",
+			fallbacks: [LONGCAT, STEP5, BUNNY],
+			jev: { provider: "typesafe", id: "jev-latest" },
+		};
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "opencode-go", id: "longcat-2.5-preview-free", contextWindow: 200_000 },
+				{ provider: "opencode-go", id: "step-5-preview-free", contextWindow: 200_000 },
+				{ provider: "opencode-go", id: "space-bunny-free", contextWindow: 200_000 },
+			],
+			answer: { class: "transient" },
+		});
+		const result = await decide(
+			"retry",
+			buildFakeRequest({
+				reason: "retry",
+				stateCurrent: LONGCAT,
+				failed: { provider: "opencode-go", id: "longcat-2.5-preview-free", errorMessage: "500: Endpoint is unavailable." },
+				transientRetries: 1,
+			}),
+			config,
+			registry,
+			{ now: NOW, blocked: { [STEP5]: NOW + 60_000 }, contextTokens: 50_000 },
+		);
+		expect(result.decision.kind).toBe("switch");
+		if (result.decision.kind === "switch") {
+			expect(result.decision.modelId).not.toBe(LONGCAT);
+			expect(result.decision.modelId).toBe(BUNNY);
+		}
+	});
+});
+
+describe("router — live auto-flash list (greyed entries, real blocks)", () => {
+	const NOW = 1_700_000_000_000;
+	const LONGCAT = "opencode-go/longcat-2.5-preview-free";
+	const FALLBACKS_LIVE: SwitchbackConfig = {
+		id: "switchback/auto-flash",
+		name: "auto-flash",
+		fallbacks: [
+			"cheaperinference/mimo-v2.6-flash",
+			"mistral/devstral-latest",
+			"agnes-ai/agnes-3.0-flash",
+			LONGCAT,
+			"opencode-go/step-5-preview-free",
+			"opencode-go/space-bunny-free",
+			"openrouter/poolside/laguna-s-2.1:free",
+			"nousresearch/poolside/laguna-s-2.1:free",
+			"nousresearch/meituan/longcat-2.5-preview:free",
+			"zai/glm-5.3-flash",
+			"ollama-cloud/deepseek-v4.1-flash",
+			"opencode-go/mimo-v2.6-flash",
+			"minimax/MiniMax-M3",
+		],
+		jev: { provider: "typesafe", id: "jev-latest" },
+	};
+	const present = FALLBACKS_LIVE.fallbacks.filter((id) => !["mistral/devstral-latest", "opencode-go/space-bunny-free"].includes(id));
+	const registry = makeFakeRegistry({
+		entries: present.map((id) => {
+			const [provider, ...rest] = id.split("/");
+			return { provider: provider!, id: rest.join("/"), contextWindow: 200_000 };
+		}),
+		answer: { class: "transient" },
+	});
+
+	it("after longcat fails transiently, the next usable entry is step-5 (not longcat)", async () => {
+		const result = await decide(
+			"retry",
+			buildFakeRequest({
+				reason: "retry",
+				stateCurrent: LONGCAT,
+				failed: { provider: "opencode-go", id: "longcat-2.5-preview-free", errorMessage: "500: Endpoint is unavailable." },
+				transientRetries: 1,
+			}),
+			FALLBACKS_LIVE,
+			registry,
+			{ now: NOW, blocked: { "opencode-go/mimo-v2.6-flash": NOW + 600_000, "ollama-cloud/deepseek-v4.1-flash": NOW + 600_000 }, contextTokens: 50_000 },
+		);
+		expect(result.decision.kind).toBe("switch");
+		if (result.decision.kind === "switch") expect(result.decision.modelId).toBe("opencode-go/step-5-preview-free");
+	});
+});
+
+describe("router — failed model differs from the stale current model", () => {
+	const NOW = 1_700_000_000_000;
+	const LONGCAT = "opencode-go/longcat-2.5-preview-free";
+	const STEP5 = "opencode-go/step-5-preview-free";
+	const CFG: SwitchbackConfig = {
+		id: "switchback/auto-flash",
+		name: "auto-flash",
+		fallbacks: [LONGCAT, STEP5, "minimax/MiniMax-M3"],
+		jev: { provider: "typesafe", id: "jev-latest" },
+	};
+	const registry = makeFakeRegistry({
+		entries: [
+			{ provider: "opencode-go", id: "longcat-2.5-preview-free", contextWindow: 200_000 },
+			{ provider: "opencode-go", id: "step-5-preview-free", contextWindow: 200_000 },
+			{ provider: "minimax", id: "MiniMax-M3", contextWindow: 200_000 },
+		],
+		answer: { class: "transient" },
+	});
+
+	it("does not hand back a model that already failed in this chain", async () => {
+		// step-5 failed; the session's state still says longcat; minimax is blocked.
+		const request = buildFakeRequest({
+			reason: "retry",
+			stateCurrent: LONGCAT,
+			failed: { provider: "opencode-go", id: "step-5-preview-free", errorMessage: "500: Endpoint is unavailable." },
+			transientRetries: 1,
+		});
+		// Cascade history: longcat already failed earlier in this same retry chain.
+		request.state = { ...request.state!, chainFailed: [LONGCAT] };
+		const result = await decide(
+			"retry",
+			request,
+			CFG,
+			registry,
+			{ now: NOW, blocked: { "minimax/MiniMax-M3": NOW + 600_000 }, contextTokens: 50_000 },
+		);
+		expect(result.decision.kind === "switch" ? result.decision.modelId : undefined).not.toBe(LONGCAT);
+	});
+});
+
+describe("router — cascaded failover: chain memory, single candidate, final abort", () => {
+	const NOW = 1_700_000_000_000;
+	const A = "opencode-go/longcat-2.5-preview-free";
+	const B = "opencode-go/step-5-preview-free";
+	const C = "minimax/MiniMax-M3";
+	const CFG: SwitchbackConfig = {
+		id: "switchback/auto-flash",
+		name: "auto-flash",
+		fallbacks: [A, B, C],
+		jev: { provider: "typesafe", id: "jev-latest" },
+	};
+
+	function countingRegistry(): { registry: ReturnType<typeof makeFakeRegistry>; questionIds: () => string[][] } {
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "opencode-go", id: "longcat-2.5-preview-free", contextWindow: 200_000 },
+				{ provider: "opencode-go", id: "step-5-preview-free", contextWindow: 200_000 },
+				{ provider: "minimax", id: "MiniMax-M3", contextWindow: 200_000 },
+			],
+			answer: { class: "transient" },
+		});
+		const asked: string[][] = [];
+		const original = registry.classify;
+		registry.classify = async (...args: unknown[]) => {
+			const context = args[1] as { questions?: Record<string, unknown> } | undefined;
+			asked.push(Object.keys(context?.questions ?? {}));
+			return original(...args);
+		};
+		return { registry, questionIds: () => asked };
+	}
+
+	it("a single remaining candidate is taken without asking the decision model", async () => {
+		const { registry, questionIds } = countingRegistry();
+		const request = buildFakeRequest({
+			reason: "retry",
+			stateCurrent: B,
+			failed: { provider: "opencode-go", id: "step-5-preview-free", errorMessage: "500: Endpoint is unavailable." },
+			transientRetries: 1,
+		});
+		request.state = { ...request.state!, chainFailed: [A] };
+		const result = await decide("retry", request, CFG, registry, { now: NOW, blocked: {}, contextTokens: 50_000 });
+		expect(result.decision.kind === "switch" ? result.decision.modelId : undefined).toBe(C);
+		// The verdict and the reasoning level may be asked; a candidate choice may not.
+		expect(questionIds().flat()).not.toContain("candidate");
+	});
+
+	it("when every model has already failed in the cascade, the router aborts explicitly", async () => {
+		const { registry } = countingRegistry();
+		const request = buildFakeRequest({
+			reason: "retry",
+			stateCurrent: C,
+			failed: { provider: "minimax", id: "MiniMax-M3", errorMessage: "500: Endpoint is unavailable." },
+			transientRetries: 1,
+		});
+		request.state = { ...request.state!, chainFailed: [A, B] };
+		const result = await decide("retry", request, CFG, registry, { now: NOW, blocked: {}, contextTokens: 50_000 });
+		expect(result.decision.kind).toBe("exhausted");
+	});
+
+	it("a user turn clears the cascade memory, so a recovered model is eligible again", async () => {
+		const { registry } = countingRegistry();
+		const request = buildFakeRequest({ reason: "user", stateCurrent: C });
+		request.state = { ...request.state!, chainFailed: [A, B] };
+		const result = await decide("user", request, CFG, registry, { now: NOW, blocked: {}, contextTokens: 50_000 });
+		expect(result.nextState?.chainFailed ?? []).toEqual([]);
+	});
+});

@@ -121,6 +121,7 @@ export function pickNextEffective(
 	blocked: BlockedMap,
 	now: number,
 	startAfter?: ModelId,
+	excluded?: ReadonlySet<ModelId>,
 ): { modelId: ModelId; degraded: boolean } | undefined {
 	const effective = effectiveIds(resolved);
 	if (effective.length === 0) return undefined;
@@ -128,13 +129,15 @@ export function pickNextEffective(
 	const start = startAfter === undefined ? 0 : effective.indexOf(startAfter) + 1;
 	for (let i = 0; i < count; i++) {
 		const candidate = effective[(start + i) % count]!;
-		if (candidate === skip) continue;
+		if (candidate === skip || excluded?.has(candidate) === true) continue;
 		const blockedUntil = blocked[candidate];
 		if (blockedUntil !== undefined && blockedUntil > now) continue;
 		return { modelId: candidate, degraded: false };
 	}
 	// Degraded mode: only when exactly one effective entry exists. Edge case #4.
-	if (count === 1) {
+	// An excluded model (one that already failed in this cascade) is never offered,
+	// not even degraded.
+	if (count === 1 && excluded?.has(effective[0]!) !== true) {
 		return { modelId: effective[0]!, degraded: true };
 	}
 	// Multiple effective entries all blocked: return undefined so the router

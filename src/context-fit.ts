@@ -65,6 +65,8 @@ export interface CandidateWindow {
 	id: ModelId;
 	contextWindow: number;
 	name?: string;
+	/** True when this candidate shares a provider with the model that just failed. */
+	sameProviderAsFailed?: boolean;
 }
 
 export interface ContextCandidateInput {
@@ -74,12 +76,14 @@ export interface ContextCandidateInput {
 	preferred: ModelId;
 	/** Current context size in tokens. */
 	contextTokens: number;
-	/** Eligible candidates (effective, unblocked, fitting), in preference order. */
+	/** Eligible candidates, in preference order. */
 	candidates: readonly CandidateWindow[];
 	/** Why the router is choosing: `failover` (default) or `idle-reset`. */
 	reason?: string;
 	/** The model that just failed, when the switch follows a failure. */
 	failed?: ModelId;
+	/** The classifier's error scope for that failure: `model`, `account`, `ip` or `unknown`. */
+	failedScope?: string;
 }
 
 export interface ContextCandidateChoice {
@@ -111,7 +115,7 @@ export async function chooseContextCandidate(input: ContextCandidateInput): Prom
 	const criteria: ClassifierQuestion = {
 		type: "choice",
 		instructions:
-			"A model failed (or the session went idle) and this conversation has to continue on another model. Every option below can hold the current conversation without forcing it to be summarized, so choose the best one. The user's own preference order is given in the state - follow it unless a later option is clearly better for this conversation, for example noticeably more headroom when the context is already large, or avoiding the model that just failed.",
+			"A model failed (or the session went idle) and this conversation has to continue on another model. Every option below is eligible: it is usable, not blocked, and not already failed in this cascade. Choose the best one. The user's own preference order is in the state - follow it unless a later option is clearly better for this conversation. Consider the failure's scope: when it is an account-level limit, other providers are likely to still work and a model from the same provider probably will not; when it is a single model's limit, other models of the same provider often still work. Prefer an option with enough context headroom when the context is already large.",
 		criteria: Object.fromEntries(
 			input.candidates.map((candidate) => [
 				candidate.id,
@@ -119,6 +123,7 @@ export async function chooseContextCandidate(input: ContextCandidateInput): Prom
 					candidate.name === undefined ? undefined : `${candidate.name}.`,
 					`${compactTokens(candidate.contextWindow)} context window,`,
 					`${compactTokens(usableContextTokens({ contextWindow: candidate.contextWindow } as Model<Api>))} headroom after the current ${compactTokens(input.contextTokens)} tokens.`,
+					candidate.sameProviderAsFailed === true ? "Same provider as the model that just failed." : undefined,
 					candidate.id === input.failed ? "This is the model that just failed." : undefined,
 				]
 					.filter((part): part is string => part !== undefined)
@@ -129,6 +134,8 @@ export async function chooseContextCandidate(input: ContextCandidateInput): Prom
 	const state: ClassifierContext["state"] = {
 		route_reason: input.reason ?? "failover",
 		failed_model: input.failed ?? "(none)",
+		failed_provider: input.failed === undefined ? "(none)" : (input.failed.split("/")[0] ?? "(none)"),
+		failure_scope: input.failedScope ?? "unknown",
 		context_tokens: String(input.contextTokens),
 		preference_order: ids.join(", "),
 		deterministic_pick: input.preferred,

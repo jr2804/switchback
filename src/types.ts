@@ -138,6 +138,12 @@ export interface SwitchbackState {
 	transientRetries: number;
 	/** True when the single-model-degraded warning has been emitted this session. */
 	degradedWarned?: boolean;
+	/**
+	 * Models that failed in the current cascade of retries (since the last user,
+	 * direct or continuation route). They are never handed back within the same
+	 * cascade; see `chainWith()` in routing.ts.
+	 */
+	chainFailed?: ModelId[];
 }
 
 /** Cross-session blocked-until map. Keyed by "provider/id", value is epoch ms. */

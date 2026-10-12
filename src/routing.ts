@@ -61,13 +61,13 @@
 import type { ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { resolveDispatchLevel, type DecisionOutcome, type NotifyFn, type RouterRegistry } from "./build-route.ts";
-import { pickNextEffective, resolveFallbacks, type AvailabilityRegistry } from "./availability.ts";
+import { pickNextEffective, resolveFallbacks, type AvailabilityRegistry , effectiveIds } from "./availability.ts";
 import type { NoClassifierReason } from "./classify.ts";
 import { chooseContextCandidate, fitsContext } from "./context-fit.ts";
 import { assessFailure, recordDecideCrash } from "./failure.ts";
 import { decideIdleReset } from "./idle.ts";
 import { getPinnedModel, isBlocked, unblockModel } from "./state.ts";
-import type { BlockedMap, JevConfig, ModelId, ResolvedSwitchbackConfig, SwitchbackState } from "./types.ts";
+import type { BlockedMap, JevConfig, ModelId, ResolvedSwitchbackConfig, SwitchbackState, ErrorScope } from "./types.ts";
 
 export interface RouteInputs {
 	now: number;
@@ -107,18 +107,49 @@ function physicalId(model: ModelRouteRequest<SwitchbackState>["model"] | undefin
 }
 
 /**
- * Pick the next usable model, preferring one that can hold the current context.
+ * Every model that failed in the current cascade of retries. The router never
+ * hands one of these back during the same cascade - even when a wrap-around walk
+ * would otherwise reach it. Cleared by any user, direct or continuation route.
+ */
+export function chainWith(prior: SwitchbackState | undefined, failedId: ModelId | undefined): ModelId[] {
+	const chain = [...(prior?.chainFailed ?? [])];
+	if (failedId !== undefined && !chain.includes(failedId)) chain.push(failedId);
+	return chain;
+}
+
+/** The provider part of a `provider/id` model id. */
+function providerPart(modelId: ModelId): string {
+	const slash = modelId.indexOf("/");
+	return slash <= 0 ? modelId : modelId.slice(0, slash);
+}
+
+/** Eligible candidates in walk order (the cursor's successors first, wrapping once). */
+function walkOrder(resolved: ReturnType<typeof resolveFallbacks>, startAfter: ModelId | undefined): ModelId[] {
+	const effective = effectiveIds(resolved);
+	if (effective.length === 0) return [];
+	const start = startAfter === undefined ? 0 : effective.indexOf(startAfter) + 1;
+	return effective.map((_, i) => effective[(start + i) % effective.length]!);
+}
+
+/**
+ * Pick the next usable model.
  *
- * A preference, never a filter (see `src/context-fit.ts`): when the context size
- * is unknown, or nothing can hold it, the ordinary pick is returned unchanged -
- * continuity matters more than a context drop. When candidates can hold the
- * conversation, the deterministic pick is the floor and the decision model may
- * reorder among them (it never sees an ineligible model, and an absent or
- * unreadable answer keeps the floor).
+ * Eligibility is deterministic: effective, not blocked, not excluded (failed in
+ * this cascade), and - when pi reports a context size - able to hold it, when any
+ * such model exists. Among the eligible models:
+ *
+ *   - exactly one -> it, with no decision-model call;
+ *   - several      -> the decision model chooses, with the failed model's
+ *                     provider and the classifier's own error scope in the prompt.
+ *                     Scope only orders the candidates (a preference): an account
+ *                     limit prefers other providers, a model limit prefers the
+ *                     same provider's other models. The walk order is the floor.
+ *   - none         -> undefined: the caller reports an explicit exhaustion.
  */
 async function pickWithContextFit(opts: {
 	resolved: ReturnType<typeof resolveFallbacks>;
 	skip: ModelId | undefined;
+	excluded?: ReadonlySet<ModelId>;
 	blocked: BlockedMap;
 	now: number;
 	startAfter: ModelId | undefined;
@@ -126,37 +157,58 @@ async function pickWithContextFit(opts: {
 	jev: JevConfig | undefined;
 	contextTokens: number | undefined;
 	reason?: string;
+	failedScope?: ErrorScope | undefined;
 }): Promise<ReturnType<typeof pickNextEffective>> {
-	const pick = pickNextEffective(opts.resolved, opts.skip, opts.blocked, opts.now, opts.startAfter);
+	const excluded = opts.excluded ?? new Set<ModelId>();
+	const usable = walkOrder(opts.resolved, opts.startAfter)
+		.filter((id) => id !== opts.skip && !excluded.has(id))
+		.filter((id) => !isBlocked(id, opts.now, opts.blocked));
+	let eligible = usable
+		.map((id) => ({ id, model: modelOf(opts.registry, id) }))
+		.filter((entry): entry is { id: ModelId; model: Model<Api> } => entry.model !== undefined);
 	const tokens = opts.contextTokens;
-	if (!pick || tokens === undefined || tokens <= 0) return pick;
-	const fitting = opts.resolved.entries
-		.filter((entry) => entry.id !== opts.skip)
-		.filter((entry) => entry.availability === "effective" && !isBlocked(entry.id, opts.now, opts.blocked))
-		.map((entry) => ({ id: entry.id, model: modelOf(opts.registry, entry.id) }))
-		.filter((entry): entry is { id: ModelId; model: Model<Api> } => entry.model !== undefined)
-		.filter((entry) => fitsContext(entry.model, tokens));
-	if (fitting.length === 0) {
-		// Nothing can hold the context: keep the ordinary pick (continuity over a
+	if (tokens !== undefined && tokens > 0) {
+		const fitting = eligible.filter((entry) => fitsContext(entry.model, tokens));
+		// Nothing can hold the context: keep every eligible model (continuity over a
 		// context drop) rather than failing the switch.
-		return pick;
+		if (fitting.length > 0) eligible = fitting;
 	}
-	const preferred = fitting.some((entry) => entry.id === pick.modelId) ? pick.modelId : fitting[0]!.id;
-	if (fitting.length === 1) return { modelId: preferred, degraded: false };
+	if (eligible.length === 0) return pickNextEffective(opts.resolved, opts.skip, opts.blocked, opts.now, opts.startAfter, excluded);
+	const failedProvider = opts.skip === undefined ? undefined : providerPart(opts.skip);
+	const ordered = orderByScope(eligible.map((entry) => entry.id), opts.failedScope, failedProvider);
+	const floor = ordered[0]!;
+	if (ordered.length === 1) return { modelId: floor, degraded: false };
 	const choice = await chooseContextCandidate({
 		registry: opts.registry,
 		jev: opts.jev,
-		preferred,
-		contextTokens: tokens,
-		candidates: fitting.map((entry) => ({
-			id: entry.id,
-			contextWindow: entry.model.contextWindow ?? 0,
-			...(entry.model.name !== undefined ? { name: entry.model.name } : {}),
-		})),
+		preferred: floor,
+		contextTokens: tokens ?? 0,
+		candidates: ordered.map((id) => {
+			const model = eligible.find((entry) => entry.id === id)?.model;
+			return {
+				id,
+				contextWindow: model?.contextWindow ?? 0,
+				...(model?.name !== undefined ? { name: model.name } : {}),
+				sameProviderAsFailed: failedProvider !== undefined && providerPart(id) === failedProvider,
+			};
+		}),
 		...(opts.reason !== undefined ? { reason: opts.reason } : {}),
 		...(opts.skip !== undefined ? { failed: opts.skip } : {}),
+		...(opts.failedScope !== undefined ? { failedScope: opts.failedScope } : {}),
 	});
 	return { modelId: choice.modelId, degraded: false };
+}
+
+/**
+ * Order candidates by the classifier's own error scope. A model-scoped limit keeps
+ * the same provider's other models first; an account-scoped one moves them last.
+ * Stable: within each group the walk order is preserved.
+ */
+function orderByScope(ids: readonly ModelId[], scope: ErrorScope | undefined, failedProvider: string | undefined): ModelId[] {
+	if (failedProvider === undefined || scope === undefined || scope === "unknown" || scope === "ip") return [...ids];
+	const same = ids.filter((id) => providerPart(id) === failedProvider);
+	const other = ids.filter((id) => providerPart(id) !== failedProvider);
+	return scope === "account" ? [...other, ...same] : [...same, ...other];
 }
 
 /** The named physical model, when the registry knows it. */
@@ -395,6 +447,8 @@ async function decideRetry(
 	// current model), so consecutive failures advance through the list in order rather
 	// than bouncing between the first two entries.
 	const advanceFrom = failedId ?? priorState?.current;
+	// Everything that already failed in this cascade, including this failure.
+	const retryExcluded = new Set<ModelId>(chainWith(priorState, failedId));
 
 	// No-failure marker: route only enters here when `failed` is set, but an empty
 	// error message AND no stopReason means pi flagged this as a retry without a real
@@ -459,6 +513,8 @@ async function decideRetry(
 		const pick = await pickWithContextFit({
 			resolved,
 			skip: failedId,
+	        excluded: retryExcluded,
+	        failedScope: classified?.scope,
 			blocked,
 			now,
 			startAfter: advanceFrom,
@@ -517,6 +573,8 @@ async function decideRetry(
 		const pick = await pickWithContextFit({
 			resolved,
 			skip: failedId,
+	        excluded: retryExcluded,
+	        failedScope: classified?.scope,
 			blocked,
 			now,
 			startAfter: advanceFrom,
@@ -559,6 +617,8 @@ async function decideRetry(
 	const pick = await pickWithContextFit({
 		resolved,
 		skip: failedId,
+	        excluded: retryExcluded,
+	        failedScope: classified?.scope,
 		blocked,
 		now,
 		startAfter: advanceFrom,

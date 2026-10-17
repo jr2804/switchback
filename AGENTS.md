@@ -54,7 +54,7 @@ happen.
 - Root AGENTS.md (this file) is the DOX rail: project-wide instructions,
   global preferences, durable workflow rules, and the top-level Child DOX Index.
 - Child AGENTS.md files (created on demand for durable sub-boundaries such as
-  `src/`, `tests/`) own domain-specific instructions and their own Child DOX
+  `packages/`, `tests/`) own domain-specific instructions and their own Child DOX
   Index. None exist at initial scaffold time.
 - Each parent explains what its direct children cover and what stays owned by
   the parent.
@@ -109,19 +109,26 @@ relevant child AGENTS.md.
 
 ### Child DOX Index
 
-- `src/AGENTS.md` — extension core: contracts shared by every `src/` module
-  (install-safe imports, account-scoped stores, typed errors, barrel
-  discipline), the module table pointer (`.agents/FILES.md`), and the
-  `tsc`-graph nuance for not-yet-wired modules.
+- `packages/core/AGENTS.md` — host-agnostic core: the port boundary
+  (`packages/core/src/ports.ts`), the no-host-value rule, and the remaining
+  host-type couplings (beads `switchback-wix.3` / `.4`).
+- `packages/pi/AGENTS.md` — the pi adapter: contracts shared by every module in
+  that package (install-safe imports, account-scoped stores, typed errors, barrel
+  discipline), the module table pointer (`.agents/FILES.md`), and the test-file
+  `tsc` nuance.
+- `packages/opencode/AGENTS.md` — the OpenCode V2 plugin: turn-boundary routing
+  via the `retry` hook (classify → block → `ctx.session.switchModel`, flip
+  `decision` when exhausted), structural-host-shapes rule, verdict-or-nothing
+  rule, shared state with pi.
 - `tests/AGENTS.md` — vitest suites: hermetic-by-default temp
   `PI_CODING_AGENT_DIR`, mock-by-default / opt-in-live tests, synthetic
   values only, and the `tsc`-graph nuance for test files.
 
-Deliberately unindexed (conventions live where the work is described): the
-root `index.ts` entry, `docs/` (site conventions and docs gates in
-`docs/contributing.md` → Docs), `.github/`, `.config/`, `assets/`,
-`.beads/` (root project rules 6–8), `.agents/skills/` (machine-local,
-gitignored).
+Deliberately unindexed (conventions live where the work is described): `docs/`
+(site conventions and docs gates in `docs/contributing.md` → Docs),
+`.github/` (release and publishing workflows: `docs/versioning.md`),
+`.config/`, `assets/`, `scripts/`, `.beads/` (root project rules 6–8),
+`.agents/skills/` (machine-local, gitignored).
 
 ## .agents/ files — demand-loaded, not always injected
 
@@ -153,7 +160,8 @@ non-essential belongs in `.agents/POLICIES.md` or a child AGENTS.md.
    provider traffic (rule 10). When the classifier is missing, unresolvable, or
    its call fails, the router visibly notifies and *cycles* to the next
    non-blocked effective entry without classifying — that cycle is the one
-   allowed baseline (see `src/core/classify.ts`, `src/core/routing.ts`).
+   allowed baseline (see `packages/core/src/classify.ts`,
+   `packages/core/src/routing.ts`).
 2. **`decide()` takes the model registry as an explicit parameter** from the
    `route()` callback. Do not read context off `ModelRouteRequest`.
 3. **Account-scoped runtime state.** `blocks.json` and `crashes.json` live

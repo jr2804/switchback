@@ -3,7 +3,7 @@
 ## Boundaries
 
 - **Classifier-only error classification** — see root AGENTS.md §1 and
-  `src/core/classify.ts`. No per-provider pattern matchers, no keyword sets, no
+  `packages/core/src/classify.ts`. No per-provider pattern matchers, no keyword sets, no
   regex reset extractors. The configured SystemOne classifier is the single
   source of truth for message-derived decisions.
 - **No commits without explicit user approval.** `bd dolt push` has standing
@@ -38,7 +38,7 @@
 - Formatting fixes: `mise run format-ts` (same tool, writes in place).
 - Tests: `npx vitest run` (must be all green; report milestones only after
   all three pass).
-- Manual end-to-end: `pi --extension ./index.ts --model switchback/auto -p "ping"`.
+- Manual end-to-end: `pi --extension ./packages/pi/index.ts --model switchback/auto -p "ping"`.
 - Crash corpus honesty: the coverage matrix in `README.md` distinguishes raw
   observations from shipped fixtures; do not conflate.
 

@@ -1,5 +1,5 @@
 /**
- * Tests for the decision-model capability probe (`src/classifier-probe.ts`).
+ * Tests for the decision-model capability probe (`packages/core/src/classifier-probe.ts`).
  *
  * The transport is injected, so the local-endpoint path never touches the
  * network; the answer validation and the report are pure and tested directly.
@@ -16,8 +16,8 @@ import {
 	summarizeProbe,
 	PROBE_CHOICE_CRITERIA,
 	PROBE_SCORE_CRITERIA,
-} from "../src/core/classifier-probe.ts";
-import type { FetchLike } from "../src/core/systemone.ts";
+} from "switchback-core/classifier-probe.ts";
+import type { FetchLike } from "switchback-core/systemone.ts";
 
 /** A result with the three answer shapes the probe expects. */
 function result(answers: Record<string, unknown>, overrides: Partial<ClassifierResult> = {}): ClassifierResult {

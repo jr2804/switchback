@@ -9,10 +9,10 @@
  * Those are the *categories* the user selects from. They are deliberately not
  * the union of what the configured physical models support: a fallback list can
  * mix models with very different thinking-level maps, so a category the user
- * picks may not exist on whichever model the router ends up on. pi clamps such a
- * request at dispatch (every provider API calls `clampThinkingLevel`), which is
- * safe but silent: `medium` and `high` can both become `high`, so moving the
- * selector appears to do nothing.
+ * picks may not exist on whichever model the router ends up on. The host clamps
+ * such a request at dispatch (pi calls `clampThinkingLevel` in its provider
+ * API), which is safe but silent: `medium` and `high` can both become `high`, so
+ * moving the selector appears to do nothing.
  *
  * switchback therefore asks the configured SystemOne classifier to resolve the
  * category against the concrete model that was just activated:
@@ -24,9 +24,10 @@
  * The answer is used as the dispatched level, so every selection resolves to a
  * level the model really implements. When the classifier is unavailable
  * (missing / unresolvable / timeout / threw / unparseable) the category is
- * simply clamped to the model - the classifier-less baseline, consistent with
- * the router's no-classifier cycle. No keyword or table-driven mapping exists
- * here; the classifier is the only decision source.
+ * simply clamped to the model through `ThinkingSupportPort` - the
+ * classifier-less baseline, consistent with the router's no-classifier cycle.
+ * No keyword or table-driven mapping exists here; the classifier is the only
+ * decision source.
  *
  * Resolution happens when a model is activated or switched to. Continuations,
  * retries on the same model, and other sticky routes keep the level they already
@@ -34,17 +35,16 @@
  * valid.
  */
 
-import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import type { Api, ClassifierContext, ClassifierQuestion, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { ClassifierContext, ClassifierQuestion } from "@earendil-works/pi-ai";
 import { callClassifier, readChoice, readConfidence, type NoClassifierReason } from "./classify.ts";
-import type { ClassifierPort } from "./ports.ts";
+import type { ClassifierPort, HostModel, ThinkingLevelId, ThinkingSupportPort } from "./ports.ts";
 
 /**
  * The reasoning levels every switchback virtual model offers, independent of
  * which physical models are configured. `minimal` is pi's name for the lowest
  * thinking level above `off`.
  */
-export const SWITCHBACK_THINKING_LEVELS: readonly ModelThinkingLevel[] = ["off", "minimal", "medium", "high", "max"];
+export const SWITCHBACK_THINKING_LEVELS: readonly ThinkingLevelId[] = ["off", "minimal", "medium", "high", "max"];
 
 /**
  * Prompt version of the level-recommendation question. Separate from
@@ -55,9 +55,9 @@ export const THINKING_PROMPT_VERSION = "v1";
 
 /**
  * What each level means, shown to the classifier as the choice criteria. The
- * keys cover pi's whole level vocabulary so a physical model's own level (for
- * example `low` or `xhigh`, which are outside switchback's categories but inside
- * a model's supported set) still gets a description.
+ * keys cover the host's whole level vocabulary so a physical model's own level
+ * (for example `low` or `xhigh`, which are outside switchback's categories but
+ * inside a model's supported set) still gets a description.
  */
 const LEVEL_CRITERIA: Readonly<Record<string, string>> = {
 	off: "No extended reasoning; answer in a single pass. Fastest and cheapest.",
@@ -76,14 +76,14 @@ const LEVEL_CRITERIA: Readonly<Record<string, string>> = {
  * a category that would be silently upgraded (or downgraded) is never offered to
  * the classifier as a real option.
  */
-export function availableCategories(model: Model<Api>): ModelThinkingLevel[] {
-	const supported = new Set(getSupportedThinkingLevels(model));
+export function availableCategories(model: HostModel, support: ThinkingSupportPort): ThinkingLevelId[] {
+	const supported = new Set(support.supportedLevels(model));
 	return SWITCHBACK_THINKING_LEVELS.filter((level) => supported.has(level));
 }
 
-/** Every level a concrete model supports, in pi's extended order. */
-export function supportedLevels(model: Model<Api>): ModelThinkingLevel[] {
-	return getSupportedThinkingLevels(model);
+/** Every level a concrete model supports, in the host's extended order. */
+export function supportedLevels(model: HostModel, support: ThinkingSupportPort): ThinkingLevelId[] {
+	return support.supportedLevels(model);
 }
 
 /** Extra, non-level context handed to the classifier with the choice. */
@@ -98,7 +98,7 @@ export interface ThinkingLevelContext {
 export type ThinkingLevelSource = "classifier" | "requested";
 
 export interface ThinkingLevelChoice {
-	level: ModelThinkingLevel;
+	level: ThinkingLevelId;
 	source: ThinkingLevelSource;
 	/** Set when the classifier could not decide and the category was clamped instead. */
 	reason?: NoClassifierReason;
@@ -115,17 +115,18 @@ export interface ThinkingLevelChoice {
  */
 export async function chooseThinkingLevel(opts: {
 	registry: ClassifierPort;
+	support: ThinkingSupportPort;
 	jev: { provider: string; id: string } | undefined;
-	model: Model<Api>;
-	requested: ModelThinkingLevel;
+	model: HostModel;
+	requested: ThinkingLevelId;
 	context: ThinkingLevelContext;
 }): Promise<ThinkingLevelChoice> {
-	const fallback = clampThinkingLevel(opts.model, opts.requested);
-	const available = availableCategories(opts.model);
+	const fallback = opts.support.clamp(opts.model, opts.requested);
+	const available = availableCategories(opts.model, opts.support);
 
 	// Nothing to ask: the model cannot honour a category at all, or there is
 	// exactly one real option, in which case the classifier has no latitude.
-	// `clampThinkingLevel` still guarantees the returned level is dispatchable.
+	// `clamp` still guarantees the returned level is dispatchable.
 	if (available.length <= 1) {
 		return { level: available[0] ?? fallback, source: "requested" };
 	}
@@ -151,14 +152,14 @@ export async function chooseThinkingLevel(opts: {
 		return { level: fallback, source: "requested", reason: call.reason };
 	}
 	const answer = readChoice(call.result, "level");
-	if (answer === undefined || !available.includes(answer as ModelThinkingLevel)) {
+	if (answer === undefined || !available.includes(answer as ThinkingLevelId)) {
 		// An answer outside the offered set would dispatch a level the model does
 		// not implement, so it is treated as unparseable rather than trusted.
 		return { level: fallback, source: "requested", reason: "unparseable" };
 	}
 	const confidence = readConfidence(call.result, "level");
 	return {
-		level: answer as ModelThinkingLevel,
+		level: answer as ThinkingLevelId,
 		source: "classifier",
 		...(confidence !== undefined ? { confidence } : {}),
 	};

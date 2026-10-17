@@ -1,5 +1,5 @@
 /**
- * Reasoning-level resolution (src/thinking.ts).
+ * Reasoning-level resolution (packages/core/src/thinking.ts).
  *
  * switchback offers one fixed category scale - off, minimal, medium, high, max -
  * on every virtual model, and the SystemOne classifier resolves the user's
@@ -11,25 +11,32 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { Api, ClassifierContext, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { Api, ClassifierContext, Model } from "@earendil-works/pi-ai";
+import { piThinkingSupport } from "pi-switchback/thinking-support.ts";
 import {
 	availableCategories,
 	chooseThinkingLevel,
 	SWITCHBACK_THINKING_LEVELS,
 	type ThinkingLevelContext,
-} from "../src/core/thinking.ts";
-import type { ClassifierPort } from "../src/core/ports.ts";
+} from "switchback-core/thinking.ts";
+import type { ClassifierPort } from "switchback-core/ports.ts";
 
 const CONTEXT: ThinkingLevelContext = { routeReason: "user", failover: false };
 
 /** The real thinking-level map of zai GLM 5.3 and opencode-go deepseek-v4.1-flash. */
 const ZAI_MAP = { off: null, minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: "max" };
 
+/** Fixture models, addressable by id so the pi level rules can resolve them. */
+const CATALOG = new Map<string, Model<Api>>();
+
+/** pi's own reasoning-level rules, over the fixture catalog. */
+const support = piThinkingSupport({ find: (_provider, modelId) => CATALOG.get(modelId) });
+
 function model(
 	id: string,
 	opts: { reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> } = {},
 ): Model<Api> {
-	return {
+	const built: Model<Api> = {
 		type: "chat",
 		provider: "zai",
 		id,
@@ -43,6 +50,8 @@ function model(
 		contextWindow: 128_000,
 		maxTokens: 16_000,
 	};
+	CATALOG.set(id, built);
+	return built;
 }
 
 function classifier(level: string | undefined, calls: string[] = []): ClassifierPort {
@@ -71,17 +80,17 @@ describe("availableCategories", () => {
 	it("intersects the model's supported levels with the switchback scale", () => {
 		// zai supports low/high/max only: `low` is outside our scale, and off /
 		// minimal / medium do not exist on the model.
-		expect(availableCategories(model("glm-5.3", { thinkingLevelMap: ZAI_MAP }))).toEqual(["high", "max"]);
+		expect(availableCategories(model("glm-5.3", { thinkingLevelMap: ZAI_MAP }), support)).toEqual(["high", "max"]);
 	});
 
 	it("offers everything up to high when the model carries no map", () => {
 		// MiniMax / mimo: reasoning model without a thinkingLevelMap. `xhigh` and
 		// `max` need an explicit map entry, so they are not supported.
-		expect(availableCategories(model("MiniMax-M3"))).toEqual(["off", "minimal", "medium", "high"]);
+		expect(availableCategories(model("MiniMax-M3"), support)).toEqual(["off", "minimal", "medium", "high"]);
 	});
 
 	it("offers only off for a non-reasoning model", () => {
-		expect(availableCategories(model("plain", { reasoning: false }))).toEqual(["off"]);
+		expect(availableCategories(model("plain", { reasoning: false }), support)).toEqual(["off"]);
 	});
 });
 
@@ -89,6 +98,7 @@ describe("chooseThinkingLevel", () => {
 	it("uses the classifier's recommended level when it is one the model supports", async () => {
 		const choice = await chooseThinkingLevel({
 			registry: classifier("max"),
+			support,
 			jev: JEV,
 			model: model("glm-5.3", { thinkingLevelMap: ZAI_MAP }),
 			requested: "medium",
@@ -102,6 +112,7 @@ describe("chooseThinkingLevel", () => {
 	it("clamps the requested category when the classifier is not configured", async () => {
 		const choice = await chooseThinkingLevel({
 			registry: classifier("max"),
+			support,
 			jev: undefined,
 			model: model("glm-5.3", { thinkingLevelMap: ZAI_MAP }),
 			requested: "off",
@@ -118,6 +129,7 @@ describe("chooseThinkingLevel", () => {
 	it("ignores a level the model does not support and clamps instead", async () => {
 		const choice = await chooseThinkingLevel({
 			registry: classifier("medium"),
+			support,
 			jev: JEV,
 			model: model("glm-5.3", { thinkingLevelMap: ZAI_MAP }),
 			requested: "medium",
@@ -132,9 +144,10 @@ describe("chooseThinkingLevel", () => {
 		const calls: string[] = [];
 		const choice = await chooseThinkingLevel({
 			registry: classifier("off", calls),
+			support,
 			jev: JEV,
 			model: model("plain", { reasoning: false }),
-			requested: "medium" as ModelThinkingLevel,
+			requested: "medium",
 			context: CONTEXT,
 		});
 		expect(choice.level).toBe("off");
@@ -155,6 +168,7 @@ describe("chooseThinkingLevel", () => {
 		};
 		await chooseThinkingLevel({
 			registry,
+			support,
 			jev: JEV,
 			model: model("glm-5.3", { thinkingLevelMap: ZAI_MAP }),
 			requested: "medium",
@@ -175,12 +189,13 @@ describe("chooseThinkingLevel", () => {
 		for (const requested of SWITCHBACK_THINKING_LEVELS) {
 			const choice = await chooseThinkingLevel({
 				registry: classifier("max"),
+				support,
 				jev: JEV,
 				model: target,
 				requested,
 				context: CONTEXT,
 			});
-			expect(availableCategories(target)).toContain(choice.level);
+			expect(availableCategories(target, support)).toContain(choice.level);
 		}
 	});
 });

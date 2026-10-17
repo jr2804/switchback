@@ -1,5 +1,5 @@
 /**
- * Tests for the encrypted secret store (src/secrets.ts).
+ * Tests for the encrypted secret store (packages/pi/src/secrets.ts).
  *
  * Hermetic: every test runs against a temp PI_CODING_AGENT_DIR, and the DPAPI
  * functions are injected (mockDpapi) so the suite never spawns powershell.
@@ -18,8 +18,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { createSecretStore, secretsFilePath, SecretsError, type Dpapi } from "../src/secrets.ts";
-import { piSwitchbackDir } from "../src/core/config.ts";
+import { createSecretStore, secretsFilePath, SecretsError, type Dpapi } from "pi-switchback/secrets.ts";
+import { switchbackStateDir } from "switchback-core/config.ts";
 
 const SECRET = "sk-switchback-TESTVALUE-42-not-a-real-key";
 const OTHER_SECRET = "sk-switchback-TESTVALUE-99-not-a-real-key";
@@ -74,14 +74,14 @@ function seed(contents: string): string {
 }
 
 function quarantinedFiles(): string[] {
-	const dir = piSwitchbackDir();
+	const dir = switchbackStateDir();
 	if (!existsSync(dir)) return [];
 	return readdirSync(dir).filter((f) => f.startsWith("secrets.json.corrupt."));
 }
 
 /** Staging files `writeFileAtomic` uses, had it failed to rename one away. */
 function stagingFiles(): string[] {
-	const dir = piSwitchbackDir();
+	const dir = switchbackStateDir();
 	if (!existsSync(dir)) return [];
 	return readdirSync(dir).filter((f) => f.startsWith("secrets.json.") && f.endsWith(".tmp"));
 }

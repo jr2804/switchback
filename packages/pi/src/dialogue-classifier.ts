@@ -25,16 +25,16 @@ import {
 	updateDecisionModel,
 	type DecisionModelInput,
 	type DecisionModelPatch,
-} from "./core/config-editor.ts";
-import { LOCAL_CLASSIFIER_APIS } from "./core/config.ts";
+} from "switchback-core/config-editor.ts";
+import { LOCAL_CLASSIFIER_APIS } from "switchback-core/config.ts";
 import {
 	classifierBaseUrlNote,
 	defaultDecisionModelName,
 	directEndpointWouldClobber,
 	type ClassifierProviderOption,
-} from "./core/classifier-catalog.ts";
-import { discoverOllamaModels } from "./core/classifier-discovery.ts";
-import { formatProbeReport } from "./core/classifier-probe.ts";
+} from "switchback-core/classifier-catalog.ts";
+import { discoverOllamaModels } from "switchback-core/classifier-discovery.ts";
+import { formatProbeReport } from "switchback-core/classifier-probe.ts";
 import {
 	describeJev,
 	errorMessage,
@@ -50,7 +50,7 @@ import {
 	type DialogueContext,
 	type DialogueSession,
 } from "./dialogue-ui.ts";
-import type { DecisionModelEntry, JevConfig } from "./core/types.ts";
+import type { DecisionModelEntry, JevConfig } from "switchback-core/types.ts";
 
 export async function decisionModelPicker(
 	ctx: DialogueContext,
@@ -490,7 +490,7 @@ async function chooseBaseUrl(
 }
 
 /**
- * Send the capability prompt and report the verdict. See `src/classifier-probe.ts`.
+ * Send the capability prompt and report the verdict. See `packages/core/src/classifier-probe.ts`.
  */
 async function runClassifierTest(ctx: DialogueContext, session: DialogueSession, jev: JevConfig): Promise<void> {
 	if (ctx.probeClassifier === undefined) return;

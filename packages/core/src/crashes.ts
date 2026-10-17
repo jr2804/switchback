@@ -33,7 +33,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "./atomic-write.ts";
-import { piSwitchbackDir } from "./config.ts";
+import { switchbackStateDir } from "./config.ts";
 import type { ClassifiedError, ErrorClass, ErrorScope } from "./types.ts";
 import type { NoClassifierReason } from "./classify.ts";
 
@@ -80,7 +80,7 @@ export type CrashMap = Record<string, CrashEntry>;
 
 /** Path to the crash store inside the agent config dir. */
 export function crashesFilePath(): string {
-	return join(piSwitchbackDir(), "crashes.json");
+	return join(switchbackStateDir(), "crashes.json");
 }
 
 /** sha256 of the raw error bytes. Used as the dedup key. */

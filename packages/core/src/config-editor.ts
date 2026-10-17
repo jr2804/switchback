@@ -3,7 +3,7 @@
  *
  * Design: `src/config.ts` parses user config with `yaml.parse()`, which
  * keeps values but discards comments - fine for loading, lossy for editing.
- * The interactive dialogue (`src/dialogue.ts`) must round-trip a user's
+ * The interactive dialogue (`packages/pi/src/dialogue.ts`) must round-trip a user's
  * hand-annotated YAML, so this module parses with `parseDocument()` and
  * mutates the Document's nodes in place: existing keys, their order and
  * their comments survive, and only newly created content is synthesized.
@@ -19,7 +19,7 @@
  * Secrets: API keys never enter the file as literals. The decision-model
  * operations accept a secret NAME (`apiKeySecretName`), and the value is
  * written as `secret:<name>`; storing the value itself is the dialogue's
- * job via the encrypted store (`src/secrets.ts`). The type shape makes a
+ * job via the encrypted store (`packages/pi/src/secrets.ts`). The type shape makes a
  * literal key unrepresentable at this boundary.
  *
  * Layers: "project" is `<cwd>/.pi/switchback.yaml`, "global" is
@@ -55,7 +55,7 @@ export interface LoadedLayer {
 /** Header comment written when the editor creates a layer file from scratch. */
 const NEW_FILE_HEADER = [
 	"switchback configuration - see docs/configuration.md",
-	"Layers: <cwd>/.pi/switchback.yaml overrides ~/.pi/agent/switchback.yaml per model id.",
+	"Layers: <cwd>/.pi/switchback.yaml overrides ~/.config/switchback/switchback.yaml per model id.",
 	"API keys are secret-store references (`secret:<name>`), never literal values.",
 ].join("\n");
 

@@ -1,5 +1,5 @@
 /**
- * Tests for the classifier provider catalog (`src/classifier-catalog.ts`).
+ * Tests for the classifier provider catalog (`packages/core/src/classifier-catalog.ts`).
  *
  * The module is pure: it turns pi's registry view into wizard choices. Nothing
  * in it names a provider, a base URL or a model id, so these fixtures stand in
@@ -13,7 +13,7 @@ import {
 	defaultDecisionModelName,
 	directEndpointWouldClobber,
 	type ClassifierProviderSource,
-} from "../src/core/classifier-catalog.ts";
+} from "switchback-core/classifier-catalog.ts";
 
 function provider(overrides: Partial<ClassifierProviderSource> & { id: string }): ClassifierProviderSource {
 	return { name: overrides.id, classifiers: [], chatModels: 0, ...overrides };

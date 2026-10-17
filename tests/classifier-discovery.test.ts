@@ -1,5 +1,5 @@
 /**
- * Tests for the live Ollama `/api/tags` discovery (`src/classifier-discovery.ts`).
+ * Tests for the live Ollama `/api/tags` discovery (`packages/core/src/classifier-discovery.ts`).
  *
  * The transport is injected (FetchLike), so no real Ollama server is needed; the
  * fixture matches the shape Ollama v0.35 returns, and the tests assert the
@@ -7,8 +7,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { decisionCapableModels, discoverOllamaModels, OllamaModelSummary } from "../src/core/classifier-discovery.ts";
-import type { FetchLike } from "../src/core/systemone.ts";
+import {
+	decisionCapableModels,
+	discoverOllamaModels,
+	OllamaModelSummary,
+} from "switchback-core/classifier-discovery.ts";
+import type { FetchLike } from "switchback-core/systemone.ts";
 
 const MODELS: OllamaModelSummary[] = [
 	{ id: "nimble:latest", decisionCapable: true, capabilities: ["decision"] },

@@ -20,5 +20,5 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": false
   },
-  "include": ["index.ts"]
+  "include": ["packages/**/*.ts"]
 }

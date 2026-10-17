@@ -1,31 +1,29 @@
 {
-  "name": "pi-extension-switchback",
-  "private": true,
-  "version": "2026.10.1",
-  "type": "module",
-  "description": "Quota-aware graceful model fallback for pi via the native pi.registerVirtualModel() API.",
-  "scripts": {
-    "clean": "echo 'nothing to clean'",
-    "build": "echo 'nothing to build'",
-    "check": "echo 'nothing to check'"
-  },
-  "pi": {
-    "extensions": [
-      "./index.ts"
-    ]
-  },
-  "devDependencies": {
-    "@earendil-works/pi-ai": "^1.1.0",
-    "@earendil-works/pi-coding-agent": "^1.1.0",
-    "gts": "^7.0.0",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
-  },
-  "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
-  },
-  "dependencies": {
-    "yaml": "^2.9.1"
-  }
+	"name": "switchback-workspace",
+	"private": true,
+	"version": "2026.10.1",
+	"type": "module",
+	"description": "Workspace root for switchback: a quota-aware model fallback router for pi and OpenCode.",
+	"workspaces": [
+		"packages/*"
+	],
+	"pi": {
+		"extensions": [
+			"./packages/pi/index.ts"
+		]
+	},
+	"scripts": {
+		"check": "tsc --noEmit",
+		"test": "vitest run",
+		"lint": "eslint ."
+	},
+	"devDependencies": {
+		"@earendil-works/pi-ai": "^1.1.0",
+		"@earendil-works/pi-coding-agent": "^1.1.0",
+		"@earendil-works/pi-tui": "^1.1.0",
+		"@opencode/plugin": "^2.0.32",
+		"gts": "^7.0.0",
+		"typescript": "^5.9.3",
+		"vitest": "^4.1.11"
+	}
 }

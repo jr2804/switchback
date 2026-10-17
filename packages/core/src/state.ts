@@ -19,12 +19,12 @@
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "./atomic-write.ts";
-import { piSwitchbackDir } from "./config.ts";
+import { switchbackStateDir } from "./config.ts";
 import type { BlockedMap, ModelId } from "./types.ts";
 
 /** Path to the blocked-until map. The new (account-scoped) location. */
 export function stateFilePath(): string {
-	return join(piSwitchbackDir(), "blocks.json");
+	return join(switchbackStateDir(), "blocks.json");
 }
 
 /** Legacy path: project-local. Migrated to the new path on first read. */
@@ -133,7 +133,7 @@ export type PinMap = Record<string, ModelId | null>;
 
 /** Path to the pin map. */
 export function pinFilePath(): string {
-	return join(piSwitchbackDir(), "pin.json");
+	return join(switchbackStateDir(), "pin.json");
 }
 
 function readPinRaw(path: string): PinMap {

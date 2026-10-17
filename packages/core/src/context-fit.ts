@@ -30,7 +30,7 @@
  * can only reorder candidates that were already eligible, never introduce one.
  */
 
-import type { Api, ClassifierContext, ClassifierQuestion, Model } from "@earendil-works/pi-ai";
+import type { ClassifierContext, ClassifierQuestion } from "@earendil-works/pi-ai";
 import { callClassifier, readChoice, readConfidence, type NoClassifierReason } from "./classify.ts";
 import type { ClassifierPort } from "./ports.ts";
 import type { JevConfig, ModelId } from "./types.ts";
@@ -42,13 +42,18 @@ import type { JevConfig, ModelId } from "./types.ts";
  */
 export const CONTEXT_FIT_RESERVE_TOKENS = 16_384;
 
-/** The context tokens a model can hold without tripping pi's compaction threshold. */
-export function usableContextTokens(model: Model<Api>): number {
-	return Math.max(0, (model.contextWindow ?? 0) - CONTEXT_FIT_RESERVE_TOKENS);
+/** The one field a context-fit check reads off a model. */
+export interface HasContextWindow {
+	readonly contextWindow: number;
+}
+
+/** The context tokens a model can hold without tripping the host's compaction threshold. */
+export function usableContextTokens(model: HasContextWindow): number {
+	return Math.max(0, model.contextWindow - CONTEXT_FIT_RESERVE_TOKENS);
 }
 
 /** True when `tokens` fits in the model's usable context window. */
-export function fitsContext(model: Model<Api>, tokens: number): boolean {
+export function fitsContext(model: HasContextWindow, tokens: number): boolean {
 	return tokens <= usableContextTokens(model);
 }
 
@@ -117,8 +122,10 @@ export async function chooseContextCandidate(input: ContextCandidateInput): Prom
 				[
 					candidate.name === undefined ? undefined : `${candidate.name}.`,
 					`${compactTokens(candidate.contextWindow)} context window,`,
-					`${compactTokens(usableContextTokens({ contextWindow: candidate.contextWindow } as Model<Api>))} headroom after the current ${compactTokens(input.contextTokens)} tokens.`,
-					candidate.sameProviderAsFailed === true ? "Same provider as the model that just failed." : undefined,
+					`${compactTokens(usableContextTokens({ contextWindow: candidate.contextWindow }))} headroom after the current ${compactTokens(input.contextTokens)} tokens.`,
+					candidate.sameProviderAsFailed === true
+						? "Same provider as the model that just failed."
+						: undefined,
 					candidate.id === input.failed ? "This is the model that just failed." : undefined,
 				]
 					.filter((part): part is string => part !== undefined)

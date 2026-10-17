@@ -8,11 +8,11 @@ import gts from 'gts/build/src/index.js';
  * defaults would rewrite wholesale:
  *
  *  - **Type-aware rules need a tsconfig that contains the linted file.** gts
- *    points at `./tsconfig.json`, which in this repo includes only the root
- *    `index.ts` graph (see `src/AGENTS.md` -> Verification). Lint coverage must
- *    not depend on whether a module happens to be wired into the extension entry
- *    yet, so the parser is retargeted at `tsconfig.eslint.json`, which widens the
- *    include to `src/` and `tests/`. `TYPE_AWARE_ENTRY` below is gts's own
+ *    points at `./tsconfig.json`, and the repo's own gate uses that file too
+ *    (see `packages/pi/AGENTS.md` -> Verification). Lint coverage must not
+ *    depend on which files the gate happens to include, so the parser is
+ *    retargeted at `tsconfig.eslint.json`, which widens the include to
+ *    `packages/**` and `tests/`. `TYPE_AWARE_ENTRY` below is gts's own
  *    type-aware entry, addressed by position so the rule set itself stays gts's.
  *  - **Quotes and unused-underscore params.** gts enforces single quotes and
  *    flags every `_`-prefixed binding as dead code; this codebase uses double
@@ -49,6 +49,10 @@ export default [
       'coverage/**',
       // Generated docs output (`mkdocs build`), gitignored but still on disk.
       'site/**',
+      // Machine-local skill catalog (gitignored): third-party `.mjs`/`.ts`
+      // bundles that no repo change can fix. Linting them buried every real
+      // finding, so the gate covers the repo's own sources only.
+      '.agents/**',
       'eslint.config.js',
     ],
   },
@@ -79,4 +83,19 @@ export default [
         }
       : entry,
   ),
+  {
+    // Repo scripts (`scripts/`) are Node ESM, which gts's JavaScript entry does
+    // not configure: it assumes no Node runtime (so `console`/`process` read as
+    // undefined) and enforces single quotes, while Prettier — via
+    // `.prettierrc.json` — wants double. This block sits LAST so it wins, and
+    // the two tools settle instead of deadlocking, which is what `--fix` needs
+    // to rewrite a string literal at all.
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      globals: { console: 'readonly', process: 'readonly' },
+    },
+    rules: {
+      quotes: ['warn', 'double', { avoidEscape: true }],
+    },
+  },
 ];

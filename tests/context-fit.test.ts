@@ -1,6 +1,6 @@
 /**
  * Tests for the context-fit helpers and the candidate-choice question
- * (`src/context-fit.ts`).
+ * (`packages/core/src/context-fit.ts`).
  *
  * Hermetic: the classifier registry is a stub, so the question's contract - what
  * is asked, what is accepted, what happens when nothing usable comes back - is
@@ -14,8 +14,8 @@ import {
 	fitsContext,
 	usableContextTokens,
 	CONTEXT_FIT_RESERVE_TOKENS,
-} from "../src/core/context-fit.ts";
-import type { ClassifierPort } from "../src/core/ports.ts";
+} from "switchback-core/context-fit.ts";
+import type { ClassifierPort } from "switchback-core/ports.ts";
 
 function model(contextWindow: number): Model<Api> {
 	return { provider: "zai", id: "m", contextWindow } as unknown as Model<Api>;

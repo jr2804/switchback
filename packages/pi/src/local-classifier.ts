@@ -10,7 +10,7 @@
  *
  * `jev.baseUrl` in `switchback.yaml` is the switch. When present, switchback
  * registers `jev.provider` with the classifier model(s) for that endpoint and
- * its own System One transport (src/systemone.ts), so the normal
+ * its own System One transport (packages/core/src/systemone.ts), so the normal
  * `ctx.modelRegistry.classify()` path - block map, Tier 2b annotation cache,
  * reset scoring - works unchanged.
  *
@@ -29,7 +29,7 @@
  * `@earendil-works/pi-ai/api/typesafe-system-one.lazy`: pi supplies host
  * packages to extensions by bare specifier only, so a deep subpath resolves in
  * this repo but not in a package installed with `pi install`. See
- * src/systemone.ts.
+ * packages/core/src/systemone.ts.
  *
  * This runs inside the extension factory and performs no I/O: it only declares
  * a provider from static config, so `pi --list-models`, startup model selection
@@ -38,8 +38,8 @@
 
 import type { ClassifierApi, ClassifierModel } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { SYSTEM_ONE_API, systemOneClassifier } from "./core/systemone.ts";
-import type { JevConfig } from "./core/types.ts";
+import { SYSTEM_ONE_API, systemOneClassifier } from "switchback-core/systemone.ts";
+import type { JevConfig } from "switchback-core/types.ts";
 
 /** The only System One wire protocol switchback drives directly today. */
 export const LOCAL_CLASSIFIER_API = SYSTEM_ONE_API;

@@ -1,5 +1,5 @@
 /**
- * Tests for the searchable model picker (`src/model-picker.ts`).
+ * Tests for the searchable model picker (`packages/pi/src/model-picker.ts`).
  *
  * The component is driven directly: a fake TUI, a pass-through theme and a
  * keybindings stub that mirrors pi's `tui.select.*` actions. That exercises the
@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { buildModelItems, createModelPicker, type PickerColor } from "../src/model-picker.ts";
+import { buildModelItems, createModelPicker, type PickerColor } from "pi-switchback/model-picker.ts";
 
 function model(provider: string, id: string, name: string, contextWindow: number): Model<Api> {
 	return { provider, id, name, contextWindow } as unknown as Model<Api>;

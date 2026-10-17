@@ -1,23 +1,31 @@
 /**
  * Turning a routing decision into the request pi dispatches.
  *
- * `src/core/routing.ts` decides *where* a request should go and
- * `src/core/dispatch.ts` settles the reasoning level; this module expresses that
+ * `packages/core/src/routing.ts` decides *where* a request should go and
+ * `packages/core/src/dispatch.ts` settles the reasoning level; this module expresses that
  * as pi's `ModelRoute`: it resolves the chosen id back to a pi `Model`, clamps the
  * level to what that model actually implements, and attaches the router state.
  *
- * The decision types themselves live in `src/core/decision.ts`: they are the one
+ * The decision types themselves live in `packages/core/src/decision.ts`: they are the one
  * thing the core and every host adapter must agree on, and a core module cannot
  * import them from a pi module.
  */
 
-import type { ModelRoute } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel } from "@earendil-works/pi-ai";
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { lookupModel } from "./core/availability.ts";
-import type { Decision } from "./core/decision.ts";
-import type { ModelRegistryPort } from "./core/ports.ts";
-import type { SwitchbackState } from "./core/types.ts";
+import type { ModelRoute } from "@earendil-works/pi-coding-agent";
+import { lookupModel } from "switchback-core/availability.ts";
+import type { Decision } from "switchback-core/decision.ts";
+import type { ThinkingLevelId } from "switchback-core/ports.ts";
+import type { SwitchbackState } from "switchback-core/types.ts";
+import type { PiModelLookup } from "./thinking-support.ts";
+
+/**
+ * The slice of pi's model registry this module reads: the catalog lookup owned
+ * by `./thinking-support.ts`. Narrower than pi's whole registry, but `find` still
+ * hands back pi's own `Model`, which is what `ModelRoute` and pi's
+ * `clampThinkingLevel` take.
+ */
+type PiRegistry = PiModelLookup;
 
 /**
  * Resolve a `ModelRoute` from a `Decision`.
@@ -28,9 +36,9 @@ import type { SwitchbackState } from "./core/types.ts";
  * case the caller's availability resolution was stale and the caller should retry.
  */
 export function buildRoute(
-	registry: ModelRegistryPort,
+	registry: PiRegistry,
 	decision: Decision,
-	thinkingLevel: ModelThinkingLevel,
+	thinkingLevel: ThinkingLevelId,
 	nextState: SwitchbackState | undefined,
 ): ModelRoute<SwitchbackState> {
 	if (decision.kind === "config-invalid") {

@@ -59,11 +59,10 @@
  */
 
 import type { ModelRouteRequest } from "@earendil-works/pi-coding-agent";
-import type { Api, Model } from "@earendil-works/pi-ai";
 import { effectiveIds, lookupModel, pickNextEffective, resolveFallbacks } from "./availability.ts";
 import type { DecisionOutcome } from "./decision.ts";
 import { resolveDispatchLevel } from "./dispatch.ts";
-import type { NotifyPort, RouterRegistryPort } from "./ports.ts";
+import type { HostModel, NotifyPort, RouterRegistryPort, ThinkingSupportPort } from "./ports.ts";
 import type { NoClassifierReason } from "./classify.ts";
 import { chooseContextCandidate, fitsContext } from "./context-fit.ts";
 import { assessFailure, recordDecideCrash } from "./failure.ts";
@@ -74,6 +73,8 @@ import type { BlockedMap, JevConfig, ModelId, ResolvedSwitchbackConfig, Switchba
 export interface RouteInputs {
 	now: number;
 	blocked: BlockedMap;
+	/** The host's reasoning-level rules; see `packages/core/src/ports.ts`. */
+	support: ThinkingSupportPort;
 	/** Optional simulate-mode error message injected for `retry` requests. */
 	simulateErrorMessage?: string;
 	/** When provided, the router surfaces no-classifier conditions via this sink. */
@@ -167,7 +168,7 @@ async function pickWithContextFit(opts: {
 		.filter((id) => !isBlocked(id, opts.now, opts.blocked));
 	let eligible = usable
 		.map((id) => ({ id, model: lookupModel(opts.registry, id) }))
-		.filter((entry): entry is { id: ModelId; model: Model<Api> } => entry.model !== undefined);
+		.filter((entry): entry is { id: ModelId; model: HostModel } => entry.model !== undefined);
 	const tokens = opts.contextTokens;
 	if (tokens !== undefined && tokens > 0) {
 		const fitting = eligible.filter((entry) => fitsContext(entry.model, tokens));
@@ -175,9 +176,14 @@ async function pickWithContextFit(opts: {
 		// context drop) rather than failing the switch.
 		if (fitting.length > 0) eligible = fitting;
 	}
-	if (eligible.length === 0) return pickNextEffective(opts.resolved, opts.skip, opts.blocked, opts.now, opts.startAfter, excluded);
+	if (eligible.length === 0)
+		return pickNextEffective(opts.resolved, opts.skip, opts.blocked, opts.now, opts.startAfter, excluded);
 	const failedProvider = opts.skip === undefined ? undefined : providerPart(opts.skip);
-	const ordered = orderByScope(eligible.map((entry) => entry.id), opts.failedScope, failedProvider);
+	const ordered = orderByScope(
+		eligible.map((entry) => entry.id),
+		opts.failedScope,
+		failedProvider,
+	);
 	const floor = ordered[0]!;
 	if (ordered.length === 1) return { modelId: floor, degraded: false };
 	const choice = await chooseContextCandidate({
@@ -206,7 +212,11 @@ async function pickWithContextFit(opts: {
  * the same provider's other models first; an account-scoped one moves them last.
  * Stable: within each group the walk order is preserved.
  */
-function orderByScope(ids: readonly ModelId[], scope: ErrorScope | undefined, failedProvider: string | undefined): ModelId[] {
+function orderByScope(
+	ids: readonly ModelId[],
+	scope: ErrorScope | undefined,
+	failedProvider: string | undefined,
+): ModelId[] {
 	if (failedProvider === undefined || scope === undefined || scope === "unknown" || scope === "ip") return [...ids];
 	const same = ids.filter((id) => providerPart(id) === failedProvider);
 	const other = ids.filter((id) => providerPart(id) !== failedProvider);
@@ -508,8 +518,8 @@ async function decideRetry(
 		const pick = await pickWithContextFit({
 			resolved,
 			skip: failedId,
-	        excluded: retryExcluded,
-	        failedScope: classified?.scope,
+			excluded: retryExcluded,
+			failedScope: classified?.scope,
 			blocked,
 			now,
 			startAfter: advanceFrom,
@@ -568,8 +578,8 @@ async function decideRetry(
 		const pick = await pickWithContextFit({
 			resolved,
 			skip: failedId,
-	        excluded: retryExcluded,
-	        failedScope: classified?.scope,
+			excluded: retryExcluded,
+			failedScope: classified?.scope,
 			blocked,
 			now,
 			startAfter: advanceFrom,
@@ -612,8 +622,8 @@ async function decideRetry(
 	const pick = await pickWithContextFit({
 		resolved,
 		skip: failedId,
-	        excluded: retryExcluded,
-	        failedScope: classified?.scope,
+		excluded: retryExcluded,
+		failedScope: classified?.scope,
 		blocked,
 		now,
 		startAfter: advanceFrom,

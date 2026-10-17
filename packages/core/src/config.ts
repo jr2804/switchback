@@ -2,15 +2,20 @@
  * User-facing switchback config loader.
  *
  * Config layers (all YAML, all optional):
- *   1. <cwd>/.pi/switchback.yaml            (per-project layer)
- *   2. <piConfigDir>/switchback.yaml        (global layer; piConfigDir = ~/.pi/agent)
- *   3. built-in DEFAULT_CONFIG              (only when neither file exists)
+ *   1. ~/.config/switchback/switchback.yaml  (neutral basis, agent-agnostic)
+ *   2. <piConfigDir>/switchback.yaml         (provider-specific overlay; piConfigDir = ~/.pi/agent)
+ *   3. <cwd>/.pi/switchback.yaml            (per-project layer)
+ *   4. built-in DEFAULT_CONFIG              (only when no file exists)
  *
- * The two user layers are AGGREGATED, not first-match-wins: the merged model
- * list is the global list with project entries overriding same-id entries in
- * place and project-only entries appended. A layer that exists but fails to
+ * The user layers are AGGREGATED, not first-match-wins: the merged model
+ * list starts from the neutral basis, applies provider-specific overrides
+ * in place, then applies project overrides. A layer that exists but fails to
  * parse or validate throws immediately - a broken layer is surfaced, never
- * silently dropped in favour of the other.
+ * silently dropped in favour of the others.
+ *
+ * The neutral basis (`~/.config/switchback/`) is the canonical, agent-agnostic
+ * location so the same config serves both pi and opencode. Provider-specific
+ * and project-local slots allow overlays without duplicating the full config.
  *
  * The project-local slot lives under `.pi/` deliberately: `.pi/` is ignored by
  * git (pi's own convention), so a per-project override can never be committed
@@ -21,8 +26,8 @@
  * user gets a clear, actionable error instead of a silently-broken router. The
  * fail-fast happens at extension load: `findModelConfig()` throws ConfigError
  * from index.ts (module top level) before route()/decide() ever runs. The
- * message names the two known fixes ("Configure fallbacks in <cwd>/.pi/switchback.yaml
- * or ~/.pi/agent/switchback.yaml and re-launch."). Until the user does
+ * message names the known fix ("Configure fallbacks in ~/.config/switchback/switchback.yaml
+ * or <cwd>/.pi/switchback.yaml and re-launch."). Until the user does
  * that, the extension is unavailable and `/switchback` diagnostics are not
  * registered; with `defaultModel=switchback/auto` in pi's settings.json, every
  * new session also starts with an invalid default. Trade-off accepted: prefer
@@ -100,25 +105,67 @@ export function piConfigDir(): string {
 }
 
 /**
- * The switchback subdirectory under the agent config dir. Runtime files
- * (blocks.json, crashes.json) live here so they are account-scoped, not
- * project-scoped: a block on `zai/glm-5.3` for hitting the 5h window is a
- * fact about the account's quota, not the project on disk.
+ * Resolve the neutral switchback config directory. This is the canonical,
+ * agent-agnostic location for switchback user config: `~/.config/switchback`.
+ * It serves as the basis layer that provider-specific configs (from
+ * `~/.config/opencode` or `~/.pi/agent`) are superposed on top of.
  */
-export function piSwitchbackDir(): string {
-	return join(piConfigDir(), "switchback");
+export function switchbackConfigDir(): string {
+	return join(homedir(), ".config", "switchback");
 }
 
-function candidatePaths(): string[] {
+/** Env override naming the shared switchback state directory outright. */
+export const SWITCHBACK_DIR_ENV = "SWITCHBACK_DIR";
+
+/**
+ * The shared switchback state directory: blocks.json, crashes.json,
+ * pin.json, secrets.json. Runtime files live here so they are account-scoped,
+ * not project-scoped: a block on `zai/glm-5.3` for hitting the 5h window is a
+ * fact about the account's quota, not the project on disk.
+ *
+ * Both adapters resolve the same default - pi's agent dir - so a block recorded
+ * under one host is honoured under the other. `SWITCHBACK_DIR` moves the whole
+ * directory somewhere host-neutral.
+ */
+export function switchbackStateDir(): string {
+	return process.env[SWITCHBACK_DIR_ENV] ?? join(piConfigDir(), "switchback");
+}
+
+/**
+ * Where the layered config files live for one host invocation.
+ *
+ * The neutral basis (`~/.config/switchback`) and the local override
+ * (`<cwd>/.pi`) are the same for every host; the agent overlay is the host's own
+ * config directory, which pi defaults to and another host passes explicitly.
+ */
+export interface ConfigLayerDirs {
+	/** Agent-specific overlay directory. Defaults to pi's agent dir. */
+	agent?: string;
+	/** Project-local override directory. Defaults to `<cwd>/.pi`. */
+	project?: string;
+}
+
+function candidatePaths(dirs: ConfigLayerDirs = {}): string[] {
 	const cwd = process.cwd();
-	const cfg = piConfigDir();
+	const cfg = dirs.agent ?? piConfigDir();
+	const project = dirs.project ?? join(cwd, ".pi");
+	const neutral = switchbackConfigDir();
 	// YAML-only: switchback.yaml is the human-facing config. The .json sibling is
 	// dropped from the candidate list - the only JSON files that ship in this
-	// project are machine-managed (`<piConfigDir>/switchback/blocks.json` runtime
-	// state, the simulate fixture `switchback.simulate.json`).
+	// project are machine-managed (`<state dir>/blocks.json` runtime state, the
+	// simulate fixture `switchback.simulate.json`).
 	// The project-local slot is `.pi/`, which git ignores, so a per-project
 	// override never lands in a repository.
-	return [join(cwd, ".pi", `${CONFIG_BASENAME}.yaml`), join(cfg, `${CONFIG_BASENAME}.yaml`)];
+	//
+	// Precedence (lowest → highest):
+	//   1. ~/.config/switchback/switchback.yaml  (neutral basis, agent-agnostic)
+	//   2. <agent config dir>/switchback.yaml     (host-specific overlay)
+	//   3. <project dir>/switchback.yaml          (local override)
+	return [
+		join(neutral, `${CONFIG_BASENAME}.yaml`),
+		join(cfg, `${CONFIG_BASENAME}.yaml`),
+		join(project, `${CONFIG_BASENAME}.yaml`),
+	];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -502,28 +549,44 @@ export interface SecretResolver {
  *
  * `secrets` resolves `apiKey: secret:<name>` references to plaintext. It is
  * injected rather than imported so this module stays free of the secrets store
- * (which itself reads `piSwitchbackDir` from here) - production callers pass
+ * (which itself reads `switchbackStateDir` from here) - production callers pass
  * `createSecretStore()`; tests pass a fake or leave it undefined.
+ *
+ * `dirs` overrides the layer locations; a host other than pi passes its own
+ * agent config directory so its overlay participates.
  */
-export function loadConfig(secrets?: SecretResolver): { config: ResolvedSwitchbackFileConfig; source: string } {
-	const [projectPath, agentPath] = candidatePaths() as [string, string];
-	const projectExists = existsSync(projectPath);
+export function loadConfig(
+	secrets?: SecretResolver,
+	dirs?: ConfigLayerDirs,
+): { config: ResolvedSwitchbackFileConfig; source: string } {
+	const [neutralPath, agentPath, projectPath] = candidatePaths(dirs) as [string, string, string];
+	const neutralExists = existsSync(neutralPath);
 	const agentExists = existsSync(agentPath);
-	if (projectExists) {
-		const project = readAndParse(projectPath);
-		if (agentExists) {
-			const agent = readAndParse(agentPath);
-			return {
-				config: resolveAllJevs(aggregateConfigs(agent, project), secrets),
-				source: `${resolve(projectPath)} + ${resolve(agentPath)}`,
-			};
-		}
-		return { config: resolveAllJevs(project, secrets), source: resolve(projectPath) };
+	const projectExists = existsSync(projectPath);
+
+	// Aggregate all existing layers, lowest precedence first.
+	let merged: SwitchbackFileConfig | undefined;
+	const sources: string[] = [];
+
+	if (neutralExists) {
+		merged = readAndParse(neutralPath);
+		sources.push(resolve(neutralPath));
 	}
 	if (agentExists) {
-		return { config: resolveAllJevs(readAndParse(agentPath), secrets), source: resolve(agentPath) };
+		const agent = readAndParse(agentPath);
+		sources.push(resolve(agentPath));
+		merged = merged === undefined ? agent : aggregateConfigs(merged, agent);
 	}
-	return { config: DEFAULT_CONFIG, source: "<default>" };
+	if (projectExists) {
+		const project = readAndParse(projectPath);
+		sources.push(resolve(projectPath));
+		merged = merged === undefined ? project : aggregateConfigs(merged, project);
+	}
+
+	if (merged === undefined) {
+		return { config: DEFAULT_CONFIG, source: "<default>" };
+	}
+	return { config: resolveAllJevs(merged, secrets), source: sources.join(" + ") };
 }
 
 /**
@@ -541,7 +604,7 @@ export function findModelConfig(config: ResolvedSwitchbackFileConfig, virtualId:
 	if (!entry) throw new ConfigError(`no config entry for virtual model "${virtualId}"`, "<config>");
 	if (entry.fallbacks.length === 0) {
 		throw new ConfigError(
-			`switchback has no fallbacks configured (source: ${entry.id}). Configure fallbacks in <cwd>/.pi/switchback.yaml or ~/.pi/agent/switchback.yaml and re-launch.`,
+			`switchback has no fallbacks configured (source: ${entry.id}). Configure fallbacks in ~/.config/switchback/switchback.yaml or <cwd>/.pi/switchback.yaml and re-launch.`,
 			"<default>",
 		);
 	}

@@ -57,21 +57,14 @@
  * `crashes.json` so a future bump to v1.1 can invalidate stale verdicts.
  */
 
-import type {
-	ClassifierAnswer,
-	ClassifierApi,
-	ClassifierContext,
-	ClassifierModel,
-	ClassifierResult,
-	StopReason,
-} from "@earendil-works/pi-ai";
+import type { ClassifierAnswer, ClassifierContext, ClassifierResult, StopReason } from "@earendil-works/pi-ai";
 import { lookupCrash } from "./crashes.ts";
-import type { ClassifierPort } from "./ports.ts";
+import type { ClassifierPort, HostModel } from "./ports.ts";
 import { classifierState } from "./systemone.ts";
 import type { ClassifiedError, ErrorClass, ErrorScope } from "./types.ts";
 
 /** The classifier model entry that the registry returns for `findOfType("classifier", ...)`. */
-type ClassifierEntry = ClassifierModel<ClassifierApi>;
+type ClassifierEntry = HostModel;
 
 /** Hard cap on reset windows we are willing to record. Monthly windows top out at 31d. */
 const MAX_RESET_MS = 31 * 24 * 3_600_000;

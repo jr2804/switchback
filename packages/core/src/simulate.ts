@@ -26,8 +26,9 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { Decision } from "./decision.ts";
-import type { NotifyPort, RouterRegistryPort } from "./ports.ts";
+import type { NotifyPort, RouterRegistryPort, ThinkingSupportPort } from "./ports.ts";
 import { decide } from "./routing.ts";
 import type { BlockedMap, ModelId, ResolvedSwitchbackConfig } from "./types.ts";
 
@@ -111,7 +112,7 @@ export async function simulateRetry(
 	scenarioMessage: string,
 	modelConfig: ResolvedSwitchbackConfig,
 	registry: RouterRegistryPort,
-	inputs: { now?: number; blocked?: BlockedMap; notify?: NotifyPort } = {},
+	inputs: { support: ThinkingSupportPort; now?: number; blocked?: BlockedMap; notify?: NotifyPort },
 ): Promise<SimulateResult> {
 	const now = inputs.now ?? Date.now();
 	const blocked = inputs.blocked ?? {};
@@ -119,8 +120,19 @@ export async function simulateRetry(
 	if (firstFallback === undefined) throw new SimulateError("model config has no fallbacks");
 	const [provider, id] = firstFallback.split("/");
 	if (provider === undefined || id === undefined) throw new SimulateError(`invalid fallback id "${firstFallback}"`);
-	const failedModel = registry.find(provider, id);
-	if (!failedModel) throw new SimulateError(`fallback "${firstFallback}" not in catalog`);
+	const found = registry.find(provider, id);
+	if (!found) throw new SimulateError(`fallback "${firstFallback}" not in catalog`);
+	// A scenario replays a host request, so the fixture model carries the fields
+	// the host's own `Model` type requires beyond `HostModel`.
+	const failedModel: Model<Api> = {
+		...found,
+		api: found.api as Api,
+		baseUrl: "simulate://local",
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		reasoning: false,
+		maxTokens: 0,
+	};
 
 	const fakeRequest = {
 		reason: "retry" as const,
@@ -155,6 +167,7 @@ export async function simulateRetry(
 	const result = await decide("retry", fakeRequest, modelConfig, registry, {
 		now,
 		blocked,
+		support: inputs.support,
 		simulateErrorMessage: scenarioMessage,
 		...(inputs.notify ? { notify: inputs.notify } : {}),
 	});

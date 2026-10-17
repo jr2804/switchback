@@ -36,10 +36,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import type { ClassifierApi, ClassifierModel, ProviderClassifier } from "@earendil-works/pi-ai";
-import { classifyError } from "../src/core/classify.ts";
-import type { ClassifierPort } from "../src/core/ports.ts";
-import { systemOneClassifier } from "../src/core/systemone.ts";
-import type { ErrorClass } from "../src/core/types.ts";
+import { classifyError } from "switchback-core/classify.ts";
+import type { ClassifierPort } from "switchback-core/ports.ts";
+import { systemOneClassifier } from "switchback-core/systemone.ts";
+import type { ErrorClass } from "switchback-core/types.ts";
 
 interface ClassifierEnv {
 	api: ClassifierApi;
@@ -65,7 +65,7 @@ const enabled = env !== undefined;
 /**
  * Which classifier transport the live run exercises.
  *
- * Default "switchback": the transport that actually ships (src/systemone.ts).
+ * Default "switchback": the transport that actually ships (packages/core/src/systemone.ts).
  * "pi": pi-ai's own `typesafe-system-one` implementation, reachable from this
  * repo (which has node_modules) though NOT from an installed package. Set
  * SWITCHBACK_CLASSIFIER_TRANSPORT=pi to cross-check the two against each other.
@@ -117,7 +117,13 @@ function buildRegistry(model: ClassifierModel<ClassifierApi>, classifier: Provid
 			return type === "classifier" && provider === model.provider && id === model.id ? model : undefined;
 		},
 		classify(handle, context) {
-			return classifier.classify(handle, context, apiKey !== undefined ? { apiKey } : undefined);
+			// The core port hands back a neutral model handle; the real pi transport
+			// needs its own `ClassifierModel`, so re-resolve it from the fixture.
+			const resolved = handle.provider === model.provider && handle.id === model.id ? model : undefined;
+			if (resolved === undefined) {
+				throw new Error("integration-classifier.test: classifier handle is not the fixture model");
+			}
+			return classifier.classify(resolved, context, apiKey !== undefined ? { apiKey } : undefined);
 		},
 	};
 }

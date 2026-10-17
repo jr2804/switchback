@@ -21,11 +21,11 @@
  * See `src/dialogue.ts` for the design of the dialogue as a whole.
  */
 
-import { loadLayer, readLayerConfig, saveLayer, type LoadedLayer } from "./core/config-editor.ts";
-import type { ClassifierProviderOption } from "./core/classifier-catalog.ts";
-import type { ProbeResult } from "./core/classifier-probe.ts";
+import { loadLayer, readLayerConfig, saveLayer, type LoadedLayer } from "switchback-core/config-editor.ts";
+import type { ClassifierProviderOption } from "switchback-core/classifier-catalog.ts";
+import type { ProbeResult } from "switchback-core/classifier-probe.ts";
 import type { SecretStore } from "./secrets.ts";
-import type { JevConfig, JevRef, SwitchbackConfig, SwitchbackFileConfig } from "./core/types.ts";
+import type { JevConfig, JevRef, SwitchbackConfig, SwitchbackFileConfig } from "switchback-core/types.ts";
 
 /** The dialog surface the dialogue needs (a subset of pi's `ctx.ui`). */
 export interface DialogueUi {
@@ -47,7 +47,7 @@ export interface DialogueContext {
 	pickModel?: (title: string, current: readonly string[]) => Promise<string | undefined>;
 	/**
 	 * Classifier endpoints pi knows about, for the decision-model wizard's provider
-	 * choice and base-URL defaults (see `src/classifier-catalog.ts`). Empty or
+	 * choice and base-URL defaults (see `packages/core/src/classifier-catalog.ts`). Empty or
 	 * absent falls back to free-text prompts.
 	 */
 	classifierProviders?: readonly ClassifierProviderOption[];

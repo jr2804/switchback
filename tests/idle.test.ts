@@ -1,5 +1,5 @@
 /**
- * Unit tests for the idle-reset decision (`src/idle.ts`).
+ * Unit tests for the idle-reset decision (`packages/core/src/idle.ts`).
  *
  * The router-level integration (a route actually moving back to the head) lives
  * in `tests/router.test.ts`; this suite pins the arithmetic, the timestamp
@@ -20,8 +20,8 @@ import {
 	lastMessageTimestamp,
 	IDLE_CLASSIFIER_FLOOR_MS,
 	IDLE_RESET_OPTIONS,
-} from "../src/core/idle.ts";
-import type { ClassifierPort } from "../src/core/ports.ts";
+} from "switchback-core/idle.ts";
+import type { ClassifierPort } from "switchback-core/ports.ts";
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;

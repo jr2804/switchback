@@ -8,7 +8,7 @@
  * `src/dialogue-classifier.ts`. Session state, the screen primitives and
  * every prompt live in `src/dialogue-ui.ts`.
  *
- * Design: every mutation goes through `src/config-editor.ts` and is saved
+ * Design: every mutation goes through `packages/core/src/config-editor.ts` and is saved
  * immediately (`saveLayer`). The file on disk therefore always holds the
  * last good config, which makes failure handling trivial: when a save
  * throws the loader's own ConfigError, the dialogue reports it and reloads
@@ -48,7 +48,7 @@ import {
 	setVirtualModelName,
 	type ConfigLayer,
 	type LoadedLayer,
-} from "./core/config-editor.ts";
+} from "switchback-core/config-editor.ts";
 import { createSecretStore, type SecretStore } from "./secrets.ts";
 import {
 	describeJev,
@@ -62,7 +62,7 @@ import {
 	type DialogueSession,
 } from "./dialogue-ui.ts";
 import { decisionModelPicker, decisionModelsMenu } from "./dialogue-classifier.ts";
-import type { SwitchbackConfig, SwitchbackFileConfig } from "./core/types.ts";
+import type { SwitchbackConfig, SwitchbackFileConfig } from "switchback-core/types.ts";
 
 /**
  * Label for one layer in the chooser: which file, and what is in it right now.

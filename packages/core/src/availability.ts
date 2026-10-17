@@ -18,8 +18,7 @@
  * an explicit user action.
  */
 
-import type { Api, Model } from "@earendil-works/pi-ai";
-import type { AvailabilityPort, ModelRegistryPort } from "./ports.ts";
+import type { AvailabilityPort, HostModel } from "./ports.ts";
 import type { Availability, BlockedMap, ModelId, ResolvedEntry, ResolvedFallbacks } from "./types.ts";
 
 function splitModelId(modelId: ModelId): { provider: string; id: string } | undefined {
@@ -28,8 +27,11 @@ function splitModelId(modelId: ModelId): { provider: string; id: string } | unde
 	return { provider: modelId.slice(0, slash), id: modelId.slice(slash + 1) };
 }
 
-/** The named physical model, when the registry knows it. */
-export function lookupModel(registry: ModelRegistryPort, modelId: ModelId): Model<Api> | undefined {
+/** The named physical model, when the registry knows it. Generic in the host's model type. */
+export function lookupModel<M extends HostModel>(
+	registry: { find(provider: string, modelId: string): M | undefined },
+	modelId: ModelId,
+): M | undefined {
 	const split = splitModelId(modelId);
 	if (split === undefined) return undefined;
 	return registry.find(split.provider, split.id);

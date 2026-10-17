@@ -1,5 +1,5 @@
 /**
- * Unit tests for switchback's own System One transport (src/systemone.ts).
+ * Unit tests for switchback's own System One transport (packages/core/src/systemone.ts).
  *
  * Hermetic: fetch is injected, so these never touch the network. The live
  * end-to-end path is covered separately by tests/integration-classifier.test.ts
@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { ClassifierApi, ClassifierModel } from "@earendil-works/pi-ai";
-import { systemOneClassifier, type FetchLike } from "../src/core/systemone.ts";
+import { systemOneClassifier, type FetchLike } from "switchback-core/systemone.ts";
 
 const MODEL: ClassifierModel<ClassifierApi> = {
 	type: "classifier",

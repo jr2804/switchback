@@ -30,6 +30,8 @@ import type {
 	ProviderClassifier,
 } from "@earendil-works/pi-ai";
 
+import type { ClassifierPort, HostModel } from "./ports.ts";
+
 /** The only classifier wire API switchback drives. */
 export const SYSTEM_ONE_API: ClassifierApi = "typesafe-system-one";
 
@@ -184,6 +186,75 @@ export function systemOneClassifier(baseUrl: string, options: SystemOneOptions =
 				return result;
 			}
 		},
+	};
+}
+
+/**
+ * The `ClassifierPort` for hosts with no classifier catalog of their own
+ * (OpenCode), wrapping `systemOneClassifier` behind the shape in `./ports.ts`.
+ * The pi-ai `ClassifierModel` literal lives here and only as a type, so host
+ * adapters satisfy the ClassifierPort without touching pi-ai values.
+ */
+export interface SystemOneClassifierPortOptions {
+	/** Base URL of the System One endpoint; `undefined` matches "not configured". */
+	baseUrl: string | undefined;
+	/** The provider/id pair `findOfType` resolves - pass the config's `jev` identity. */
+	identity: { provider: string; id: string };
+	/** Bearer token for the endpoint. */
+	apiKey?: string;
+	/** Human label used in error messages. */
+	label?: string;
+	/** Override the ambient fetch (tests). */
+	fetch?: FetchLike;
+}
+
+/**
+ * Build the port. A missing `baseUrl` resolves nothing: `classify.ts` reads an
+ * unresolvable handle as the `unresolvable` no-classifier reason, the visible
+ * blind cycle, instead of a silent no-op.
+ */
+export function systemOneClassifierPort(options: SystemOneClassifierPortOptions): ClassifierPort {
+	if (options.baseUrl === undefined) {
+		return {
+			findOfType: () => undefined,
+			// Unreachable: classify.ts never calls classify without a resolved handle.
+			classify: () => {
+				throw new Error("systemOneClassifierPort called without a configured baseUrl");
+			},
+		};
+	}
+	const baseUrl = options.baseUrl;
+	const handle: HostModel = {
+		provider: options.identity.provider,
+		id: options.identity.id,
+		name: options.label ?? `System One (${options.identity.id})`,
+		api: SYSTEM_ONE_API,
+		// The endpoint's context window is meaningless for a classifier handle;
+		// zero records that instead of inventing a number.
+		contextWindow: 0,
+	};
+	const transport = systemOneClassifier(baseUrl, {
+		...(options.apiKey !== undefined ? { apiKey: options.apiKey } : {}),
+		...(options.label !== undefined ? { label: options.label } : {}),
+		...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
+	});
+	return {
+		findOfType: (_type, provider, id) => (provider === handle.provider && id === handle.id ? handle : undefined),
+		classify: (model, context) =>
+			transport.classify(
+				{
+					type: "classifier",
+					id: model.id,
+					name: handle.name,
+					api: handle.api,
+					provider: model.provider,
+					baseUrl,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 0,
+				},
+				context,
+			),
 	};
 }
 

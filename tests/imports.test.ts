@@ -7,7 +7,7 @@
  * `@earendil-works/pi-ai/api/typesafe-system-one.lazy` resolves fine inside
  * this repository - which has its own node_modules - but fails with
  * "Cannot find module" in a package installed by `pi install`, which is
- * exactly how switchback v1 shipped broken (fixed in src/systemone.ts).
+ * exactly how switchback v1 shipped broken (fixed in packages/core/src/systemone.ts).
  *
  * Type-only imports are erased before the module is evaluated, so they are
  * safe. Value imports of subpaths are not. This test pins that distinction.
@@ -22,11 +22,14 @@ const REPO = fileURLToPath(new URL("..", import.meta.url));
 const HOST_SUBPATH = /["']@earendil-works\/pi-ai\//;
 
 function shippedFiles(): string[] {
-	const srcDir = join(REPO, "src");
-	const src = readdirSync(srcDir)
-		.filter((f) => f.endsWith(".ts"))
-		.map((f) => join(srcDir, f));
-	return [join(REPO, "index.ts"), ...src];
+	const files = [join(REPO, "packages", "pi", "index.ts")];
+	for (const pkg of readdirSync(join(REPO, "packages"))) {
+		const srcDir = join(REPO, "packages", pkg, "src");
+		for (const entry of readdirSync(srcDir)) {
+			if (entry.endsWith(".ts")) files.push(join(srcDir, entry));
+		}
+	}
+	return files;
 }
 
 describe("shipped imports", () => {
@@ -48,8 +51,8 @@ describe("shipped imports", () => {
 	});
 
 	it("ships the System One transport itself rather than importing pi's", () => {
-		const classifier = readFileSync(join(REPO, "src", "local-classifier.ts"), "utf8");
-		expect(classifier).toContain('from "./core/systemone.ts"');
+		const classifier = readFileSync(join(REPO, "packages", "pi", "src", "local-classifier.ts"), "utf8");
+		expect(classifier).toContain('from "switchback-core/systemone.ts"');
 		expect(classifier).not.toMatch(/^import\s+\{[^}]*\}\s+from\s+"@earendil-works\/pi-ai\//m);
 	});
 });

@@ -11,7 +11,7 @@
  * state is only ever written from a classifier-given class + reset, never from the
  * cycle path.
  *
- * Usage: pi -e ./index.ts --model switchback/auto
+ * Usage: pi -e ./packages/pi/index.ts --model switchback/auto
  *
  * Configuration: the user config is aggregated from two YAML layers
  * (`<cwd>/.pi/switchback.yaml` on top of `~/.pi/agent/switchback.yaml`), each entry
@@ -25,26 +25,27 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { resolveFallbacks } from "./src/core/availability.ts";
-import type { AvailabilityPort, NotifyPort } from "./src/core/ports.ts";
-import { SWITCHBACK_PROVIDER, findModelConfig, loadConfig } from "./src/core/config.ts";
+import { resolveFallbacks } from "switchback-core/availability.ts";
+import type { AvailabilityPort, NotifyPort } from "switchback-core/ports.ts";
+import { SWITCHBACK_PROVIDER, findModelConfig, loadConfig } from "switchback-core/config.ts";
 import { runDialogue } from "./src/dialogue.ts";
 import { createSecretStore } from "./src/secrets.ts";
 import { buildRoute, ConfigInvalidError } from "./src/build-route.ts";
-import { observeUnretriedFailure } from "./src/core/failure.ts";
-import { decide } from "./src/core/routing.ts";
-import { buildClassifierProviders } from "./src/core/classifier-catalog.ts";
+import { observeUnretriedFailure } from "switchback-core/failure.ts";
+import { decide } from "switchback-core/routing.ts";
+import { buildClassifierProviders } from "switchback-core/classifier-catalog.ts";
 import {
 	buildProbeContext,
 	probeLocalClassifier,
 	summarizeProbe,
 	type ProbeResult,
-} from "./src/core/classifier-probe.ts";
+} from "switchback-core/classifier-probe.ts";
 import { createModelPicker } from "./src/model-picker.ts";
 import { groupLocalEndpoints, registerLocalClassifier } from "./src/local-classifier.ts";
-import { SWITCHBACK_THINKING_LEVELS } from "./src/core/thinking.ts";
-import { getPinnedModel, isBlocked, readBlockedMap, readPinMap, setPinnedModel } from "./src/core/state.ts";
-import { annotateCrash, hashSample, isValidAnnotationClass, readCrashMap, shortHash } from "./src/core/crashes.ts";
+import { piThinkingSupport } from "./src/thinking-support.ts";
+import { SWITCHBACK_THINKING_LEVELS } from "switchback-core/thinking.ts";
+import { getPinnedModel, isBlocked, readBlockedMap, readPinMap, setPinnedModel } from "switchback-core/state.ts";
+import { annotateCrash, hashSample, isValidAnnotationClass, readCrashMap, shortHash } from "switchback-core/crashes.ts";
 import type {
 	ErrorClass,
 	JevConfig,
@@ -52,7 +53,7 @@ import type {
 	ResolvedSwitchbackConfig,
 	ResolvedSwitchbackFileConfig,
 	SwitchbackState,
-} from "./src/core/types.ts";
+} from "switchback-core/types.ts";
 
 export default function (pi: ExtensionAPI) {
 	// Secrets: `apiKey: secret:<name>` references in the config are resolved to
@@ -120,12 +121,13 @@ export default function (pi: ExtensionAPI) {
 				}
 				const modelConfig: ResolvedSwitchbackConfig = findModelConfig(activeConfig, fullVirtualId);
 				// The context size pi reports for the *routed* model. Only used to prefer a
-				// switch target that can hold the conversation (see src/context-fit.ts).
+				// switch target that can hold the conversation (see packages/core/src/context-fit.ts).
 				// pi reports null when no assistant has answered since the last compaction.
 				const contextTokens = ctx.getContextUsage()?.tokens ?? undefined;
 				const result = await decide(request.reason, request, modelConfig, ctx.modelRegistry, {
 					now,
 					blocked,
+					support: piThinkingSupport(ctx.modelRegistry),
 					notify,
 					debug,
 					...(pinned !== null && pinned !== undefined ? { pinned } : {}),

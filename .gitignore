@@ -4,7 +4,7 @@ node_modules/
 # Runtime state (machine-local, never committed)
 .pi/
 
-# Atomic-write temp files from src/state.ts (rename-over pattern)
+# Atomic-write temp files from packages/core/src/state.ts (rename-over pattern)
 *.tmp
 
 # TypeScript incremental build artifacts
@@ -15,6 +15,9 @@ coverage/
 
 # Distribution builds (we ship source-only; pi loads via jiti)
 dist/
+
+# Tarballs from `npm pack` / `npm publish --dry-run`
+*.tgz
 
 # Local config overrides - shipped switchback.yaml is committed (no secrets).
 # A machine-specific override can use switchback.local.yaml (gitignored).

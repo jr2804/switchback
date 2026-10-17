@@ -36,16 +36,16 @@ command output.
   assert the value is missing. Snapshot updates are deliberate, reviewed
   diffs — never regenerated wholesale to make a run green.
 - **Keep a suite under ~500 lines of code** (comments and blank lines
-  excluded), the same heuristic `src/AGENTS.md` states for modules and for
+  excluded), the same heuristic `packages/pi/AGENTS.md` states for modules and for
   the same reason: it is a readability limit carried over from
   Python/Rust/C practice, not a TS idiom. Measure the suite alone; do not
   add its subject module's size to it. When one exceeds the limit, split on
   a **subject seam** — the suites already follow the module map, so
   `router.test.ts` splits into `decide`, `build-route` and `failure` suites
   rather than at an arbitrary line. Helpers two suites need move to a
-  shared test-helper module, the way `src/dialogue.ts` shares
-  `src/dialogue-ui.ts`; a pass-through re-export kept only so call sites
-  compile is not acceptable (`src/AGENTS.md` → Work Guidance). Test files
+  shared test-helper module, the way `packages/pi/src/dialogue.ts` shares
+  `packages/pi/src/dialogue-ui.ts`; a pass-through re-export kept only so call sites
+  compile is not acceptable (`packages/pi/AGENTS.md` → Work Guidance). Test files
   are outside the `tsc` graph, so a split that breaks an import surfaces
   only in vitest — keep the suite green at every step.
 
@@ -54,11 +54,11 @@ command output.
 - `npx vitest run` (full suite) before reporting a milestone; opt-in live
   tests are exercised separately when their path is under change
   (e.g. `SWITCHBACK_SECRETS_LIVE=1 npx vitest run tests/secrets.test.ts`).
-- **Graph nuance:** `tsconfig.json` includes only the root `index.ts`
-  graph, so the `npx tsc --noEmit` gate does not type-check test files —
-  vitest transpiles them without checking. Keep them type-clean and
-  verify with a targeted `npx tsc --noEmit <files>` run when in doubt
-  (same flags as `src/AGENTS.md` → Verification).
+- **Graph nuance:** `tsconfig.json` includes `packages/**/*.ts`, not `tests/`,
+  so the `npx tsc --noEmit` gate does not type-check test files — vitest
+  transpiles them without checking. Keep them type-clean and verify with a
+  targeted `npx tsc --noEmit <files>` run when in doubt (same flags as
+  `packages/pi/AGENTS.md` → Verification).
 
 ## Child DOX Index
 

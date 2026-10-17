@@ -15,8 +15,8 @@ import {
 	ConfigError,
 	SWITCHBACK_PROVIDER,
 	SWITCHBACK_VIRTUAL_ID,
-} from "../src/core/config.ts";
-import { groupLocalEndpoints, registerLocalClassifier } from "../src/local-classifier.ts";
+} from "switchback-core/config.ts";
+import { groupLocalEndpoints, registerLocalClassifier } from "pi-switchback/local-classifier.ts";
 
 let originalCwd: string;
 let tmpDir: string;

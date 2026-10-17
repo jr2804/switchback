@@ -1,7 +1,7 @@
 /**
- * Tests for the interactive config editor: src/config-editor.ts (comment-
+ * Tests for the interactive config editor: packages/core/src/config-editor.ts (comment-
  * preserving YAML round-trip over one switchback.yaml layer) and
- * src/dialogue.ts (the /switchback-config flow on pi's built-in dialogs).
+ * packages/pi/src/dialogue.ts (the /switchback-config flow on pi's built-in dialogs).
  *
  * The editor must carry no rules of its own: mutations are structural, and
  * saveLayer() re-validates through the loader's exported gate
@@ -39,14 +39,14 @@ import {
 	setDecisionModel,
 	setDebug,
 	type LoadedLayer,
-} from "../src/core/config-editor.ts";
-import { layerOptionLabel, runDialogue } from "../src/dialogue.ts";
-import { describeJev, secretNameFor, type DialogueContext, type DialogueUi } from "../src/dialogue-ui.ts";
-import type { ClassifierProviderOption } from "../src/core/classifier-catalog.ts";
-import type { ProbeResult } from "../src/core/classifier-probe.ts";
-import type { JevConfig } from "../src/core/types.ts";
-import { ConfigError } from "../src/core/config.ts";
-import type { SecretStore } from "../src/secrets.ts";
+} from "switchback-core/config-editor.ts";
+import { layerOptionLabel, runDialogue } from "pi-switchback/dialogue.ts";
+import { describeJev, secretNameFor, type DialogueContext, type DialogueUi } from "pi-switchback/dialogue-ui.ts";
+import type { ClassifierProviderOption } from "switchback-core/classifier-catalog.ts";
+import type { ProbeResult } from "switchback-core/classifier-probe.ts";
+import type { JevConfig } from "switchback-core/types.ts";
+import { ConfigError } from "switchback-core/config.ts";
+import type { SecretStore } from "pi-switchback/secrets.ts";
 
 /** A hand-annotated config with comments, a bare id, a decision-model ref and a debug flag. */
 const SAMPLE = `# my custom header comment

@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { blockModel, isBlocked, readBlockedMap, stateFilePath } from "../src/core/state.ts";
+import { blockModel, isBlocked, readBlockedMap, stateFilePath } from "switchback-core/state.ts";
 
 let tmpDir: string;
 let originalAgentDir: string | undefined;

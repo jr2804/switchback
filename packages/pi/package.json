@@ -1,0 +1,55 @@
+{
+	"name": "pi-switchback",
+	"version": "2026.10.1",
+	"type": "module",
+	"description": "Quota-aware graceful model fallback for pi via the native pi.registerVirtualModel() API.",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/jr2804/switchback.git",
+		"directory": "packages/pi"
+	},
+	"homepage": "https://github.com/jr2804/switchback#readme",
+	"bugs": "https://github.com/jr2804/switchback/issues",
+	"keywords": [
+		"pi",
+		"extension",
+		"switchback",
+		"fallback",
+		"quota"
+	],
+	"files": [
+		"index.ts",
+		"src"
+	],
+	"exports": {
+		".": "./src/index.ts",
+		"./*": "./src/*"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"scripts": {
+		"clean": "echo 'nothing to clean'",
+		"build": "echo 'nothing to build'",
+		"check": "echo 'nothing to check'"
+	},
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"dependencies": {
+		"switchback-core": "^2026.10.1"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-ai": "^1.1.0",
+		"@earendil-works/pi-coding-agent": "^1.1.0",
+		"@earendil-works/pi-tui": "^1.1.0"
+	}
+}

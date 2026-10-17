@@ -1,0 +1,50 @@
+{
+	"name": "switchback-core",
+	"version": "2026.10.1",
+	"type": "module",
+	"description": "Host-agnostic core for switchback: fallback routing, error classification ports, block state and configuration.",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/jr2804/switchback.git",
+		"directory": "packages/core"
+	},
+	"homepage": "https://github.com/jr2804/switchback#readme",
+	"bugs": "https://github.com/jr2804/switchback/issues",
+	"keywords": [
+		"switchback",
+		"fallback",
+		"quota",
+		"routing",
+		"llm"
+	],
+	"files": [
+		"src"
+	],
+	"exports": {
+		".": "./src/index.ts",
+		"./*": "./src/*"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"dependencies": {
+		"yaml": "^2.9.1"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*"
+	},
+	"peerDependenciesMeta": {
+		"@earendil-works/pi-ai": {
+			"optional": true
+		},
+		"@earendil-works/pi-coding-agent": {
+			"optional": true
+		}
+	},
+	"devDependencies": {
+		"@earendil-works/pi-ai": "^1.1.0",
+		"@earendil-works/pi-coding-agent": "^1.1.0"
+	}
+}

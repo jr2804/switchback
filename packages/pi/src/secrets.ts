@@ -22,7 +22,7 @@
  * entry name and powershell diagnostics, never the value.
  *
  * File format: `{ "version": 1, "entries": { "<name>": "<dpapi base64>" } }`,
- * written atomically (`writeFileAtomic`, src/atomic-write.ts). A file that cannot
+ * written atomically (`writeFileAtomic`, packages/core/src/atomic-write.ts). A file that cannot
  * be parsed or does not have that shape is quarantined to
  * `secrets.json.corrupt.<ts>` (the crashes.ts pattern) and the store starts
  * fresh - except the rename failure itself is NOT swallowed (unlike crashes):
@@ -39,8 +39,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
-import { writeFileAtomic } from "./core/atomic-write.ts";
-import { piSwitchbackDir } from "./core/config.ts";
+import { writeFileAtomic } from "switchback-core/atomic-write.ts";
+import { switchbackStateDir } from "switchback-core/config.ts";
 
 /** Current on-disk format version of secrets.json. */
 const SECRETS_VERSION = 1;
@@ -180,7 +180,7 @@ export const powershellDpapi: Dpapi = {
 
 /** Path to the encrypted store inside the agent config dir. */
 export function secretsFilePath(): string {
-	return join(piSwitchbackDir(), "secrets.json");
+	return join(switchbackStateDir(), "secrets.json");
 }
 
 /** On-disk shape. Every value is a DPAPI blob; plaintext never lands here. */

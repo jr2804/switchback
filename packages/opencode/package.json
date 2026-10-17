@@ -1,0 +1,41 @@
+{
+	"name": "opencode-switchback",
+	"version": "2026.10.1",
+	"type": "module",
+	"description": "OpenCode V2 plugin for switchback: quota-aware model fallback routing.",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/jr2804/switchback.git",
+		"directory": "packages/opencode"
+	},
+	"homepage": "https://github.com/jr2804/switchback#readme",
+	"bugs": "https://github.com/jr2804/switchback/issues",
+	"keywords": [
+		"opencode",
+		"plugin",
+		"switchback",
+		"fallback",
+		"quota"
+	],
+	"files": [
+		"src"
+	],
+	"exports": {
+		".": "./src/index.ts",
+		"./*": "./src/*"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"dependencies": {
+		"switchback-core": "^2026.10.1"
+	},
+	"peerDependencies": {
+		"@opencode/plugin": "*"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-ai": "^1.1.0",
+		"@opencode/plugin": "^2.0.32"
+	}
+}

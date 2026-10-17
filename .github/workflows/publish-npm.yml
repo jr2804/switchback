@@ -1,0 +1,138 @@
+# Publish the workspace packages to npm.
+#
+# Release flow (see docs/versioning.md):
+#   1. a push to main is tagged by calver-release.yml (vYYYY.M.N),
+#   2. that workflow CALLS this one with the tag (it does not rely on the tag
+#      push to start a workflow: a tag pushed with the default GITHUB_TOKEN
+#      does not trigger `on: push: tags`),
+#   3. the tree is verified, then switchback-core is published first and the two
+#      host adapters after it, so a plugin is never published pointing at a core
+#      version that does not exist yet.
+#
+# The `push: tags` trigger stays for tags pushed by a human or by another
+# automation. It cannot double-publish a workflow-created tag, because that tag
+# never fires this trigger in the first place.
+#
+# The tag is the only version source. `scripts/set-package-version.mjs` writes it
+# into the manifests inside the runner; it is never committed, which keeps the
+# "no workflow creates a commit" rule that stops the tagging job from looping.
+#
+# NPM_TOKEN is a granular npm automation token (no interactive OTP) stored as a
+# repository secret. A missing or expired token fails the run loudly at the
+# publish step rather than silently skipping a release.
+#
+# --provenance needs id-token: write and public source, which this repository has.
+#
+# Recovery: a failed run is retried by dispatching this workflow with the tag as
+# the `tag` input and `dry_run` off; nothing has to be re-tagged.
+
+name: publish-npm
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Version tag to publish, for example v2026.10.2.
+        type: string
+        required: true
+      dry_run:
+        description: Pack and inspect the packages without publishing
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version tag to publish; defaults to the dispatched ref when empty
+        type: string
+        required: false
+      dry_run:
+        description: Pack and inspect the packages without publishing
+        type: boolean
+        default: true
+
+concurrency:
+  group: publish-npm-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A manual recovery run names a tag that is not the dispatched ref.
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Test
+        run: npx vitest run
+
+  publish-core:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - name: Stamp the release version from the tag
+        # `inputs.tag` is empty on a tag push, so the pushed tag name is used
+        # there; a called or dispatched run passes the tag explicitly.
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          node scripts/set-package-version.mjs "${TAG:-$GITHUB_REF_NAME}"
+      - name: Publish switchback-core
+        # `inputs.dry_run` is empty on a tag push, so the flag is only added when
+        # the workflow was called or dispatched with a dry run.
+        run: npm publish --workspace switchback-core --provenance ${{ inputs.dry_run && '--dry-run' || '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-adapters:
+    needs: publish-core
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - pi-switchback
+          - opencode-switchback
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - name: Stamp the release version from the tag
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          node scripts/set-package-version.mjs "${TAG:-$GITHUB_REF_NAME}"
+      - name: Publish ${{ matrix.package }}
+        run: npm publish --workspace ${{ matrix.package }} --provenance ${{ inputs.dry_run && '--dry-run' || '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -7,6 +7,11 @@ name: calver-release
 #   - Find existing tags matching that prefix, take the max numeric suffix,
 #     increment by 1. If no tags for this month, start at 1.
 #   - Tag HEAD with the new tag, push the tag, create a GitHub release.
+#   - Publish the packages to npm by CALLING publish-npm.yml (the `publish`
+#     job below). The call is not an optimisation: a tag pushed with the
+#     default GITHUB_TOKEN does NOT start another workflow, so `on: push: tags`
+#     never fires for a tag this workflow created. Calling the reusable
+#     workflow is what makes "release" and "published to npm" one action.
 #
 # The workflow NEVER creates commits, so it cannot retrigger itself.
 # Branch filter is [main]; tag pushes are not retried because push events
@@ -15,6 +20,11 @@ name: calver-release
 # Tag-push race tolerance: an exists-check on the remote tag handles the
 # case where two pushes land in the same month and the workflow runs
 # twice in parallel. The losing run exits 0 silently.
+#
+# Recovery: if the tag was created but publishing failed (expired token,
+# registry outage), run publish-npm.yml by hand with the tag as the `tag`
+# input. Re-running THIS workflow will not re-publish — it sees the tag on
+# HEAD and exits cleanly, leaving the `publish` job with no tag to publish.
 
 on:
   push:
@@ -25,12 +35,20 @@ on:
     tags-ignore:
       - "v*"
 
+# `id-token: write` is granted here as well as in the called workflow: a
+# reusable workflow's jobs cannot exceed the caller's granted permissions,
+# and the npm publish steps need the OIDC token for `--provenance`.
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      # Empty when this run found the tag already in place, which is the
+      # signal for `publish` below to stay out of the way.
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,6 +56,7 @@ jobs:
           fetch-depth: 0
 
       - name: Compute and tag CalVer release
+        id: tag
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -47,6 +66,7 @@ jobs:
           #    Skip and exit cleanly.
           if git tag --points-at HEAD | grep -q '^v'; then
             echo "HEAD already has a vX tag; nothing to do."
+            echo "tag=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -72,6 +92,7 @@ jobs:
           #    exit 0 silently rather than failing the workflow.
           if git ls-remote --tags origin "${NEW_TAG}" | grep -q "${NEW_TAG}"; then
             echo "Tag ${NEW_TAG} already exists on remote; exiting cleanly."
+            echo "tag=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -85,3 +106,17 @@ jobs:
           gh release create "${NEW_TAG}" \
             --generate-notes \
             --title "switchback ${NEW_TAG}"
+
+          # 7. Hand the tag to the publish job below.
+          echo "tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
+
+  # Publish the tag we just created. A reusable workflow call, not a tag-push
+  # trigger, for the GITHUB_TOKEN reason in the header comment.
+  publish:
+    needs: release
+    if: needs.release.outputs.tag != ''
+    uses: ./.github/workflows/publish-npm.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      dry_run: false
+    secrets: inherit

@@ -22,9 +22,16 @@ Classifier-only by design: no keyword sets, no regex, no heuristics.
 ## Quickstart
 
 ```bash
-pi install https://github.com/jr2804/switchback.git
+pi install https://github.com/jr2804/switchback.git   # whole repo: installs the pi extension + core
+# or, npm:
+pi install pi-switchback
 pi --model switchback/auto
 ```
+
+The repository is a workspace of three packages — `switchback-core` (host-agnostic
+decision logic), `pi-switchback` (this extension) and `opencode-switchback` (the
+OpenCode V2 plugin). Installing the repo installs all of them; `pi install pi-switchback`
+fetches the extension and its core from npm.
 
 Verify in the TUI:
 

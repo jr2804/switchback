@@ -132,20 +132,14 @@ gitignored).
 | `FILES.md`              | Touching files or config    | Path constants, source-of-truth locations       |
 | `HISTORY.md`            | Background (past decisions) | Recorded decisions with git refs                |
 | `MAINTENANCE.md`        | Changing `.agents/`         | How to keep DOX files current                    |
+| `TOOLS.md`              | Using tools/MCP/skills      | Development tool inventory and usage guidance   |
 | `plans/`                | Working on a feature        | Implementation plans (gitignored)                |
 | `history/`              | Background (overflow)       | Archived decisions and completed plans           |
 
 ## Tools & skills
 
-| Tool/Skill | When | Purpose |
-| --------- | ---- | ------- |
-| `bd` / beads | Task tracking | Lifecycle, dependencies, session persistence (issue prefix `switchback`) |
-| `codegraph` | Code navigation | Symbol/call/dependency maps (if installed) |
-| `grepai` | Semantic search | Find code by meaning (if installed) |
-| `vitest` | Test runs | `npx vitest run` |
-| `gts` (mise `lint-ts` / `format-ts`) | Before committing TS changes | Lint + formatting; see `.agents/POLICIES.md` → Verification |
-| `tsc` | Type check | `npx tsc --noEmit` (strict + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`) |
-| `pi-intercom` | Multi-session | Coordination across pi sessions in this cwd |
+See state file `.agents/TOOLS.md` — it owns the inventory of CLIs, MCP
+servers, skills, and runtimes used during development.
 
 ## Project rules
 

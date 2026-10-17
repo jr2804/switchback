@@ -14,20 +14,20 @@ import {
 	fitsContext,
 	usableContextTokens,
 	CONTEXT_FIT_RESERVE_TOKENS,
-} from "../src/context-fit.ts";
-import type { ClassifierRegistry } from "../src/classify.ts";
+} from "../src/core/context-fit.ts";
+import type { ClassifierPort } from "../src/core/ports.ts";
 
 function model(contextWindow: number): Model<Api> {
 	return { provider: "zai", id: "m", contextWindow } as unknown as Model<Api>;
 }
 
 /** A registry whose classifier answers the candidate question with `choice`. */
-function registryAnswering(choice: string | undefined): ClassifierRegistry {
+function registryAnswering(choice: string | undefined): ClassifierPort {
 	return {
 		find: () => undefined,
 		findOfType: () =>
 			({ provider: "typesafe", id: "jev-latest", api: "classifier", input: ["text"] }) as unknown as ReturnType<
-				ClassifierRegistry["findOfType"]
+				ClassifierPort["findOfType"]
 			>,
 		classify: async (_model: unknown, context: unknown) => {
 			if (choice === undefined) return null;
@@ -38,7 +38,7 @@ function registryAnswering(choice: string | undefined): ClassifierRegistry {
 				answers: { candidate: { type: "choice" as const, choice, probabilities: {}, confidence: 0.8 } },
 			};
 		},
-	} as unknown as ClassifierRegistry;
+	} as unknown as ClassifierPort;
 }
 
 const CANDIDATES = [
@@ -85,7 +85,7 @@ describe("context-fit: candidate choice", () => {
 					find: () => undefined,
 					findOfType: () => undefined,
 					classify: async () => null,
-				} as unknown as ClassifierRegistry,
+				} as unknown as ClassifierPort,
 			}),
 		);
 		expect(choice.modelId).toBe("zai/glm-5.3");

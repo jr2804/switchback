@@ -14,7 +14,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { atomicTmpPath, writeFileAtomic, AtomicWriteError } from "../src/atomic-write.ts";
+import { atomicTmpPath, writeFileAtomic, AtomicWriteError } from "../src/core/atomic-write.ts";
 
 let tmpDir: string;
 

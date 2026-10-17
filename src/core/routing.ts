@@ -60,8 +60,10 @@
 
 import type { ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { resolveDispatchLevel, type DecisionOutcome, type NotifyFn, type RouterRegistry } from "./build-route.ts";
-import { pickNextEffective, resolveFallbacks, type AvailabilityRegistry , effectiveIds } from "./availability.ts";
+import { effectiveIds, lookupModel, pickNextEffective, resolveFallbacks } from "./availability.ts";
+import type { DecisionOutcome } from "./decision.ts";
+import { resolveDispatchLevel } from "./dispatch.ts";
+import type { NotifyPort, RouterRegistryPort } from "./ports.ts";
 import type { NoClassifierReason } from "./classify.ts";
 import { chooseContextCandidate, fitsContext } from "./context-fit.ts";
 import { assessFailure, recordDecideCrash } from "./failure.ts";
@@ -75,7 +77,7 @@ export interface RouteInputs {
 	/** Optional simulate-mode error message injected for `retry` requests. */
 	simulateErrorMessage?: string;
 	/** When provided, the router surfaces no-classifier conditions via this sink. */
-	notify?: NotifyFn;
+	notify?: NotifyPort;
 	/** When true, emit one diagnostics line per model switch (see `debug:` in the config). */
 	debug?: boolean;
 	/**
@@ -153,7 +155,7 @@ async function pickWithContextFit(opts: {
 	blocked: BlockedMap;
 	now: number;
 	startAfter: ModelId | undefined;
-	registry: RouterRegistry;
+	registry: RouterRegistryPort;
 	jev: JevConfig | undefined;
 	contextTokens: number | undefined;
 	reason?: string;
@@ -164,7 +166,7 @@ async function pickWithContextFit(opts: {
 		.filter((id) => id !== opts.skip && !excluded.has(id))
 		.filter((id) => !isBlocked(id, opts.now, opts.blocked));
 	let eligible = usable
-		.map((id) => ({ id, model: modelOf(opts.registry, id) }))
+		.map((id) => ({ id, model: lookupModel(opts.registry, id) }))
 		.filter((entry): entry is { id: ModelId; model: Model<Api> } => entry.model !== undefined);
 	const tokens = opts.contextTokens;
 	if (tokens !== undefined && tokens > 0) {
@@ -211,13 +213,6 @@ function orderByScope(ids: readonly ModelId[], scope: ErrorScope | undefined, fa
 	return scope === "account" ? [...other, ...same] : [...same, ...other];
 }
 
-/** The named physical model, when the registry knows it. */
-function modelOf(registry: RouterRegistry, modelId: ModelId): Model<Api> | undefined {
-	const slash = modelId.indexOf("/");
-	if (slash <= 0) return undefined;
-	return registry.find(modelId.slice(0, slash), modelId.slice(slash + 1));
-}
-
 /** Human-readable description of a no-classifier reason, for a blind-cycle decision reason. */
 function describeNoClassifier(reason: NoClassifierReason): string {
 	switch (reason) {
@@ -247,7 +242,7 @@ export async function decide(
 	reason: ModelRouteRequest<SwitchbackState>["reason"],
 	request: ModelRouteRequest<SwitchbackState>,
 	modelConfig: ResolvedSwitchbackConfig,
-	registry: AvailabilityRegistry & RouterRegistry,
+	registry: RouterRegistryPort,
 	inputs: RouteInputs,
 ): Promise<DecisionOutcome> {
 	const now = inputs.now;
@@ -433,7 +428,7 @@ export async function decide(
 async function decideRetry(
 	request: ModelRouteRequest<SwitchbackState>,
 	modelConfig: ResolvedSwitchbackConfig,
-	registry: AvailabilityRegistry & RouterRegistry,
+	registry: RouterRegistryPort,
 	resolved: ReturnType<typeof resolveFallbacks>,
 	inputs: RouteInputs,
 ): Promise<DecisionOutcome> {

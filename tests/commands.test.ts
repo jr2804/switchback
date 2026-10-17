@@ -9,8 +9,8 @@ import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { resolveFallbacks } from "../src/availability.ts";
-import { isBlocked, readBlockedMap } from "../src/state.ts";
+import { resolveFallbacks } from "../src/core/availability.ts";
+import { isBlocked, readBlockedMap } from "../src/core/state.ts";
 
 let originalCwd: string;
 
@@ -127,7 +127,7 @@ describe("command output capture", () => {
 	});
 
 	it("/switchback-crashes renders empty when no crashes recorded", async () => {
-		const { readCrashMap } = await import("../src/crashes.ts");
+		const { readCrashMap } = await import("../src/core/crashes.ts");
 		const map = readCrashMap();
 		const text = Object.keys(map).length === 0 ? "(no crashes recorded yet)" : "(non-empty)";
 		expect(text).toMatchSnapshot();
@@ -152,8 +152,8 @@ describe("command output capture", () => {
 // surface in the test keeps the helper's contract pinned to the same
 // shape (hash + class + note) the command handler uses, without coupling
 // the test to the entry's internal module layout.
-import { isValidAnnotationClass } from "../src/crashes.ts";
-import type { ErrorClass } from "../src/types.ts";
+import { isValidAnnotationClass } from "../src/core/crashes.ts";
+import type { ErrorClass } from "../src/core/types.ts";
 
 function parseAnnotateArgsForTest(args: string): { hash: string; klass: ErrorClass; note: string } | undefined {
 	const tokens = args.trim().split(/\s+/);

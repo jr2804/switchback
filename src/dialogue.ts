@@ -48,7 +48,7 @@ import {
 	setVirtualModelName,
 	type ConfigLayer,
 	type LoadedLayer,
-} from "./config-editor.ts";
+} from "./core/config-editor.ts";
 import { createSecretStore, type SecretStore } from "./secrets.ts";
 import {
 	describeJev,
@@ -62,7 +62,7 @@ import {
 	type DialogueSession,
 } from "./dialogue-ui.ts";
 import { decisionModelPicker, decisionModelsMenu } from "./dialogue-classifier.ts";
-import type { SwitchbackConfig, SwitchbackFileConfig } from "./types.ts";
+import type { SwitchbackConfig, SwitchbackFileConfig } from "./core/types.ts";
 
 /**
  * Label for one layer in the chooser: which file, and what is in it right now.

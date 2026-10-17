@@ -13,7 +13,7 @@ import {
 	defaultDecisionModelName,
 	directEndpointWouldClobber,
 	type ClassifierProviderSource,
-} from "../src/classifier-catalog.ts";
+} from "../src/core/classifier-catalog.ts";
 
 function provider(overrides: Partial<ClassifierProviderSource> & { id: string }): ClassifierProviderSource {
 	return { name: overrides.id, classifiers: [], chatModels: 0, ...overrides };

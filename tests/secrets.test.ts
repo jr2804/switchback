@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createSecretStore, secretsFilePath, SecretsError, type Dpapi } from "../src/secrets.ts";
-import { piSwitchbackDir } from "../src/config.ts";
+import { piSwitchbackDir } from "../src/core/config.ts";
 
 const SECRET = "sk-switchback-TESTVALUE-42-not-a-real-key";
 const OTHER_SECRET = "sk-switchback-TESTVALUE-99-not-a-real-key";

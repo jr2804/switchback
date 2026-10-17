@@ -18,16 +18,9 @@
  * an explicit user action.
  */
 
-import type { Model } from "@earendil-works/pi-ai";
-import type { Api } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { AvailabilityPort, ModelRegistryPort } from "./ports.ts";
 import type { Availability, BlockedMap, ModelId, ResolvedEntry, ResolvedFallbacks } from "./types.ts";
-
-/** Minimum slice of `pi.modelRegistry` needed for availability resolution. */
-export interface AvailabilityRegistry {
-	find(provider: string, modelId: string): Model<Api> | undefined;
-	hasConfiguredAuth(model: Model<Api>): boolean;
-	getProviderAuthStatus(provider: string): { configured: boolean; source?: string; label?: string };
-}
 
 function splitModelId(modelId: ModelId): { provider: string; id: string } | undefined {
 	const slash = modelId.indexOf("/");
@@ -35,11 +28,18 @@ function splitModelId(modelId: ModelId): { provider: string; id: string } | unde
 	return { provider: modelId.slice(0, slash), id: modelId.slice(slash + 1) };
 }
 
+/** The named physical model, when the registry knows it. */
+export function lookupModel(registry: ModelRegistryPort, modelId: ModelId): Model<Api> | undefined {
+	const split = splitModelId(modelId);
+	if (split === undefined) return undefined;
+	return registry.find(split.provider, split.id);
+}
+
 /**
  * Resolve every configured fallback against the registry. Returns the full list
  * (effective + greyed) plus counts. Pure apart from the registry read.
  */
-export function resolveFallbacks(fallbacks: readonly ModelId[], registry: AvailabilityRegistry): ResolvedFallbacks {
+export function resolveFallbacks(fallbacks: readonly ModelId[], registry: AvailabilityPort): ResolvedFallbacks {
 	const entries: ResolvedEntry[] = [];
 	let effectiveCount = 0;
 	let greyedCount = 0;

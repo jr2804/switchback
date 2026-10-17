@@ -31,15 +31,24 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { buildRoute, ConfigInvalidError, type Decision, type RouterRegistry } from "../src/build-route.ts";
-import { observeUnretriedFailure, MAX_TRANSIENT_RETRIES } from "../src/failure.ts";
-import { decide } from "../src/routing.ts";
-import { readCrashMap } from "../src/crashes.ts";
-import { stateFilePath, readBlockedMap, isBlocked, unblockModel, blockModel, setPinnedModel } from "../src/state.ts";
-import { simulateRetry, loadSimulate, getScenario, SimulateError } from "../src/simulate.ts";
-import { findModelConfig, loadConfig } from "../src/config.ts";
-import { callClassifier, classifyError, MAX_SCORE_LEVELS, type NoClassifierReason } from "../src/classify.ts";
-import type { SwitchbackConfig } from "../src/types.ts";
+import { buildRoute, ConfigInvalidError } from "../src/build-route.ts";
+import type { Decision } from "../src/core/decision.ts";
+import type { RouterRegistryPort } from "../src/core/ports.ts";
+import { observeUnretriedFailure, MAX_TRANSIENT_RETRIES } from "../src/core/failure.ts";
+import { decide } from "../src/core/routing.ts";
+import { readCrashMap } from "../src/core/crashes.ts";
+import {
+	stateFilePath,
+	readBlockedMap,
+	isBlocked,
+	unblockModel,
+	blockModel,
+	setPinnedModel,
+} from "../src/core/state.ts";
+import { simulateRetry, loadSimulate, getScenario, SimulateError } from "../src/core/simulate.ts";
+import { findModelConfig, loadConfig } from "../src/core/config.ts";
+import { callClassifier, classifyError, MAX_SCORE_LEVELS, type NoClassifierReason } from "../src/core/classify.ts";
+import type { SwitchbackConfig } from "../src/core/types.ts";
 
 interface FakeEntry {
 	provider: string;
@@ -91,7 +100,7 @@ interface FakeRegistryOpts {
 
 function makeFakeRegistry(
 	opts: FakeRegistryOpts,
-): RouterRegistry & { classify: (...args: unknown[]) => Promise<unknown> } {
+): RouterRegistryPort & { classify: (...args: unknown[]) => Promise<unknown> } {
 	const byKey = new Map<string, Model<Api>>();
 	const providers = new Set<string>();
 	for (const e of opts.entries) {
@@ -217,7 +226,7 @@ function makeFakeRegistry(
 			}
 			return { stopReason: "stop" as const, answers };
 		},
-	} as unknown as RouterRegistry & { classify: (...args: unknown[]) => Promise<unknown> };
+	} as unknown as RouterRegistryPort & { classify: (...args: unknown[]) => Promise<unknown> };
 }
 
 let tmpDir: string;
@@ -853,7 +862,7 @@ describe("step 8 — catalog validity & degraded lists", () => {
 	});
 
 	it("resolveFallbacks: per-entry reason strings", async () => {
-		const { resolveFallbacks } = await import("../src/availability.ts");
+		const { resolveFallbacks } = await import("../src/core/availability.ts");
 		const registry = makeFakeRegistry({
 			entries: [{ provider: "ollama-cloud", id: "pro" }],
 		});

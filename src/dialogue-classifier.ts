@@ -25,16 +25,16 @@ import {
 	updateDecisionModel,
 	type DecisionModelInput,
 	type DecisionModelPatch,
-} from "./config-editor.ts";
-import { LOCAL_CLASSIFIER_APIS } from "./config.ts";
+} from "./core/config-editor.ts";
+import { LOCAL_CLASSIFIER_APIS } from "./core/config.ts";
 import {
 	classifierBaseUrlNote,
 	defaultDecisionModelName,
 	directEndpointWouldClobber,
 	type ClassifierProviderOption,
-} from "./classifier-catalog.ts";
-import { discoverOllamaModels } from "./classifier-discovery.ts";
-import { formatProbeReport } from "./classifier-probe.ts";
+} from "./core/classifier-catalog.ts";
+import { discoverOllamaModels } from "./core/classifier-discovery.ts";
+import { formatProbeReport } from "./core/classifier-probe.ts";
 import {
 	describeJev,
 	errorMessage,
@@ -50,7 +50,7 @@ import {
 	type DialogueContext,
 	type DialogueSession,
 } from "./dialogue-ui.ts";
-import type { DecisionModelEntry, JevConfig } from "./types.ts";
+import type { DecisionModelEntry, JevConfig } from "./core/types.ts";
 
 export async function decisionModelPicker(
 	ctx: DialogueContext,

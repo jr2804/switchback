@@ -49,7 +49,7 @@ describe("shipped imports", () => {
 
 	it("ships the System One transport itself rather than importing pi's", () => {
 		const classifier = readFileSync(join(REPO, "src", "local-classifier.ts"), "utf8");
-		expect(classifier).toContain('from "./systemone.ts"');
+		expect(classifier).toContain('from "./core/systemone.ts"');
 		expect(classifier).not.toMatch(/^import\s+\{[^}]*\}\s+from\s+"@earendil-works\/pi-ai\//m);
 	});
 });

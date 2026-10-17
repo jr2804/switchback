@@ -66,22 +66,12 @@ import type {
 	StopReason,
 } from "@earendil-works/pi-ai";
 import { lookupCrash } from "./crashes.ts";
+import type { ClassifierPort } from "./ports.ts";
 import { classifierState } from "./systemone.ts";
 import type { ClassifiedError, ErrorClass, ErrorScope } from "./types.ts";
 
 /** The classifier model entry that the registry returns for `findOfType("classifier", ...)`. */
 type ClassifierEntry = ClassifierModel<ClassifierApi>;
-
-/**
- * Minimum slice of `pi.modelRegistry` that `classifyError` needs. Keeping it
- * narrow lets a test supply a real classifier transport (llama.cpp / TypeSafe)
- * behind a small shim without constructing a full pi registry. The real
- * `ctx.modelRegistry` satisfies this structurally.
- */
-export interface ClassifierRegistry {
-	findOfType(type: "classifier", provider: string, id: string): ClassifierEntry | undefined;
-	classify(model: ClassifierEntry, context: ClassifierContext): Promise<ClassifierResult>;
-}
 
 /** Hard cap on reset windows we are willing to record. Monthly windows top out at 31d. */
 const MAX_RESET_MS = 31 * 24 * 3_600_000;
@@ -257,7 +247,7 @@ function normaliseScope(value: unknown): ErrorScope {
 }
 
 /** Find a classifier in the model registry. The provider+id are looked up via JevConfig. */
-function findJev(registry: ClassifierRegistry, jev: { provider: string; id: string }): ClassifierEntry | undefined {
+function findJev(registry: ClassifierPort, jev: { provider: string; id: string }): ClassifierEntry | undefined {
 	return registry.findOfType("classifier", jev.provider, jev.id);
 }
 
@@ -356,7 +346,7 @@ export type ClassifierCallResult =
  * call exceeded `timeoutMs`; the timer is always cleared.
  */
 export async function callClassifier(
-	registry: ClassifierRegistry,
+	registry: ClassifierPort,
 	jev: { provider: string; id: string } | undefined,
 	context: ClassifierContext,
 	timeoutMs: number = CLASSIFIER_TIMEOUT_MS,
@@ -424,7 +414,7 @@ export function readConfidence(result: ClassifierResult, questionId: string): nu
  */
 export async function classifyError(
 	message: string,
-	registry: ClassifierRegistry,
+	registry: ClassifierPort,
 	jev: { provider: string; id: string } | undefined,
 	now: number = Date.now(),
 	stopReason?: StopReason,

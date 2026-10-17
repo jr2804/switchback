@@ -39,13 +39,13 @@ import {
 	setDecisionModel,
 	setDebug,
 	type LoadedLayer,
-} from "../src/config-editor.ts";
+} from "../src/core/config-editor.ts";
 import { layerOptionLabel, runDialogue } from "../src/dialogue.ts";
 import { describeJev, secretNameFor, type DialogueContext, type DialogueUi } from "../src/dialogue-ui.ts";
-import type { ClassifierProviderOption } from "../src/classifier-catalog.ts";
-import type { ProbeResult } from "../src/classifier-probe.ts";
-import type { JevConfig } from "../src/types.ts";
-import { ConfigError } from "../src/config.ts";
+import type { ClassifierProviderOption } from "../src/core/classifier-catalog.ts";
+import type { ProbeResult } from "../src/core/classifier-probe.ts";
+import type { JevConfig } from "../src/core/types.ts";
+import { ConfigError } from "../src/core/config.ts";
 import type { SecretStore } from "../src/secrets.ts";
 
 /** A hand-annotated config with comments, a bare id, a decision-model ref and a debug flag. */

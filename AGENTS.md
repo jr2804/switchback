@@ -159,7 +159,7 @@ non-essential belongs in `.agents/POLICIES.md` or a child AGENTS.md.
    provider traffic (rule 10). When the classifier is missing, unresolvable, or
    its call fails, the router visibly notifies and *cycles* to the next
    non-blocked effective entry without classifying — that cycle is the one
-   allowed baseline (see `src/classify.ts`, `src/routing.ts`).
+   allowed baseline (see `src/core/classify.ts`, `src/core/routing.ts`).
 2. **`decide()` takes the model registry as an explicit parameter** from the
    `route()` callback. Do not read context off `ModelRouteRequest`.
 3. **Account-scoped runtime state.** `blocks.json` and `crashes.json` live

@@ -25,10 +25,9 @@
  */
 
 import type { StopReason } from "@earendil-works/pi-ai";
-import type { AvailabilityRegistry } from "./availability.ts";
 import { classifyError, PROMPT_VERSION, type NoClassifierReason } from "./classify.ts";
-import type { NotifyFn, RouterRegistry } from "./build-route.ts";
 import { recordCrash, type CrashAction } from "./crashes.ts";
+import type { AvailabilityPort, ClassifierPort, ModelRegistryPort, NotifyPort, RouterRegistryPort } from "./ports.ts";
 import { blockModel, isBlocked, unblockModel } from "./state.ts";
 import type { BlockedMap, ClassifiedError, JevConfig, ModelId } from "./types.ts";
 
@@ -47,7 +46,7 @@ export const MAX_TRANSIENT_RETRIES = 1;
  */
 export function recordDecideCrash(
 	failedId: ModelId | undefined,
-	registry: AvailabilityRegistry & RouterRegistry,
+	registry: AvailabilityPort & ModelRegistryPort,
 	errorMessage: string,
 	now: number,
 	verdict: import("./types.ts").ClassifiedError | null,
@@ -114,7 +113,7 @@ export async function assessFailure(opts: {
 	errorMessage: string;
 	stopReason: StopReason | undefined;
 	jev: JevConfig | undefined;
-	registry: RouterRegistry;
+	registry: ClassifierPort;
 	now: number;
 	blocked: BlockedMap;
 	transientRetries: number;
@@ -188,10 +187,10 @@ export async function observeUnretriedFailure(opts: {
 	errorMessage: string;
 	stopReason: StopReason | undefined;
 	jev: JevConfig | undefined;
-	registry: AvailabilityRegistry & RouterRegistry;
+	registry: RouterRegistryPort;
 	now: number;
 	blocked: BlockedMap;
-	notify?: NotifyFn;
+	notify?: NotifyPort;
 }): Promise<boolean> {
 	const { failedId, errorMessage, now } = opts;
 	const assessed = await assessFailure({

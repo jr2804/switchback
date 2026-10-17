@@ -22,8 +22,8 @@ import {
 	readCrashMap,
 	recordCrash,
 	shortHash,
-} from "../src/crashes.ts";
-import { classifyError, PROMPT_VERSION } from "../src/classify.ts";
+} from "../src/core/crashes.ts";
+import { classifyError, PROMPT_VERSION } from "../src/core/classify.ts";
 
 let tmpDir: string;
 let originalAgentDir: string | undefined;

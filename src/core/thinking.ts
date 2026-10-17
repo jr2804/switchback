@@ -36,13 +36,8 @@
 
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { Api, ClassifierContext, ClassifierQuestion, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
-import {
-	callClassifier,
-	readChoice,
-	readConfidence,
-	type ClassifierRegistry,
-	type NoClassifierReason,
-} from "./classify.ts";
+import { callClassifier, readChoice, readConfidence, type NoClassifierReason } from "./classify.ts";
+import type { ClassifierPort } from "./ports.ts";
 
 /**
  * The reasoning levels every switchback virtual model offers, independent of
@@ -119,7 +114,7 @@ export interface ThinkingLevelChoice {
  * outcome falls back to clamping the requested category.
  */
 export async function chooseThinkingLevel(opts: {
-	registry: ClassifierRegistry;
+	registry: ClassifierPort;
 	jev: { provider: string; id: string } | undefined;
 	model: Model<Api>;
 	requested: ModelThinkingLevel;

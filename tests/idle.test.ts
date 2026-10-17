@@ -20,8 +20,8 @@ import {
 	lastMessageTimestamp,
 	IDLE_CLASSIFIER_FLOOR_MS,
 	IDLE_RESET_OPTIONS,
-} from "../src/idle.ts";
-import type { ClassifierRegistry } from "../src/classify.ts";
+} from "../src/core/idle.ts";
+import type { ClassifierPort } from "../src/core/ports.ts";
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -34,7 +34,7 @@ function messageAt(timestamp: number): Message {
 }
 
 /** A registry whose classifier handle is present and answers with `choice`. */
-function classifierAnswering(choice: string | undefined): ClassifierRegistry {
+function classifierAnswering(choice: string | undefined): ClassifierPort {
 	return {
 		find: () => undefined,
 		findOfType: () =>
@@ -43,7 +43,7 @@ function classifierAnswering(choice: string | undefined): ClassifierRegistry {
 				id: "jev-latest",
 				api: "classifier",
 				input: ["text"],
-			}) as unknown as ReturnType<ClassifierRegistry["findOfType"]>,
+			}) as unknown as ReturnType<ClassifierPort["findOfType"]>,
 		classify: async () => {
 			if (choice === undefined) return null;
 			return {
@@ -51,16 +51,16 @@ function classifierAnswering(choice: string | undefined): ClassifierRegistry {
 				answers: { idle_reset: { type: "choice" as const, choice, probabilities: {}, confidence: 1 } },
 			};
 		},
-	} as unknown as ClassifierRegistry;
+	} as unknown as ClassifierPort;
 }
 
 /** A registry with no classifier handle at all (the no-classifier path). */
-function classifierAbsent(): ClassifierRegistry {
+function classifierAbsent(): ClassifierPort {
 	return {
 		find: () => undefined,
 		findOfType: () => undefined,
 		classify: async () => null,
-	} as unknown as ClassifierRegistry;
+	} as unknown as ClassifierPort;
 }
 
 describe("idle — options and thresholds", () => {

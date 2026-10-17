@@ -29,13 +29,8 @@
  */
 
 import type { ClassifierContext, ClassifierQuestion, Message } from "@earendil-works/pi-ai";
-import {
-	callClassifier,
-	readChoice,
-	readConfidence,
-	type ClassifierRegistry,
-	type NoClassifierReason,
-} from "./classify.ts";
+import { callClassifier, readChoice, readConfidence, type NoClassifierReason } from "./classify.ts";
+import type { ClassifierPort } from "./ports.ts";
 import type { IdleResetConfig, JevConfig, ModelId } from "./types.ts";
 
 /** Every accepted `idleReset:` value, in menu order. */
@@ -140,7 +135,7 @@ export interface IdleResetDecision {
 }
 
 export interface IdleResetInput {
-	registry: ClassifierRegistry;
+	registry: ClassifierPort;
 	jev: JevConfig | undefined;
 	/** The virtual model's `idleReset:` setting. */
 	option: IdleResetConfig | undefined;

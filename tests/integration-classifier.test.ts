@@ -26,7 +26,7 @@
  * The test drives the public `classifyError` entry point, so it exercises the
  * locked JEV_QUESTIONS prompt, the timeout/parse handling and the
  * score-to-reset mapping exactly as production does. The only shim is a
- * narrow `ClassifierRegistry` (findOfType + classify) that delegates to the
+ * narrow `ClassifierPort` (findOfType + classify) that delegates to the
  * real transport; no message text is inspected anywhere.
  */
 
@@ -36,9 +36,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import type { ClassifierApi, ClassifierModel, ProviderClassifier } from "@earendil-works/pi-ai";
-import { classifyError, type ClassifierRegistry } from "../src/classify.ts";
-import { systemOneClassifier } from "../src/systemone.ts";
-import type { ErrorClass } from "../src/types.ts";
+import { classifyError } from "../src/core/classify.ts";
+import type { ClassifierPort } from "../src/core/ports.ts";
+import { systemOneClassifier } from "../src/core/systemone.ts";
+import type { ErrorClass } from "../src/core/types.ts";
 
 interface ClassifierEnv {
 	api: ClassifierApi;
@@ -109,7 +110,7 @@ function buildModel(config: ClassifierEnv): ClassifierModel<ClassifierApi> {
 }
 
 /** The narrow registry slice classifyError needs, backed by the real transport. */
-function buildRegistry(model: ClassifierModel<ClassifierApi>, classifier: ProviderClassifier): ClassifierRegistry {
+function buildRegistry(model: ClassifierModel<ClassifierApi>, classifier: ProviderClassifier): ClassifierPort {
 	const apiKey = env?.apiKey;
 	return {
 		findOfType(type, provider, id) {
@@ -158,7 +159,7 @@ it("classifier integration is opt-in", () => {
 
 describe.runIf(enabled)("classifier integration — live corpus validation", () => {
 	let model: ClassifierModel<ClassifierApi>;
-	let registry: ClassifierRegistry;
+	let registry: ClassifierPort;
 	let scenarios: Record<string, string>;
 	let tempAgentDir: string;
 	let originalAgentDir: string | undefined;

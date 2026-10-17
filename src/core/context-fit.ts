@@ -31,13 +31,8 @@
  */
 
 import type { Api, ClassifierContext, ClassifierQuestion, Model } from "@earendil-works/pi-ai";
-import {
-	callClassifier,
-	readChoice,
-	readConfidence,
-	type ClassifierRegistry,
-	type NoClassifierReason,
-} from "./classify.ts";
+import { callClassifier, readChoice, readConfidence, type NoClassifierReason } from "./classify.ts";
+import type { ClassifierPort } from "./ports.ts";
 import type { JevConfig, ModelId } from "./types.ts";
 
 /**
@@ -70,7 +65,7 @@ export interface CandidateWindow {
 }
 
 export interface ContextCandidateInput {
-	registry: ClassifierRegistry;
+	registry: ClassifierPort;
 	jev: JevConfig | undefined;
 	/** The deterministic pick: the floor the classifier may only reorder. */
 	preferred: ModelId;

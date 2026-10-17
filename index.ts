@@ -25,20 +25,26 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { resolveFallbacks, type AvailabilityRegistry } from "./src/availability.ts";
-import { SWITCHBACK_PROVIDER, findModelConfig, loadConfig } from "./src/config.ts";
+import { resolveFallbacks } from "./src/core/availability.ts";
+import type { AvailabilityPort, NotifyPort } from "./src/core/ports.ts";
+import { SWITCHBACK_PROVIDER, findModelConfig, loadConfig } from "./src/core/config.ts";
 import { runDialogue } from "./src/dialogue.ts";
 import { createSecretStore } from "./src/secrets.ts";
 import { buildRoute, ConfigInvalidError } from "./src/build-route.ts";
-import { observeUnretriedFailure } from "./src/failure.ts";
-import { decide } from "./src/routing.ts";
-import { buildClassifierProviders } from "./src/classifier-catalog.ts";
-import { buildProbeContext, probeLocalClassifier, summarizeProbe, type ProbeResult } from "./src/classifier-probe.ts";
+import { observeUnretriedFailure } from "./src/core/failure.ts";
+import { decide } from "./src/core/routing.ts";
+import { buildClassifierProviders } from "./src/core/classifier-catalog.ts";
+import {
+	buildProbeContext,
+	probeLocalClassifier,
+	summarizeProbe,
+	type ProbeResult,
+} from "./src/core/classifier-probe.ts";
 import { createModelPicker } from "./src/model-picker.ts";
 import { groupLocalEndpoints, registerLocalClassifier } from "./src/local-classifier.ts";
-import { SWITCHBACK_THINKING_LEVELS } from "./src/thinking.ts";
-import { getPinnedModel, isBlocked, readBlockedMap, readPinMap, setPinnedModel } from "./src/state.ts";
-import { annotateCrash, hashSample, isValidAnnotationClass, readCrashMap, shortHash } from "./src/crashes.ts";
+import { SWITCHBACK_THINKING_LEVELS } from "./src/core/thinking.ts";
+import { getPinnedModel, isBlocked, readBlockedMap, readPinMap, setPinnedModel } from "./src/core/state.ts";
+import { annotateCrash, hashSample, isValidAnnotationClass, readCrashMap, shortHash } from "./src/core/crashes.ts";
 import type {
 	ErrorClass,
 	JevConfig,
@@ -46,7 +52,7 @@ import type {
 	ResolvedSwitchbackConfig,
 	ResolvedSwitchbackFileConfig,
 	SwitchbackState,
-} from "./src/types.ts";
+} from "./src/core/types.ts";
 
 export default function (pi: ExtensionAPI) {
 	// Secrets: `apiKey: secret:<name>` references in the config are resolved to
@@ -96,9 +102,7 @@ export default function (pi: ExtensionAPI) {
 				// Wire the no-classifier report to ctx.ui.notify when pi is running
 				// in a UI-capable mode (TUI / RPC). In non-UI modes (print, RPC-no-ui)
 				// the call is a no-op so simulate/replay and headless runs are silent.
-				const notify: import("./src/build-route.ts").NotifyFn = ctx.hasUI
-					? (message, type) => ctx.ui.notify(message, type)
-					: () => {};
+				const notify: NotifyPort = ctx.hasUI ? (message, type) => ctx.ui.notify(message, type) : () => {};
 				// Live-reload the config so edits to switchback.yaml are picked up without
 				// a restart. On parse/validation failure, keep the last good config and
 				// warn once; the broken edit does not break the session.
@@ -212,7 +216,7 @@ export default function (pi: ExtensionAPI) {
 				if (pinLines.length > 0) lines.push(`pin:\n${pinLines.join("\n")}`);
 			}
 			for (const modelConfig of config.models) {
-				const resolved = resolveFallbacks(modelConfig.fallbacks, ctx.modelRegistry as AvailabilityRegistry);
+				const resolved = resolveFallbacks(modelConfig.fallbacks, ctx.modelRegistry as AvailabilityPort);
 				lines.push(`${modelConfig.id} (${resolved.effectiveCount} effective, ${resolved.greyedCount} greyed):`);
 				for (const entry of resolved.entries) {
 					if (entry.availability === "effective") {

@@ -16,8 +16,8 @@ import {
 	summarizeProbe,
 	PROBE_CHOICE_CRITERIA,
 	PROBE_SCORE_CRITERIA,
-} from "../src/classifier-probe.ts";
-import type { FetchLike } from "../src/systemone.ts";
+} from "../src/core/classifier-probe.ts";
+import type { FetchLike } from "../src/core/systemone.ts";
 
 /** A result with the three answer shapes the probe expects. */
 function result(answers: Record<string, unknown>, overrides: Partial<ClassifierResult> = {}): ClassifierResult {

@@ -4,21 +4,22 @@
  * can `import { decide, ... } from "..//src/index.ts"` without enumerating modules.
  */
 
-export { writeFileAtomic, AtomicWriteError } from "./atomic-write.ts";
-export { decide, type RouteInputs } from "./routing.ts";
-export { observeUnretriedFailure, assessFailure, MAX_TRANSIENT_RETRIES } from "./failure.ts";
+export { writeFileAtomic, AtomicWriteError } from "./core/atomic-write.ts";
+export { decide, type RouteInputs } from "./core/routing.ts";
+export { observeUnretriedFailure, assessFailure, MAX_TRANSIENT_RETRIES } from "./core/failure.ts";
 export { buildRoute, ConfigInvalidError } from "./build-route.ts";
-export type { Decision, DecisionOutcome, NotifyFn, RouterRegistry } from "./build-route.ts";
-export { classifyError, PROMPT_VERSION, callClassifier, readChoice, CLASSIFIER_TIMEOUT_MS } from "./classify.ts";
-export type { ClassificationResult, NoClassifierReason, ClassifierCallResult, ClassifierRegistry } from "./classify.ts";
+export type { Decision, DecisionOutcome } from "./core/decision.ts";
+export { classifyError, PROMPT_VERSION, callClassifier, readChoice, CLASSIFIER_TIMEOUT_MS } from "./core/classify.ts";
+export type { ClassificationResult, NoClassifierReason, ClassifierCallResult } from "./core/classify.ts";
+export type { ClassifierPort, ModelRegistryPort, NotifyPort } from "./core/ports.ts";
 export {
 	chooseThinkingLevel,
 	availableCategories,
 	supportedLevels,
 	SWITCHBACK_THINKING_LEVELS,
 	THINKING_PROMPT_VERSION,
-} from "./thinking.ts";
-export type { ThinkingLevelChoice, ThinkingLevelContext, ThinkingLevelSource } from "./thinking.ts";
+} from "./core/thinking.ts";
+export type { ThinkingLevelChoice, ThinkingLevelContext, ThinkingLevelSource } from "./core/thinking.ts";
 export {
 	decideIdleReset,
 	formatIdle,
@@ -29,17 +30,17 @@ export {
 	IDLE_CLASSIFIER_FLOOR_MS,
 	IDLE_RESET_OPTIONS,
 	IDLE_RESET_PROMPT_VERSION,
-} from "./idle.ts";
-export type { IdleResetDecision, IdleResetInput } from "./idle.ts";
+} from "./core/idle.ts";
+export type { IdleResetDecision, IdleResetInput } from "./core/idle.ts";
 export {
 	fitsContext,
 	usableContextTokens,
 	chooseContextCandidate,
 	CONTEXT_FIT_RESERVE_TOKENS,
 	CONTEXT_CANDIDATE_PROMPT_VERSION,
-} from "./context-fit.ts";
-export type { CandidateWindow, ContextCandidateChoice, ContextCandidateInput } from "./context-fit.ts";
-export { blockModel, isBlocked, readBlockedMap, unblockModel, stateFilePath } from "./state.ts";
+} from "./core/context-fit.ts";
+export type { CandidateWindow, ContextCandidateChoice, ContextCandidateInput } from "./core/context-fit.ts";
+export { blockModel, isBlocked, readBlockedMap, unblockModel, stateFilePath } from "./core/state.ts";
 export {
 	readCrashMap,
 	recordCrash,
@@ -51,8 +52,15 @@ export {
 	crashesFilePath,
 	isValidAnnotationClass,
 	CrashError,
-} from "./crashes.ts";
-export type { CrashEntry, CrashMap, CrashAction, CrashVerdict, CrashAnnotation, RecordCrashInput } from "./crashes.ts";
+} from "./core/crashes.ts";
+export type {
+	CrashEntry,
+	CrashMap,
+	CrashAction,
+	CrashVerdict,
+	CrashAnnotation,
+	RecordCrashInput,
+} from "./core/crashes.ts";
 export { createSecretStore, secretsFilePath, powershellDpapi, SecretsError } from "./secrets.ts";
 export type { SecretStore, Dpapi } from "./secrets.ts";
 export {
@@ -68,16 +76,14 @@ export {
 	resolveJevConfig,
 	resolveSecretApiKey,
 	validateFileConfig,
-} from "./config.ts";
+} from "./core/config.ts";
+export type { SwitchbackConfig, SwitchbackFileConfig, JevConfig } from "./core/config.ts";
 export type {
-	SwitchbackConfig,
-	SwitchbackFileConfig,
-	JevConfig,
 	JevRef,
 	DecisionModelEntry,
 	ResolvedSwitchbackConfig,
 	ResolvedSwitchbackFileConfig,
-} from "./config.ts";
+} from "./core/types.ts";
 export {
 	addDecisionModel,
 	addFallback,
@@ -102,8 +108,8 @@ export {
 	setFallbacks,
 	setVirtualModelName,
 	updateDecisionModel,
-} from "./config-editor.ts";
-export type { ConfigLayer, DecisionModelInput, DecisionModelPatch, LoadedLayer } from "./config-editor.ts";
+} from "./core/config-editor.ts";
+export type { ConfigLayer, DecisionModelInput, DecisionModelPatch, LoadedLayer } from "./core/config-editor.ts";
 export { runDialogue, layerOptionLabel } from "./dialogue.ts";
 export { describeJev } from "./dialogue-ui.ts";
 export { createModelPicker, buildModelItems, MODEL_PICKER_MAX_VISIBLE } from "./model-picker.ts";
@@ -113,12 +119,12 @@ export {
 	classifierBaseUrlNote,
 	defaultDecisionModelName,
 	directEndpointWouldClobber,
-} from "./classifier-catalog.ts";
+} from "./core/classifier-catalog.ts";
 export type {
 	ClassifierModelSummary,
 	ClassifierProviderOption,
 	ClassifierProviderSource,
-} from "./classifier-catalog.ts";
+} from "./core/classifier-catalog.ts";
 export {
 	buildProbeContext,
 	formatProbeReport,
@@ -129,13 +135,13 @@ export {
 	PROBE_CHOICE_CRITERIA,
 	PROBE_SHAPES,
 	PROBE_TIMEOUT_MS,
-} from "./classifier-probe.ts";
-export type { ProbeAnswers, ProbeResult } from "./classifier-probe.ts";
+} from "./core/classifier-probe.ts";
+export type { ProbeAnswers, ProbeResult } from "./core/classifier-probe.ts";
 export type { DialogueContext, DialogueUi } from "./dialogue-ui.ts";
-export { loadSimulate, getScenario, simulateRetry, SimulateError } from "./simulate.ts";
-export type { SimulateConfig, SimulateResult } from "./simulate.ts";
-export { resolveFallbacks, effectiveIds, pickNextEffective } from "./availability.ts";
-export type { AvailabilityRegistry } from "./availability.ts";
+export { loadSimulate, getScenario, simulateRetry, SimulateError } from "./core/simulate.ts";
+export type { SimulateConfig, SimulateResult } from "./core/simulate.ts";
+export { resolveFallbacks, effectiveIds, pickNextEffective } from "./core/availability.ts";
+export type { AvailabilityPort } from "./core/ports.ts";
 export type {
 	Availability,
 	BlockedMap,
@@ -148,4 +154,4 @@ export type {
 	ResolvedFallbacks,
 	RouteReason,
 	SwitchbackState,
-} from "./types.ts";
+} from "./core/types.ts";

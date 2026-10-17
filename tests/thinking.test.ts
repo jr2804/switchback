@@ -17,8 +17,8 @@ import {
 	chooseThinkingLevel,
 	SWITCHBACK_THINKING_LEVELS,
 	type ThinkingLevelContext,
-} from "../src/thinking.ts";
-import type { ClassifierRegistry } from "../src/classify.ts";
+} from "../src/core/thinking.ts";
+import type { ClassifierPort } from "../src/core/ports.ts";
 
 const CONTEXT: ThinkingLevelContext = { routeReason: "user", failover: false };
 
@@ -45,7 +45,7 @@ function model(
 	};
 }
 
-function classifier(level: string | undefined, calls: string[] = []): ClassifierRegistry {
+function classifier(level: string | undefined, calls: string[] = []): ClassifierPort {
 	return {
 		findOfType: (_type, provider, id) => ({ provider, id, api: "classifier", input: ["text"] }) as never,
 		classify: async (_model, context: ClassifierContext) => {
@@ -143,7 +143,7 @@ describe("chooseThinkingLevel", () => {
 
 	it("passes the model, its supported levels and the route context to the classifier", async () => {
 		let seen: ClassifierContext | undefined;
-		const registry: ClassifierRegistry = {
+		const registry: ClassifierPort = {
 			findOfType: (_type, provider, id) => ({ provider, id, api: "classifier", input: ["text"] }) as never,
 			classify: async (_model, context) => {
 				seen = context;

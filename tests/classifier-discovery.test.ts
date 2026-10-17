@@ -7,8 +7,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { decisionCapableModels, discoverOllamaModels, OllamaModelSummary } from "../src/classifier-discovery.ts";
-import type { FetchLike } from "../src/systemone.ts";
+import { decisionCapableModels, discoverOllamaModels, OllamaModelSummary } from "../src/core/classifier-discovery.ts";
+import type { FetchLike } from "../src/core/systemone.ts";
 
 const MODELS: OllamaModelSummary[] = [
 	{ id: "nimble:latest", decisionCapable: true, capabilities: ["decision"] },

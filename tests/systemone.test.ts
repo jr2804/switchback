@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { ClassifierApi, ClassifierModel } from "@earendil-works/pi-ai";
-import { systemOneClassifier, type FetchLike } from "../src/systemone.ts";
+import { systemOneClassifier, type FetchLike } from "../src/core/systemone.ts";
 
 const MODEL: ClassifierModel<ClassifierApi> = {
 	type: "classifier",

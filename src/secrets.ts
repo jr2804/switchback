@@ -39,8 +39,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
-import { writeFileAtomic } from "./atomic-write.ts";
-import { piSwitchbackDir } from "./config.ts";
+import { writeFileAtomic } from "./core/atomic-write.ts";
+import { piSwitchbackDir } from "./core/config.ts";
 
 /** Current on-disk format version of secrets.json. */
 const SECRETS_VERSION = 1;

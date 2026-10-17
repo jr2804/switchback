@@ -15,7 +15,7 @@ import {
 	ConfigError,
 	SWITCHBACK_PROVIDER,
 	SWITCHBACK_VIRTUAL_ID,
-} from "../src/config.ts";
+} from "../src/core/config.ts";
 import { groupLocalEndpoints, registerLocalClassifier } from "../src/local-classifier.ts";
 
 let originalCwd: string;

@@ -21,11 +21,11 @@
  * See `src/dialogue.ts` for the design of the dialogue as a whole.
  */
 
-import { loadLayer, readLayerConfig, saveLayer, type LoadedLayer } from "./config-editor.ts";
-import type { ClassifierProviderOption } from "./classifier-catalog.ts";
-import type { ProbeResult } from "./classifier-probe.ts";
+import { loadLayer, readLayerConfig, saveLayer, type LoadedLayer } from "./core/config-editor.ts";
+import type { ClassifierProviderOption } from "./core/classifier-catalog.ts";
+import type { ProbeResult } from "./core/classifier-probe.ts";
 import type { SecretStore } from "./secrets.ts";
-import type { JevConfig, JevRef, SwitchbackConfig, SwitchbackFileConfig } from "./types.ts";
+import type { JevConfig, JevRef, SwitchbackConfig, SwitchbackFileConfig } from "./core/types.ts";
 
 /** The dialog surface the dialogue needs (a subset of pi's `ctx.ui`). */
 export interface DialogueUi {

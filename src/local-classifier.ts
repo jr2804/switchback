@@ -38,8 +38,8 @@
 
 import type { ClassifierApi, ClassifierModel } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { SYSTEM_ONE_API, systemOneClassifier } from "./systemone.ts";
-import type { JevConfig } from "./types.ts";
+import { SYSTEM_ONE_API, systemOneClassifier } from "./core/systemone.ts";
+import type { JevConfig } from "./core/types.ts";
 
 /** The only System One wire protocol switchback drives directly today. */
 export const LOCAL_CLASSIFIER_API = SYSTEM_ONE_API;

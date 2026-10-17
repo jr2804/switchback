@@ -29,7 +29,7 @@ Two gates do not cover everything, and both gaps have bitten:
   vitest. `tests/barrel.test.ts` exists because nothing else loads
   `src/index.ts`.
 - **A formatter can push a module over the ~500-code-line limit** without
-  adding a single symbol. `src/routing.ts` went 458 → 605 that way.
+  adding a single symbol. `src/core/routing.ts` went 458 → 605 that way.
 
 ## Style
 
@@ -66,6 +66,8 @@ before starting, close with a reason after verification.
 
 - The site lives under `docs/` (MkDocs Material, `mkdocs.yml`), split
   into **User guide** and **Development**.
+- Shipped behaviour only — plans and unshipped design proposals belong in
+  `.agents/plans/` (see `.agents/POLICIES.md` → Boundaries), not `docs/`.
 - Update `docs/` and `README.md` together when behavior or contracts
   change.
 - Docs gates — run before calling a docs change done:

@@ -3,7 +3,7 @@
 ## Boundaries
 
 - **Classifier-only error classification** — see root AGENTS.md §1 and
-  `src/classify.ts`. No per-provider pattern matchers, no keyword sets, no
+  `src/core/classify.ts`. No per-provider pattern matchers, no keyword sets, no
   regex reset extractors. The configured SystemOne classifier is the single
   source of truth for message-derived decisions.
 - **No commits without explicit user approval.** `bd dolt push` has standing
@@ -13,6 +13,10 @@
 - **Personal-data scrub on `.beads/`** — paraphrase machine paths, account
   handles, session names. The `.beads/` git commit is config-only; embedded
   Dolt data is gitignored.
+- **`docs/` documents shipped behaviour only.** Plans, design proposals, and
+  unshipped ideas live in `.agents/plans/` (gitignored working artifacts),
+  never in `docs/` or `README.md`. A plan moves into `docs/` only once the
+  feature ships, and only the durable parts.
 
 ## Priorities
 

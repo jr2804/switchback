@@ -10,13 +10,15 @@ errors with a single SystemOne classifier.
 ## Entry points
 
 - `index.ts` — extension entry; registers one virtual model per config entry + six commands.
-- `src/routing.ts` — `decide()`, `buildRoute()`.
-- `src/classify.ts` — `classifyError()` (classifier-only).
-- `src/availability.ts` — `resolveFallbacks()`, `pickNextEffective()`.
-- `src/config.ts` — `loadConfig()`, `findModelConfig()` (YAML only).
-- `src/state.ts` — `blocks.json` (account-scoped, atomic).
-- `src/crashes.ts` — `crashes.json`, Tier 2b annotation cache.
-- `src/simulate.ts` — `loadSimulate()`, `simulateRetry()`.
+- `src/core/ports.ts` — the host boundary: the ports the (host-agnostic) core reads the harness through (`src/core/AGENTS.md`).
+- `src/core/routing.ts` — `decide()`.
+- `src/build-route.ts` — `buildRoute()` (decision → pi `ModelRoute`).
+- `src/core/classify.ts` — `classifyError()` (classifier-only).
+- `src/core/availability.ts` — `resolveFallbacks()`, `pickNextEffective()`.
+- `src/core/config.ts` — `loadConfig()`, `findModelConfig()` (YAML only).
+- `src/core/state.ts` — `blocks.json` (account-scoped, atomic).
+- `src/core/crashes.ts` — `crashes.json`, Tier 2b annotation cache.
+- `src/core/simulate.ts` — `loadSimulate()`, `simulateRetry()`.
 - `src/secrets.ts` — encrypted API-key store; `createSecretStore()`,
   `secretsFilePath()` (DPAPI via powershell, `secret:<name>` in YAML).
 - `switchback.yaml` — shipped 4-provider fallback list.
@@ -25,7 +27,7 @@ errors with a single SystemOne classifier.
 
 ```bash
 npx tsc --noEmit    # type check
-npx vitest run      # 210 tests + 11 opt-in across 12 files
+npx vitest run      # 309 tests + 11 opt-in across 20 files
 ```
 
 ## Tools

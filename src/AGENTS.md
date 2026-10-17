@@ -6,6 +6,11 @@ Library modules behind the switchback pi extension. The entry (repo-root
 `index.ts`) imports them directly; `src/index.ts` is a barrel for tests and
 downstream consumers only.
 
+Two layers ship from here. `src/core/` is the host-agnostic core — it reaches
+the harness only through `src/core/ports.ts` — and the remaining modules are
+the pi adapter (dispatch, the local-classifier registration, the dialogue,
+`src/secrets.ts`) plus the barrel.
+
 ## Ownership
 
 - The module → path table lives in `.agents/FILES.md` (single source of
@@ -13,6 +18,8 @@ downstream consumers only.
 - This doc owns the contracts every `src/` module shares. Module-specific
   design lives in each file's header comment (state the design and the why,
   not a changelog).
+- `src/core/AGENTS.md` owns the host boundary and the core's no-host-import
+  rule.
 
 ## Local Contracts
 
@@ -35,8 +42,11 @@ downstream consumers only.
   `SecretsError`, `SimulateError`: stable `name`, message prefix, `cause`
   retained. No bare `throw new Error` from an exported function.
 - **Classifier path is not ours to extend.** Message-derived decisions go
-  through `src/classify.ts` only; root AGENTS.md project rule 1 is the
+  through `src/core/classify.ts` only; root AGENTS.md project rule 1 is the
   rule, this is the pointer.
+- **Core stays host-free.** A module under `src/core/` may not import a host
+  value or host module; a capability it needs is a port in
+  `src/core/ports.ts` (`src/core/AGENTS.md` owns the detail).
 - **Barrel discipline.** Changes to `src/index.ts` are export lines and
   type exports unless you own the entry; root `index.ts` (registration of
   the virtual model + commands) is off-limits without its owner.
@@ -56,12 +66,14 @@ downstream consumers only.
   preference carried over from Python/Rust/C practice, where the limit is
   a language-independent readability heuristic rather than a TS idiom.
   When a module exceeds it, look for a **responsibility seam** first —
-  `src/routing.ts` split into `decide()` (where to go) and
+  `src/core/routing.ts` split into `decide()` (where to go) and
   `src/build-route.ts` (what that means on the wire) because the two had
-  genuinely different reasons to change, then again into `src/failure.ts`
+  genuinely different reasons to change, then again into `src/core/failure.ts`
   (what a failure means: the verdict, the block, the crash row) because that
   half had a second caller outside routing — the `agent_end` hook — and its own
-  reason to change. Do not split mechanically: moving code to hit a number
+  reason to change. The core/host line is the same move one level up:
+  `src/core/` holds what any harness can run, while `src/` keeps pi's dispatch,
+  wizard and credential store. Do not split mechanically: moving code to hit a number
   costs a `FILES.md` row, a barrel edit and a verification gap (`tsc` only
   covers the entry graph), and buys nothing if the result still has to be read
   together. A symbol that moves across a seam updates its importers to name the
@@ -96,4 +108,5 @@ downstream consumers only.
 
 ## Child DOX Index
 
-None — no sub-boundaries under `src/`.
+- `src/core/AGENTS.md` — the host-agnostic core: the no-host-import rule, the
+  `src/core/ports.ts` boundary, and why ports stay narrow and consumed.

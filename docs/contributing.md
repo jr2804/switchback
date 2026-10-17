@@ -13,23 +13,29 @@ Before considering any task done:
 ```bash
 npx tsc --noEmit      # strict + noUncheckedIndexedAccess + exactOptionalPropertyTypes
 mise run lint-ts      # gts (ESLint + Prettier check) — must report nothing
-npx vitest run        # 303 passing + 11 opt-in
+npx vitest run        # 309 passing + 11 opt-in
 ```
 
 All three must be clean. Do not report a milestone until all three pass.
 `mise run format-ts` applies the autofixes (`gts fix`); run it before
 `lint-ts` when a gate fails rather than hand-formatting, so the repo's
-house style — tabs, 120 columns, double quotes — stays authoritative.
+house style — tabs, 120 columns, double quotes — stays authoritative. Install
+first with `npm install` at the repo root; it links the three workspaces.
 
-Two gates do not cover everything, and both gaps have bitten:
+Where the `mise` task cannot find the `eslint` its `gts` spawns (a Windows
+checkout can do this), run `npx eslint .` / `npx eslint . --fix` — the same
+rules, over the same tree. `eslint.config.js` ignores `.agents/**` (the
+machine-local skill catalog is third-party bundles no repo change can fix), so a
+bare incident count reflects the repo's own sources only.
 
-- **`tsc --noEmit` only sees the root `index.ts` graph** (`tsconfig.json`
-  sets `include: ["index.ts"]`). Test files and any not-yet-wired module are
-  outside it, so a broken import there passes the type gate and fails only in
-  vitest. `tests/barrel.test.ts` exists because nothing else loads
-  `src/index.ts`.
+One gate does not cover everything, and the gap has bitten:
+
+- **`tsc --noEmit` covers every shipped module but not the tests**
+  (`tsconfig.json` sets `include: ["packages/**/*.ts"]`). A broken import in a
+  test file passes the type gate and fails only in vitest. `tests/barrel.test.ts`
+  exists because nothing else loads `packages/pi/src/index.ts`.
 - **A formatter can push a module over the ~500-code-line limit** without
-  adding a single symbol. `src/core/routing.ts` went 458 → 605 that way.
+  adding a single symbol. `packages/core/src/routing.ts` went 458 → 605 that way.
 
 ## Style
 

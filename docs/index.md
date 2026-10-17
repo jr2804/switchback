@@ -26,6 +26,8 @@ change the prompt.
 - **[Classifier](classifier.md)** — live classifier validation (env vars,
   TypeSafe hosted / OpenRouter / llama.cpp / Ollama) and the coverage
   matrix.
+- **[OpenCode plugin](opencode.md)** — the same routing for OpenCode V2:
+  install, turn-boundary semantics, commands, shared config and state.
 
 ## Project
 

@@ -6,17 +6,18 @@ and prompts — see the [configuration dialogue](configuration-dialogue.md).
 ## File format map
 
 The project uses four files with four distinct roles and formats. **The two
-runtime files (`blocks.json` and `crashes.json`) live under the agent config
-dir (`<piConfigDir>/switchback/`)** — not the project dir — because blocks and
-crashes are account-scoped, not project-scoped. The legacy location
+runtime files (`blocks.json` and `crashes.json`) live under the state dir
+(`~/.pi/agent/switchback/` by default, re-locatable via the `SWITCHBACK_DIR`
+environment variable)** — not the project dir — because blocks and crashes
+are account-scoped, not project-scoped. The legacy location
 `<cwd>/.pi/switchback.json` is auto-migrated on first read (per-key max
 timestamp wins) and then deleted.
 
 | File | Format | Role | Owned by | Location |
 |---|---|---|---|---|
-| `switchback.yaml` | YAML | Human config: fallback list, optional Jev classifier. Per-project override or `~/.pi/agent/`. | user | `<cwd>/.pi/` or agent dir |
-| `blocks.json` | JSON | Runtime blocked-until map (atomic write, lazy prune). Created on first block. Migrated from the legacy `<cwd>/.pi/switchback.json` path on first read. | switchback | `<piConfigDir>/switchback/` |
-| `crashes.json` | JSON | Runtime crash dedup store: sha256(raw) → entry. Created on first failure. User annotations become the Tier 2b cache. | switchback | `<piConfigDir>/switchback/` |
+| `switchback.yaml` | YAML | Human config: fallback list, optional Jev classifier. Per-project override, agent overlay, or neutral basis. | user | see [Config layers](#config-layers-and-aggregation) |
+| `blocks.json` | JSON | Runtime blocked-until map (atomic write, lazy prune). Created on first block. Migrated from the legacy `<cwd>/.pi/switchback.json` path on first read. Shared with the [OpenCode plugin](opencode.md). | switchback | state dir (`SWITCHBACK_DIR`) |
+| `crashes.json` | JSON | Runtime crash dedup store: sha256(raw) → entry. Created on first failure. User annotations become the Tier 2b cache. Shared with the [OpenCode plugin](opencode.md). | switchback | state dir (`SWITCHBACK_DIR`) |
 | `switchback.simulate.json` | JSON | Synthetic error scenarios. Now used by router tests + the opt-in live integration test; the user-facing simulate command was removed. | switchback | repo (cwd) |
 
 The YAML-only rule applies to **user config** only. JSON stays for files that
@@ -25,12 +26,14 @@ parses a user-supplied JSON config.
 
 ## Config layers and aggregation
 
-Two optional user layers exist:
+Three optional user layers exist. Precedence is lowest → highest:
 
-1. `<cwd>/.pi/switchback.yaml` (per-project layer)
-2. `~/.pi/agent/switchback.yaml` (global layer)
+1. `~/.config/switchback/switchback.yaml` (neutral basis, agent-agnostic)
+2. `~/.pi/agent/switchback.yaml` (agent overlay — shared by pi and the
+   [OpenCode plugin](opencode.md))
+3. `<cwd>/.pi/switchback.yaml` (per-project layer)
 
-With neither present, the built-in `DEFAULT_CONFIG` (empty fallback list —
+With none present, the built-in `DEFAULT_CONFIG` (empty fallback list —
 surfaces a `ConfigError` pointing the user at this section; see below) applies.
 
 The layers are **aggregated**, not first-match-wins: the merged model list is

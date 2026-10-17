@@ -73,7 +73,7 @@ protocol.
 
 ## Durability
 
-`crashes.json` is written through `src/atomic-write.ts`, like every other
+`crashes.json` is written through `packages/core/src/atomic-write.ts`, like every other
 store: a fresh staging path per write, then a rename retried with backoff.
 Windows refuses that rename with `EPERM` while anything else holds the
 destination open — an indexer, an antivirus scanner, a second pi session —

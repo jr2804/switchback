@@ -44,6 +44,7 @@ nav:
       - Configuration: configuration.md
       - Configuration dialogue: configuration-dialogue.md
       - Classifier: classifier.md
+      - OpenCode plugin: opencode.md
       - License: license.md
   - Development:
       - Overview: development.md

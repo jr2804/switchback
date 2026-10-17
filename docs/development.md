@@ -34,16 +34,30 @@ Build steps 1–8 are complete (per the design doc):
   snapshots, config + `DEFAULT_CONFIG` and classifier-field validation. Plus **10 opt-in**
   live-classifier tests, skipped unless configured.
 - [x] **Step 8** — Catalog validity & degraded lists: per-route availability resolution, single-model warning, `/switchback` status command.
+- [x] **OpenCode plugin** — `packages/opencode/` ships the same routing for
+  [OpenCode V2](opencode.md) (`retry`-hook classification, `switchModel`
+  advancement at the turn boundary, `/switchback` + `/switchback-unblock`),
+  on the shared `switchback-core` package and shared block state. Pinned by
+  `tests/opencode-adapter.test.ts`; live-instance exercise still open
+  (`switchback-wix.10`).
+
+## Release automation
+
+Push to `main` tags a CalVer `vYYYY.0M.N` via `calver-release.yml`, which
+triggers `publish-npm.yml`: `npm ci` + `tsc` + `vitest`, version stamped in
+runner (no commit), then the three packages (`switchback-core`,
+`pi-switchback`, `opencode-switchback`) publish with provenance. Tags are
+authoritative; see [Versioning](versioning.md).
 
 ## Test layout
 
-**279** unit/integration tests across 17 files, plus **11 opt-in**
+**316** unit/integration tests across **21** files, plus **11 opt-in**
 live cases (10 live-classifier, 1 live DPAPI store) that skip unless
 their environment gates are set:
 
 | File | Tests | Covers |
 |---|---|---|
-| `tests/router.test.ts` | 90 | routing, blind cycle, classifier-mocked verdicts, session stickiness, pin override, idle reset, context-window fit and the classifier's candidate choice, forward failover walk, catalog validity, exhaustion, thinking-level resolution, state, buildRoute, and the unretried-failure fallback (`observeUnretriedFailure` blocks and the next turn walks forward) |
+| `tests/router.test.ts` | 96 | routing, blind cycle, classifier-mocked verdicts, session stickiness, pin override, idle reset, context-window fit and the classifier's candidate choice, forward failover walk, catalog validity, exhaustion, thinking-level resolution, state, buildRoute, and the unretried-failure fallback (`observeUnretriedFailure` blocks and the next turn walks forward) |
 | `tests/config.test.ts` | 28 | `DEFAULT_CONFIG`, `findModelConfig`, layer aggregation, YAML-only, classifier-field validation, orphan `decisionModels` rejection, reserved-provider rejection, debug flag |
 | `tests/dialogue.test.ts` | 35 | config editor: comment-preserving round-trip, layers, decision models, secret references; dialogue flows incl. the layer chooser, the searchable picker and the classifier test offer (scripted UI, hermetic) |
 | `tests/secrets.test.ts` | 23 (1 opt-in) | encrypted DPAPI store: round-trip, corruption quarantine, version refuse; live DPAPI gated on `SWITCHBACK_SECRETS_LIVE` |
@@ -59,8 +73,9 @@ their environment gates are set:
 | `tests/state-migration.test.ts` | 5 | legacy `<cwd>/.pi/switchback.json` → new path migration |
 | `tests/systemone.test.ts` | 5 | switchback's own System One transport (hermetic; injected fetch) |
 | `tests/commands.test.ts` | 4 | the registered command surface and its snapshot |
+| `tests/opencode-adapter.test.ts` | 7 | the OpenCode plugin end to end (hermetic fake harness): quota block + advance, pre-blocked exhaustion, out-of-chain silence, no-classifier blind cycle, empty-message short-circuit, `/switchback` + `/switchback-unblock` |
 | `tests/thinking.test.ts` | 10 | reasoning-level categories, availability, and classifier resolution (hermetic) |
-| `tests/barrel.test.ts` | 2 | `src/index.ts` resolves and exposes the documented entry surface — nothing else loads it, so a bad re-export would otherwise ship |
+| `tests/barrel.test.ts` | 2 | `packages/pi/src/index.ts` resolves and exposes the documented entry surface — nothing else loads it, so a bad re-export would otherwise ship |
 | `tests/imports.test.ts` | 2 | shipped code never value-imports a host-package subpath (install-safe) |
 | `tests/integration-classifier.test.ts` | 1 (10 opt-in) | live classifier against the preserved corpus (gated on `SWITCHBACK_CLASSIFIER_*`) |
 
@@ -88,18 +103,19 @@ test runner. It does not download any models.
 
 ### Path A — dev mode
 
-Run `pi` with `--extension` (or `-e`). Edits to `index.ts` and `src/*.ts`
-go live on the next launch — no copy, no symlink.
+Run `pi` with `--extension` (or `-e`). Edits to `packages/pi/index.ts` and
+the modules under `packages/{pi,core}/src/` go live on the next launch — no
+copy, no symlink.
 
 ```bash
 cd <repo>
 
-pi --extension ./index.ts --list-models switchback
-pi -e ./index.ts --list-models switchback                # equivalent
+pi --extension ./packages/pi/index.ts --list-models switchback
+pi -e ./packages/pi/index.ts --list-models switchback    # equivalent
 # provider    model  context  max-out  thinking  images
 # switchback  auto   0        0        yes       yes
 
-pi --extension ./index.ts --model switchback/auto
+pi --extension ./packages/pi/index.ts --model switchback/auto
 ```
 
 ### Path B — daily driver (junction / symlink)
@@ -125,9 +141,13 @@ pi --list-models switchback
 
 ### Self-contained variant
 
-When you want the user-extensions copy independent of the dev tree, copy
-`index.ts`, `package.json`, `src/`, and `tsconfig.json` into
-`~/.pi/agent/extensions/switchback/` and run `npm install` there.
+When you want the user-extensions copy independent of the dev tree, install
+the published packages instead — `npm install pi-switchback`, which pulls
+`switchback-core` with it (see the [versioning page](versioning.md) for the
+release flow). To copy a checkout by hand, take `packages/pi/index.ts`,
+`packages/pi/package.json`, `packages/pi/src/`, `packages/core/`, and
+`tsconfig.json` into `~/.pi/agent/extensions/switchback/` and run
+`npm install` there.
 
 ### First-run verification
 

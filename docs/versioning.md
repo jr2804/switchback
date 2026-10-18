@@ -42,19 +42,35 @@ pushed with the default `GITHUB_TOKEN` does not start another workflow, so
 It type-checks and tests the tagged tree, then publishes `switchback-core`
 first and the two adapters after it, so a plugin is never released pointing at
 a core version that is not on the registry yet. Adapters publish in parallel
-(`fail-fast: false`), and every publish runs with `--provenance`.
+(`fail-fast: false`), and every publish carries a provenance attestation
+automatically.
 
 The tag is the only version source. `scripts/set-package-version.mjs`
 writes the tag's `YYYY.0M.N` into the manifests **inside the runner**,
-where it is used for the publish and then discarded — the "no workflow
+where it is used for the publish and then discarded - the "no workflow
 creates a commit" rule above still holds, and no manifest in git is
 rewritten. A tag that is not CalVer fails the stamp step rather than
 publishing a guessed version.
 
-Publishing needs the `NPM_TOKEN` repository secret: a granular npm
-automation token with publish rights on all three package names. A missing
-or expired token fails the run at the publish step instead of silently
-skipping the release.
+Publishing authenticates by **npm trusted publishing** (OIDC,
+[docs.npmjs.com/trusted-publishers](https://docs.npmjs.com/trusted-publishers)),
+not by a token: there is no `NPM_TOKEN` secret. The publish jobs grant
+`id-token: write`, and the npm CLI exchanges a short-lived GitHub OIDC token
+for publish rights. This needs a one-time registration on npmjs.com for each
+package (Settings  Trusted Publisher, GitHub Actions):
+
+- repository `jr2804/switchback`, with **two** entries per package: one
+  naming workflow filename `calver-release.yml` (npm validates the *calling*
+  workflow for reusable-workflow chains, and that is the caller) and one
+  naming `publish-npm.yml` (the direct tag-push and dispatch paths),
+- "Allow `npm publish`" ticked - entries created after 2026-09-03 default to
+  staged-only publishing,
+- the first successful publish must land within two days of creating an
+  entry, or the entry expires and must be recreated.
+
+A misconfigured registration (wrong workflow filename, staged-only entry)
+fails the run at the publish step with an authentication error instead of
+silently skipping the release.
 
 The packages are **source-only**: `files: ["src"]` (plus `index.ts` for
 the pi extension) and `exports` point straight at the `.ts` files, which

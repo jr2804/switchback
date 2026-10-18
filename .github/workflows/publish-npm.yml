@@ -1,30 +1,41 @@
-# Publish the workspace packages to npm.
+# Publish the workspace packages to npm via trusted publishing (OIDC).
 #
 # Release flow (see docs/versioning.md):
 #   1. a push to main is tagged by calver-release.yml (vYYYY.M.N),
 #   2. that workflow CALLS this one with the tag (it does not rely on the tag
 #      push to start a workflow: a tag pushed with the default GITHUB_TOKEN
 #      does not trigger `on: push: tags`),
-#   3. the tree is verified, then switchback-core is published first and the two
-#      host adapters after it, so a plugin is never published pointing at a core
-#      version that does not exist yet.
+#   3. the tree is verified, then switchback-core is published first and the
+#      two host adapters after it, so a plugin is never published pointing at
+#      a core version that does not exist yet.
 #
-# The `push: tags` trigger stays for tags pushed by a human or by another
-# automation. It cannot double-publish a workflow-created tag, because that tag
-# never fires this trigger in the first place.
+# Authentication is npm trusted publishing, not a token (docs.npmjs.com/
+# trusted-publishers): with `id-token: write` granted here AND in the
+# calver-release.yml caller, the npm CLI exchanges a short-lived GitHub OIDC
+# token for publish rights. Provenance attestations are generated
+# automatically for trusted publishes from this public repository, so there is
+# no --provenance flag and no NPM_TOKEN secret.
 #
-# The tag is the only version source. `scripts/set-package-version.mjs` writes it
-# into the manifests inside the runner; it is never committed, which keeps the
-# "no workflow creates a commit" rule that stops the tagging job from looping.
+# npmjs.com side, per package: the trusted publisher entry must
+#   - name jr2804/switchback and the workflow filename, and entries created
+#     after 2026-09-03 default to staged-only, so "Allow npm publish" must be
+#     ticked explicitly,
+#   - exist once for calver-release.yml (npm validates the CALLING workflow's
+#     filename for reusable-workflow chains, and that is the caller) and once
+#     for publish-npm.yml (the direct `push: tags` and dispatch paths below),
+#   - complete its first successful publish within two days of being created,
+#     or it expires and must be recreated.
 #
-# NPM_TOKEN is a granular npm automation token (no interactive OTP) stored as a
-# repository secret. A missing or expired token fails the run loudly at the
-# publish step rather than silently skipping a release.
+# No package-manager cache in this workflow: it is a release build, and npm's
+# trusted-publishing guidance is to never serve one from a cache.
 #
-# --provenance needs id-token: write and public source, which this repository has.
+# The tag is the only version source. `scripts/set-package-version.mjs` writes
+# it into the manifests inside the runner; it is never committed, which keeps
+# the "no workflow creates a commit" rule that stops the tagging job from
+# looping.
 #
-# Recovery: a failed run is retried by dispatching this workflow with the tag as
-# the `tag` input and `dry_run` off; nothing has to be re-tagged.
+# Recovery: a failed run is retried by dispatching this workflow with the tag
+# as the `tag` input and `dry_run` off; nothing has to be re-tagged.
 
 name: publish-npm
 
@@ -61,14 +72,14 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # A manual recovery run names a tag that is not the dispatched ref.
           ref: ${{ inputs.tag || github.ref }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: npm
+          package-manager-cache: false
       - run: npm ci
       - name: Type check
         run: npx tsc --noEmit
@@ -82,13 +93,13 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.tag || github.ref }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: npm
+          package-manager-cache: false
           registry-url: https://registry.npmjs.org
       - run: npm ci
       - name: Stamp the release version from the tag
@@ -99,11 +110,9 @@ jobs:
           TAG="${{ inputs.tag }}"
           node scripts/set-package-version.mjs "${TAG:-$GITHUB_REF_NAME}"
       - name: Publish switchback-core
-        # `inputs.dry_run` is empty on a tag push, so the flag is only added when
-        # the workflow was called or dispatched with a dry run.
-        run: npm publish --workspace switchback-core --provenance ${{ inputs.dry_run && '--dry-run' || '' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # `inputs.dry_run` is empty on a tag push, so the flag is only added
+        # when the workflow was called or dispatched with a dry run.
+        run: npm publish --workspace switchback-core ${{ inputs.dry_run && '--dry-run' || '' }}
 
   publish-adapters:
     needs: publish-core
@@ -118,13 +127,13 @@ jobs:
           - pi-switchback
           - opencode-switchback
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.tag || github.ref }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: npm
+          package-manager-cache: false
           registry-url: https://registry.npmjs.org
       - run: npm ci
       - name: Stamp the release version from the tag
@@ -133,6 +142,4 @@ jobs:
           TAG="${{ inputs.tag }}"
           node scripts/set-package-version.mjs "${TAG:-$GITHUB_REF_NAME}"
       - name: Publish ${{ matrix.package }}
-        run: npm publish --workspace ${{ matrix.package }} --provenance ${{ inputs.dry_run && '--dry-run' || '' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --workspace ${{ matrix.package }} ${{ inputs.dry_run && '--dry-run' || '' }}

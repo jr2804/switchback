@@ -44,6 +44,7 @@ import type {
 	ResolvedSwitchbackFileConfig,
 	RouterRegistryPort,
 	AvailabilityPort,
+	SecretResolver,
 } from "switchback-core";
 
 export default Plugin.define({
@@ -190,10 +191,20 @@ async function handleRetry(ctx: Plugin.Context, input: RetryPayload): Promise<vo
 	);
 }
 
+/**
+ * OpenCode has no readable secret vault (its credential API activates stored
+ * profiles; it never returns key material), so `secret:<name>` refs resolve
+ * against the environment. Unresolvable refs surface through `loadConfig` as
+ * a visible config problem - same failure mode as pi, different store.
+ */
+const envSecrets: SecretResolver = {
+	get: (name) => process.env[name],
+};
+
 /** Read the shared config once per decision; on a config failure the notice is fan-out-safe. */
 function readConfig(ctx: Plugin.Context, sessionID: string): ResolvedSwitchbackFileConfig | undefined {
 	try {
-		return loadConfig().config;
+		return loadConfig(envSecrets).config;
 	} catch (error) {
 		notify(
 			ctx,

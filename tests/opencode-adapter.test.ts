@@ -114,6 +114,7 @@ afterEach(() => {
 	delete process.env[SWITCHBACK_DIR_ENV];
 	delete process.env.PI_CODING_AGENT_DIR;
 	delete process.env.USERPROFILE;
+	delete process.env.WIX11_CLASSIFIER_KEY;
 	rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -261,6 +262,46 @@ describe("retry hook: without a real verdict", () => {
 		expect(switchModel).not.toHaveBeenCalled();
 		expect(synthetic).not.toHaveBeenCalled();
 		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+});
+
+describe("retry hook: secret refs", () => {
+	/** Same classifier endpoint as JEV_BLOCK but with the key behind a secret: ref. */
+	const SECRET_JEV_BLOCK = `    jev:
+      provider: typesafe-system-one
+      id: jev-fixture
+      api: typesafe-system-one
+      baseUrl: http://127.0.0.1:9
+      apiKey: secret:WIX11_CLASSIFIER_KEY
+`;
+
+	it("resolves secret: refs against the environment", async () => {
+		writeConfig(SECRET_JEV_BLOCK);
+		process.env.WIX11_CLASSIFIER_KEY = "env-resolved-key-7";
+		const switchModel = vi.fn(async (_input: unknown) => undefined);
+		const synthetic = vi.fn(async (_input: unknown) => undefined);
+		const { hooks } = await setup(CATALOG, switchModel, synthetic);
+		await hooks.get("retry")?.(retryPayload("sess-secret"));
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		const init = fetchSpy.mock.calls[0]?.[1] as { headers?: Record<string, string> } | undefined;
+		expect(init?.headers?.authorization).toBe("Bearer env-resolved-key-7");
+		expect(switchModel).toHaveBeenCalledTimes(1); // the resolved classifier produced its verdict
+	});
+
+	it("an unresolvable secret ref disables the attempt visibly, nothing else runs", async () => {
+		writeConfig(SECRET_JEV_BLOCK);
+		delete process.env.WIX11_CLASSIFIER_KEY;
+		const switchModel = vi.fn(async (_input: unknown) => undefined);
+		const synthetic = vi.fn(async (_input: unknown) => undefined);
+		const { hooks } = await setup(CATALOG, switchModel, synthetic);
+		const payload = retryPayload("sess-secret-missing");
+		await hooks.get("retry")?.(payload);
+		expect(fetchSpy).not.toHaveBeenCalled();
+		expect(switchModel).not.toHaveBeenCalled();
+		expect(payload.decision).toEqual({ retry: true, delay: 0 }); // OpenCode's policy untouched
+		expect(notices(synthetic).some((t) => t.includes("config problem") && t.includes("does not resolve"))).toBe(
+			true,
+		);
 	});
 });
 

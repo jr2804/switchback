@@ -75,7 +75,7 @@ export {
 	resolveSecretApiKey,
 	validateFileConfig,
 } from "./config.ts";
-export type { SwitchbackConfig, SwitchbackFileConfig, JevConfig } from "./config.ts";
+export type { SwitchbackConfig, SwitchbackFileConfig, JevConfig, SecretResolver } from "./config.ts";
 export type { JevRef, DecisionModelEntry, ResolvedSwitchbackConfig, ResolvedSwitchbackFileConfig } from "./types.ts";
 export {
 	addDecisionModel,

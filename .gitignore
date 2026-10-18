@@ -58,6 +58,7 @@ skills-lock.json
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
+*.log
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*

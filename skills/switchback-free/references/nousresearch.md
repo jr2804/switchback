@@ -29,6 +29,7 @@ Invoke-RestMethod -Uri "https://api.nousresearch.com/v1/models" `
 ## Free-model detection
 
 Nous Research free models follow the `:free` suffix convention:
+
 - `nousresearch/hermes-3-llama-3.1-8b:free`
 - `nousresearch/hermes-2-pro-mistral-7b:free`
 
@@ -40,5 +41,5 @@ No known special cases — all Nous Research free models use the `:free` suffix.
 
 Confirm each candidate model appears in the model-list response. If a
 hardcoded name is missing, mark it stale and recommend filing an issue at
-https://github.com/nousresearch/hermes-function-calling/issues or the
+<https://github.com/nousresearch/hermes-function-calling/issues> or the
 Nous Research API repository.

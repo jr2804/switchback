@@ -26,6 +26,7 @@ opencode models --provider opencode-zen --limit 500
 ## Free-model detection
 
 opencode.ai free models follow the `-free` suffix convention:
+
 - `opencode-go/gpt-4o-mini-free`
 - `opencode-zen/claude-3-5-sonnet-free`
 - `opencode-zen/gemini-2.0-flash-free`

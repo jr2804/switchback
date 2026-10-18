@@ -29,6 +29,7 @@ Invoke-RestMethod -Uri "https://openrouter.ai/api/v1/models" `
 ## Free-model detection
 
 OpenRouter free models follow the `:free` suffix convention:
+
 - `meta-llama/llama-3.1-8b-instruct:free`
 - `google/gemini-2.0-flash-exp:free`
 - `qwen/qwen-2.5-7b-instruct:free`
@@ -44,4 +45,4 @@ OpenRouter free models follow the `:free` suffix convention:
 
 Confirm each candidate model appears in the model-list response. If a
 hardcoded name (like `big-pickle`) is missing from the list, mark it stale and
-recommend filing an issue at https://github.com/openrouter/openrouter/issues.
+recommend filing an issue at <https://github.com/openrouter/openrouter/issues>.

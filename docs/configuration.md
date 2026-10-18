@@ -308,3 +308,8 @@ store starts empty; a readable file written by a different store version is
 refused and left untouched. Secret values are held only in memory or as
 encrypted blobs — never printed, logged, or written anywhere else — and
 listing exposes names only.
+
+Under OpenCode there is no encrypted store (the host exposes no readable
+vault); the OpenCode plugin resolves the same `secret:<name>` references
+against environment variables instead — see
+[OpenCode → Secrets](opencode.md#differences-from-pi).

@@ -10,9 +10,9 @@ classifier, update the shared block state, `ctx.session.switchModel()` to the
 next effective fallback so the retry OpenCode already scheduled runs on it — or,
 when nothing effective is left, flip the hook's `decision` to `retry: false` so
 OpenCode surfaces the failure instead of looping into blocked models. Design and
-tradeoffs: `.agents/plans/opencode-support.md` (option B shipped first; option A,
-the custom provider runtime for true in-flight routing, is still open as
-`switchback-wix.1`).
+tradeoffs: `.agents/plans/opencode-support.md` (option B shipped; option A, the
+custom provider runtime for true in-flight routing, was confirmed feasible by
+the `switchback-wix.1` spike and remains unimplemented).
 
 Config, block state, crash corpus and the configured classifier are shared with
 the pi adapter unchanged (`switchback-core` config layers, default state dir,
@@ -61,6 +61,12 @@ the pi adapter unchanged (`switchback-core` config layers, default state dir,
 - **State goes through the core stores** (`blocks.json`, `crashes.json`) with
   the account-scoped default directory + `SWITCHBACK_DIR` override; the core
   owns format, migration and atomic writes.
+- **`secret:` refs resolve from the environment.** OpenCode exposes no readable
+  secret vault (its credential API activates stored profiles, never returning
+  key material), so the adapter hands `loadConfig` an env-backed
+  `SecretResolver`. An unresolvable ref is a visible config problem (core
+  throws `ConfigError`; pi keeps its DPAPI store — same prefix, different
+  backing store, documented in `docs/opencode.md`).
 
 ## Work Guidance
 

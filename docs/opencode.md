@@ -72,9 +72,12 @@ relocate it. With no classifier configured (`jev:` block), the plugin
 notifies that no verdict is available and lets OpenCode's own policy stand —
 it never blocks on a guess.
 
-Secrets: the OpenCode adapter reads literal `jev.apiKey` values.
-`secret:`-prefixed references are resolved only by the pi adapter's encrypted
-store, so use a raw key here until OpenCode secret-store support lands.
+Secrets: OpenCode has no readable secret vault (its credential store
+activates stored profiles and never returns key material), so the OpenCode
+plugin resolves `secret:`-prefixed `jev.apiKey` references against
+environment variables: `secret:MY_KEY` reads `MY_KEY` from the environment.
+A reference that does not resolve disables the plugin for that attempt with
+a visible notice — the same failure mode as pi, against a different store.
 
 ## Commands
 
@@ -85,12 +88,27 @@ store, so use a raw key here until OpenCode secret-store support lands.
 | `/switchback-unblock <ID>` | Clear the block on one model id (`provider/model`, case-insensitive). |
 | `/switchback-unblock ALL` | Clear the entire block map. |
 
+Slash commands are dispatched by the OpenCode clients (TUI, web). Non-interactive
+`opencode run "…"` sends its argument as a literal prompt, so use the clients to
+invoke them.
+
 ## Differences from pi
 
 | pi | OpenCode plugin |
 |---|---|
 | Advances in flight inside the failing request | Advances at a turn boundary (`switchModel` before the next attempt) |
 | Virtual model `switchback/auto` in the picker | Not applicable — the configured physical models are picked normally |
-| Resolves `secret:` refs via the encrypted DPAPI store | Reads literal `apiKey` values (secret-store support pending) |
+| Resolves `secret:` refs via the encrypted DPAPI store | Resolves `secret:` refs against environment variables (OpenCode exposes no readable vault) |
 | Pinning the target for one turn | Not available per request; re-run with the wanted pin model selected |
 | Reasoning-level routing with per-model clamps | Classification/routing identical; reasoning levels follow OpenCode's own model capabilities |
+
+OpenCode-side behaviors switchback cannot influence (observed in OpenCode 2.0.32):
+
+- Once every fallback in a chain is blocked, switchback flips the retry decision
+  and the main request surfaces the original error — but OpenCode's background
+  title generation retries failures on its own schedule, ignoring the retry
+  decision, and can keep calling a blocked model for a while. The blocks still
+  apply to every future turn.
+- `opencode run` prints the surfaced failure, not session messages, so the
+  switchback notices (advance/block explanations) are visible in the clients,
+  not in `run` output.

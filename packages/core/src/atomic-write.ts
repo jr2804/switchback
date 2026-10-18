@@ -76,7 +76,14 @@ export function writeFileAtomic(path: string, contents: string): void {
 			cause: lastError,
 		});
 	} catch (error) {
-		rmSync(tmp, { force: true });
+		// Cleanup is best-effort: with a broken parent (a file where a directory
+		// should be) rmSync itself throws ENOTDIR on POSIX, and letting that
+		// escape would mask the write failure this block exists to report.
+		try {
+			rmSync(tmp, { force: true });
+		} catch {
+			// nothing to remove - the staging file was never created
+		}
 		throw error instanceof AtomicWriteError
 			? error
 			: new AtomicWriteError(`could not write ${path}`, { cause: error });

@@ -44,7 +44,11 @@ list contains only verified free models.
 5. **Clean stale names** — Compare the current `sb-free` fallback list against
    the verified live list. Any hardcoded name that no longer appears in the
    provider's model list is stale: remove it and recommend the user file an
-   issue at the provider or upstream.
+   issue at the provider or upstream. A model that still resolves but has
+   become unreliable or poor quality is a different case: keep it in the list
+   and suggest the user disable it by hand (`/switchback-disable
+   <provider/model>` in pi or the OpenCode plugin), which persists in
+   `disabled.json` and survives this skill rewriting the fallback list.
 
 6. **Write config** — Update `switchback.yaml` with the `sb-free` virtual
    model containing the verified free-model fallback list, sorted
@@ -52,11 +56,18 @@ list contains only verified free models.
 
    **Config location precedence** (all aggregated, lowest → highest):
    1. `~/.config/switchback/switchback.yaml` — neutral basis (agent-agnostic)
-   2. `~/.pi/agent/switchback.yaml` or `~/.config/opencode/switchback.yaml` — provider-specific overlay
+   2. `~/.pi/agent/switchback.yaml` — agent overlay (shared by pi and the
+      OpenCode plugin)
    3. `<cwd>/.pi/switchback.yaml` — local override
 
    Write to the highest-precedence location that already exists, or to
    `~/.config/switchback/switchback.yaml` if none exist yet.
+
+   A chain names its classifier by address in `decisionModel:` (for example
+   `decisionModel: typesafe/jev-latest` or `decisionModel: ollama/tev1:0.8b`);
+   connection details, when not resolved from the classifier catalog, live in
+   the top-level `decisionModels:` map keyed by that same address. There is no
+   `jev:` block. See `docs/configuration.md` → Decision model.
 
 ## Adding a new provider
 

@@ -51,7 +51,7 @@ import {
 } from "switchback-core/config-editor.ts";
 import { createSecretStore, type SecretStore } from "./secrets.ts";
 import {
-	describeJev,
+	describeDecisionModel,
 	errorMessage,
 	findModel,
 	promptRequired,
@@ -186,7 +186,7 @@ async function mainMenu(ctx: DialogueContext, session: DialogueSession): Promise
 		const options: string[] = config.models.map((m) => `${m.id} - ${m.name}`);
 		const addOption = "Add virtual model...";
 		const debugOption = `Toggle debug (currently ${config.debug === true ? "on" : "off"})`;
-		const dmOption = `Decision models (${config.decisionModels?.length ?? 0})...`;
+		const dmOption = `Decision models (${Object.keys(config.decisionModels ?? {}).length})...`;
 		const switchOption = "Switch layer...";
 		const doneOption = "Done";
 		options.push(addOption, debugOption, dmOption, switchOption, doneOption);
@@ -231,7 +231,8 @@ async function virtualModelMenu(
 	const renameIdOption = "Rename model id (pi restart required)";
 	const renameNameOption = "Change display name";
 	const editFallbacks = (n: number): string => `Edit fallbacks (${n})`;
-	const decisionOption = (config: SwitchbackConfig): string => `Decision model: ${describeJev(config.jev)}`;
+	const decisionOption = (config: SwitchbackConfig): string =>
+		`Decision model: ${describeDecisionModel(config.decisionModel)}`;
 	const removeOption = "Remove model";
 	const backOption = "Back";
 	for (;;) {

@@ -28,12 +28,16 @@ beforeEach(() => {
 	// Point pi's config dir at the tmp dir so the test is portable and doesn't pick
 	// up the user's activated agent-dir copy.
 	process.env["PI_CODING_AGENT_DIR"] = tmpDir;
+	// The neutral basis layer (~/.config/switchback) is a real user file on some
+	// machines; pin it into the temp dir so the suite is hermetic.
+	process.env["SWITCHBACK_CONFIG_DIR"] = tmpDir;
 	process.chdir(tmpDir);
 });
 
 afterEach(() => {
 	process.chdir(originalCwd);
 	delete process.env["PI_CODING_AGENT_DIR"];
+	delete process.env["SWITCHBACK_CONFIG_DIR"];
 	if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -160,7 +164,7 @@ describe("loadConfig - yaml-only lookup (no JSON user config)", () => {
 	});
 });
 
-describe("loadConfig - bare ids and decisionModel references", () => {
+describe("loadConfig - bare ids and decision-model addresses", () => {
 	const writeWith = (modelsYaml: string, decisionModelsYaml = ""): void => {
 		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
 		writeFileSync(join(tmpDir, ".pi", "switchback.yaml"), `models:\n  ${modelsYaml}\n${decisionModelsYaml}`);
@@ -174,76 +178,58 @@ describe("loadConfig - bare ids and decisionModel references", () => {
 		expect(config.models[0]?.id).toBe("switchback/auto");
 	});
 
-	it("resolves a decisionModel reference against the decisionModels list", () => {
+	it("resolves a decisionModel address against the decisionModels map", () => {
 		writeWith(
 			`- id: auto
     name: Main
     fallbacks: ["zai/glm-5.3"]
-    jev:
-      decisionModel: main`,
+    decisionModel: typesafe/jev-latest`,
 			`decisionModels:
-  - name: main
-    provider: typesafe
-    id: jev-latest
+  typesafe/jev-latest:
     baseUrl: http://localhost:11434/v1
-    api: typesafe-system-one
     apiKey: ollama
 `,
 		);
 		const { config } = loadConfig();
-		expect(config.models[0]?.jev).toEqual({
+		expect(config.models[0]?.decisionModel).toEqual({
 			provider: "typesafe",
 			id: "jev-latest",
 			baseUrl: "http://localhost:11434/v1",
-			api: "typesafe-system-one",
 			apiKey: "ollama",
 		});
 	});
 
-	it("rejects a decisionModel reference to an unknown name", () => {
+	it("leaves an address with no entry for catalog resolution (provider + id only)", () => {
 		writeWith(`- id: auto
     name: Main
     fallbacks: ["zai/glm-5.3"]
-    jev:
-      decisionModel: does-not-exist`);
-		expect(() => loadConfig()).toThrow(/decisionModel "does-not-exist"/);
+    decisionModel: typesafe/jev-latest`);
+		const { config, warnings } = loadConfig();
+		expect(config.models[0]?.decisionModel).toEqual({ provider: "typesafe", id: "jev-latest" });
+		expect(warnings).toEqual([]);
 	});
 
-	it("rejects decisionModels when none of them are referenced", () => {
+	it("rejects an address without a provider", () => {
+		writeWith(`- id: auto
+    name: Main
+    fallbacks: ["zai/glm-5.3"]
+    decisionModel: jev-latest`);
+		expect(() => loadConfig()).toThrow(/decisionModel must be of the form "provider\/id"/);
+	});
+
+	it("warns about a decisionModels entry nothing names", () => {
 		writeWith(
 			`- id: auto
     name: Main
     fallbacks: ["zai/glm-5.3"]`,
 			`decisionModels:
-  - name: main
-    provider: typesafe
-    id: jev-latest
-  - name: backup
-    provider: typesafe
-    id: jev-1.13
+  typesafe/jev-latest:
+    baseUrl: http://localhost:11434/v1
+    apiKey: ollama
 `,
 		);
-		expect(() => loadConfig()).toThrow(/decisionModels entries are not referenced/);
-	});
-
-	it("accepts a partial reference (one referenced, others unused)", () => {
-		writeWith(
-			`- id: auto
-    name: Main
-    fallbacks: ["zai/glm-5.3"]
-    jev:
-      decisionModel: main`,
-			`decisionModels:
-  - name: main
-    provider: typesafe
-    id: jev-latest
-  - name: backup
-    provider: typesafe
-    id: jev-1.13
-`,
-		);
-		const { config } = loadConfig();
-		expect(config.models[0]?.jev).toEqual({ provider: "typesafe", id: "jev-latest" });
+		const { warnings } = loadConfig();
+		expect(warnings.join("\n")).toMatch(/not referenced by any models\[\]\.decisionModel/);
 	});
 });
 
@@ -277,66 +263,61 @@ describe("loadConfig - debug flag", () => {
 	});
 });
 
-describe("loadConfig - classifier endpoint fields (jev.baseUrl)", () => {
-	const writeConfig = (jevLines: string): void => {
+describe("loadConfig - decision model connection details", () => {
+	const writeConfig = (entryLines: string, address = "ollama/tev1:0.8b"): void => {
 		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
 		writeFileSync(
 			join(tmpDir, ".pi", "switchback.yaml"),
-			`models:\n  - id: switchback/auto\n    name: Auto (Switchback)\n    fallbacks: ["zai/glm-5.3"]\n    jev:\n${jevLines}`,
+			`models:\n  - id: switchback/auto\n    name: Auto (Switchback)\n    fallbacks: ["zai/glm-5.3"]\n    decisionModel: ${address}\ndecisionModels:\n  ${address}:\n${entryLines}`,
 		);
 	};
 
-	it("parses a direct endpoint (baseUrl + api + apiKey)", () => {
-		writeConfig(
-			"      provider: ollama\n      id: tev1:0.8b\n      baseUrl: http://localhost:11434/v1\n      api: typesafe-system-one\n      apiKey: ollama\n",
-		);
+	it("parses a direct endpoint (baseUrl + apiKey)", () => {
+		writeConfig("    baseUrl: http://localhost:11434/v1\n    apiKey: ollama\n");
 		const { config } = loadConfig();
-		expect(config.models[0]?.jev).toEqual({
+		expect(config.models[0]?.decisionModel).toEqual({
 			provider: "ollama",
 			id: "tev1:0.8b",
 			baseUrl: "http://localhost:11434/v1",
-			api: "typesafe-system-one",
 			apiKey: "ollama",
 		});
 	});
 
-	it("leaves a catalog classifier untouched (provider + id only)", () => {
-		writeConfig("      provider: typesafe\n      id: jev-latest\n");
-		const { config } = loadConfig();
-		expect(config.models[0]?.jev).toEqual({ provider: "typesafe", id: "jev-latest" });
+	it("accepts an entry with no connection details (catalog resolution) and warns about it", () => {
+		writeConfig("    {}\n", "typesafe/jev-latest");
+		const { config, warnings } = loadConfig();
+		expect(config.models[0]?.decisionModel).toEqual({ provider: "typesafe", id: "jev-latest" });
+		expect(warnings.join("\n")).toMatch(/has no connection details/);
 	});
 
 	it("accepts any provider id for a direct endpoint (no reserved list in the loader)", () => {
 		// The loader names no providers: whether an id collides with one pi already
 		// serves is registry knowledge, and the wizard refuses that case at the
 		// point where the registry is available (see classifier-catalog.ts).
-		writeConfig(
-			"      provider: anything\n      id: tev1:0.8b\n      baseUrl: http://localhost:11434/v1\n      api: typesafe-system-one\n      apiKey: local\n",
-		);
-		const jev = findModelConfig(loadConfig().config, "switchback/auto")?.jev;
-		expect(jev?.provider).toBe("anything");
-		expect(jev?.baseUrl).toBe("http://localhost:11434/v1");
+		writeConfig("    baseUrl: http://localhost:11434/v1\n    apiKey: local\n", "anything/tev1:0.8b");
+		const decisionModel = findModelConfig(loadConfig().config, "switchback/auto")?.decisionModel;
+		expect(decisionModel?.provider).toBe("anything");
+		expect(decisionModel?.baseUrl).toBe("http://localhost:11434/v1");
 	});
 
-	it("rejects an unsupported api", () => {
-		writeConfig(
-			"      provider: x\n      id: y\n      baseUrl: http://localhost:1/v1\n      api: openai-completions\n",
-		);
-		expect(() => loadConfig()).toThrow(/jev\.api must be one of/);
+	it("warns about the retired api field instead of accepting it", () => {
+		writeConfig("    baseUrl: http://localhost:1/v1\n    apiKey: local\n    api: openai-completions\n");
+		const { warnings } = loadConfig();
+		expect(warnings.join("\n")).toMatch(/api is no longer supported/);
 	});
 
-	it("rejects api without baseUrl", () => {
-		writeConfig("      provider: x\n      id: y\n      api: typesafe-system-one\n");
-		expect(() => loadConfig()).toThrow(/jev\.api requires/);
+	it("rejects a direct endpoint without an apiKey", () => {
+		writeConfig("    baseUrl: http://localhost:11434/v1\n");
+		expect(() => loadConfig()).toThrow(/apiKey is required with baseUrl/);
 	});
 
 	it("rejects apiKey without baseUrl", () => {
-		writeConfig("      provider: x\n      id: y\n      apiKey: secret\n");
-		expect(() => loadConfig()).toThrow(/jev\.apiKey requires/);
+		writeConfig("    apiKey: secret\n");
+		expect(() => loadConfig()).toThrow(/apiKey requires/);
 	});
 
 	it("rejects a non-http(s) baseUrl", () => {
-		writeConfig("      provider: x\n      id: y\n      baseUrl: ftp://localhost/v1\n");
+		writeConfig("    baseUrl: ftp://localhost/v1\n    apiKey: local\n");
 		expect(() => loadConfig()).toThrow(/must be http\(s\)/);
 	});
 });

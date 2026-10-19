@@ -49,7 +49,7 @@ import {
 import { simulateRetry, loadSimulate, getScenario, SimulateError } from "switchback-core/simulate.ts";
 import { findModelConfig, loadConfig } from "switchback-core/config.ts";
 import { callClassifier, classifyError, MAX_SCORE_LEVELS, type NoClassifierReason } from "switchback-core/classify.ts";
-import type { SwitchbackConfig } from "switchback-core/types.ts";
+import type { DecisionModelConfig, ResolvedSwitchbackConfig } from "switchback-core/types.ts";
 
 interface FakeEntry {
 	provider: string;
@@ -109,6 +109,14 @@ function supportFor(registry: RouterRegistryPort): ThinkingSupportPort {
 	return piThinkingSupport(registry as unknown as PiModelLookup);
 }
 
+/**
+ * `buildRoute` types its registry as the pi lookup, because it hands the
+ * resolved model to pi. The fake answers that shape too; the cast states it once.
+ */
+function asPiLookup(registry: RouterRegistryPort): PiModelLookup {
+	return registry as unknown as PiModelLookup;
+}
+
 type DecideArgs = Parameters<typeof decide>;
 
 /**
@@ -127,7 +135,7 @@ function decideWith(
 
 function makeFakeRegistry(
 	opts: FakeRegistryOpts,
-): RouterRegistryPort & PiModelLookup & { classify: (...args: unknown[]) => Promise<unknown> } {
+): RouterRegistryPort & { classify: (...args: unknown[]) => Promise<unknown> } {
 	const byKey = new Map<string, Model<Api>>();
 	const providers = new Set<string>();
 	for (const e of opts.entries) {
@@ -288,11 +296,17 @@ afterEach(() => {
 const OVERLOADED_529_MESSAGE =
 	'Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"The server cluster is currently under high load. Please retry after a short wait and thank you for your patience. (2064) (529)"},"request_id":"0712991643802d84011aceea62a4c207"}';
 
-const FALLBACKS: SwitchbackConfig = {
+/**
+ * The same decision model after `resolveAllJevs`: a resolved config carries the
+ * transport, not the address. Helpers that take resolved chains get this shape.
+ */
+const RESOLVED_DECISION_MODEL: DecisionModelConfig = { provider: "typesafe", id: "jev-latest" };
+
+const FALLBACKS: ResolvedSwitchbackConfig = {
 	id: "switchback/auto",
 	name: "Auto (Switchback)",
 	fallbacks: ["zai/glm-4.7", "ollama-cloud/pro", "minimax/plus", "opencode-go/pro"],
-	jev: { provider: "typesafe", id: "jev-latest" },
+	decisionModel: RESOLVED_DECISION_MODEL,
 };
 
 /**
@@ -524,12 +538,12 @@ describe("router — retry reason: blind cycle (no classifier)", () => {
 				throw: reason === "threw" ? new Error("simulated") : undefined,
 				unparseable: reason === "unparseable",
 			});
-			// Per-reason jev config: "not-configured" is the only one where jev is absent
-			// from the model config. The other four paths configure jev but fail at
+			// Per-reason decision-model config: "not-configured" is the only one where the
+			// chain names no classifier. The other four paths name one but fail at
 			// different stages (unresolvable, timeout, threw, unparseable).
-			const modelConfig: SwitchbackConfig = {
+			const modelConfig: ResolvedSwitchbackConfig = {
 				...FALLBACKS,
-				jev: reason === "not-configured" ? undefined : { provider: "typesafe", id: "jev-latest" },
+				decisionModel: reason === "not-configured" ? undefined : RESOLVED_DECISION_MODEL,
 			};
 			const request = buildFakeRequest({
 				reason: "retry",
@@ -888,7 +902,7 @@ describe("step 8 — catalog validity & degraded lists", () => {
 		const request = buildFakeRequest({ reason: "user" });
 		const result = await decideWith("user", request, FALLBACKS, registry, { now: Date.now(), blocked: {} });
 		expect(result.decision.kind).toBe("config-invalid");
-		expect(() => buildRoute(registry, result.decision, "medium", result.nextState)).toThrow();
+		expect(() => buildRoute(asPiLookup(registry), result.decision, "medium", result.nextState)).toThrow();
 	});
 
 	it("resolveFallbacks: per-entry reason strings", async () => {
@@ -1216,7 +1230,7 @@ describe("observeUnretriedFailure — failures pi will not retry", () => {
 			failedId: "zai/glm-4.7",
 			errorMessage: OLLAMA_QUOTA,
 			stopReason: "error",
-			jev: FALLBACKS.jev,
+			decisionModel: RESOLVED_DECISION_MODEL,
 			registry,
 			now,
 			blocked: readBlockedMap(now),
@@ -1247,7 +1261,7 @@ describe("observeUnretriedFailure — failures pi will not retry", () => {
 			failedId: "zai/glm-4.7",
 			errorMessage: OLLAMA_QUOTA,
 			stopReason: "error",
-			jev: FALLBACKS.jev,
+			decisionModel: RESOLVED_DECISION_MODEL,
 			registry,
 			now,
 			blocked: readBlockedMap(now),
@@ -1266,7 +1280,7 @@ describe("observeUnretriedFailure — failures pi will not retry", () => {
 			failedId: "zai/glm-4.7",
 			errorMessage: OLLAMA_QUOTA,
 			stopReason: "error",
-			jev: undefined,
+			decisionModel: undefined,
 			registry,
 			now,
 			blocked: readBlockedMap(now),
@@ -1286,7 +1300,7 @@ describe("observeUnretriedFailure — failures pi will not retry", () => {
 			failedId: "zai/glm-4.7",
 			errorMessage: "529 over_error: temporarily unavailable",
 			stopReason: "error",
-			jev: FALLBACKS.jev,
+			decisionModel: RESOLVED_DECISION_MODEL,
 			registry,
 			now,
 			blocked: readBlockedMap(now),
@@ -1302,7 +1316,7 @@ describe("buildRoute — wire-up", () => {
 			entries: [{ provider: "zai", id: "glm-4.7" }],
 		});
 		const decision: Decision = { kind: "stick", modelId: "zai/glm-4.7", reason: "user" };
-		const route = buildRoute(registry, decision, "high", undefined);
+		const route = buildRoute(asPiLookup(registry), decision, "high", undefined);
 		expect(route.model.id).toBe("glm-4.7");
 		expect(route.thinkingLevel).toBe("high");
 	});
@@ -1310,7 +1324,7 @@ describe("buildRoute — wire-up", () => {
 	it("throws when the picked model is not in the catalog", () => {
 		const registry = makeFakeRegistry({ entries: [] });
 		const decision: Decision = { kind: "switch", modelId: "missing/model", reason: "quota-fallback" };
-		expect(() => buildRoute(registry, decision, "medium", undefined)).toThrow(/not in catalog/);
+		expect(() => buildRoute(asPiLookup(registry), decision, "medium", undefined)).toThrow(/not in catalog/);
 	});
 });
 
@@ -1484,7 +1498,7 @@ describe("router — thinking level", () => {
 		});
 		const request = buildFakeRequest({ reason: "user", noState: true });
 		const result = await decideWith("user", request, FALLBACKS, registry, { now: 1_000_000, blocked: {} });
-		const route = buildRoute(registry, result.decision, result.thinkingLevel, result.nextState);
+		const route = buildRoute(asPiLookup(registry), result.decision, result.thinkingLevel, result.nextState);
 		expect(route.thinkingLevel).toBe("high");
 	});
 
@@ -1492,7 +1506,7 @@ describe("router — thinking level", () => {
 		const registry = makeFakeRegistry({ entries: [{ provider: "zai", id: "glm-4.7" }] });
 		const request = buildFakeRequest({ reason: "user", noState: true });
 		const result = await decideWith("user", request, FALLBACKS, registry, { now: 1_000_000, blocked: {} });
-		const route = buildRoute(registry, result.decision, result.thinkingLevel, result.nextState);
+		const route = buildRoute(asPiLookup(registry), result.decision, result.thinkingLevel, result.nextState);
 		expect(route.thinkingLevel).toBe("medium");
 	});
 
@@ -1680,7 +1694,10 @@ describe("router — idle reset (switch to initial)", () => {
 	// A realistic epoch: the idle measurement ignores a 0/negative stamp as
 	// "unstamped", so the fake clock has to look like a real one.
 	const NOW = 1_700_000_000_000;
-	const withIdleReset = (idleReset: SwitchbackConfig["idleReset"]): SwitchbackConfig => ({ ...FALLBACKS, idleReset });
+	const withIdleReset = (idleReset: ResolvedSwitchbackConfig["idleReset"]): ResolvedSwitchbackConfig => ({
+		...FALLBACKS,
+		idleReset,
+	});
 	const sixHoursAgo = NOW - 6 * HOUR_MS;
 
 	it("stays sticky when idleReset is not configured (the default)", async () => {
@@ -2033,11 +2050,11 @@ describe("router — transient exhaustion never switches to the model that just 
 	const BUNNY = "opencode-go/space-bunny-free";
 
 	it("moves past a blocked neighbour and never lands back on the failed model", async () => {
-		const config: SwitchbackConfig = {
+		const config: ResolvedSwitchbackConfig = {
 			id: "switchback/auto-flash",
 			name: "auto-flash",
 			fallbacks: [LONGCAT, STEP5, BUNNY],
-			jev: { provider: "typesafe", id: "jev-latest" },
+			decisionModel: RESOLVED_DECISION_MODEL,
 		};
 		const registry = makeFakeRegistry({
 			entries: [
@@ -2074,7 +2091,7 @@ describe("router — transient exhaustion never switches to the model that just 
 describe("router — live auto-flash list (greyed entries, real blocks)", () => {
 	const NOW = 1_700_000_000_000;
 	const LONGCAT = "opencode-go/longcat-2.5-preview-free";
-	const FALLBACKS_LIVE: SwitchbackConfig = {
+	const FALLBACKS_LIVE: ResolvedSwitchbackConfig = {
 		id: "switchback/auto-flash",
 		name: "auto-flash",
 		fallbacks: [
@@ -2092,7 +2109,7 @@ describe("router — live auto-flash list (greyed entries, real blocks)", () => 
 			"opencode-go/mimo-v2.6-flash",
 			"minimax/MiniMax-M3",
 		],
-		jev: { provider: "typesafe", id: "jev-latest" },
+		decisionModel: RESOLVED_DECISION_MODEL,
 	};
 	const present = FALLBACKS_LIVE.fallbacks.filter(
 		(id) => !["mistral/devstral-latest", "opencode-go/space-bunny-free"].includes(id),
@@ -2139,11 +2156,11 @@ describe("router — failed model differs from the stale current model", () => {
 	const NOW = 1_700_000_000_000;
 	const LONGCAT = "opencode-go/longcat-2.5-preview-free";
 	const STEP5 = "opencode-go/step-5-preview-free";
-	const CFG: SwitchbackConfig = {
+	const CFG: ResolvedSwitchbackConfig = {
 		id: "switchback/auto-flash",
 		name: "auto-flash",
 		fallbacks: [LONGCAT, STEP5, "minimax/MiniMax-M3"],
-		jev: { provider: "typesafe", id: "jev-latest" },
+		decisionModel: RESOLVED_DECISION_MODEL,
 	};
 	const registry = makeFakeRegistry({
 		entries: [
@@ -2183,11 +2200,11 @@ describe("router — cascaded failover: chain memory, single candidate, final ab
 	const A = "opencode-go/longcat-2.5-preview-free";
 	const B = "opencode-go/step-5-preview-free";
 	const C = "minimax/MiniMax-M3";
-	const CFG: SwitchbackConfig = {
+	const CFG: ResolvedSwitchbackConfig = {
 		id: "switchback/auto-flash",
 		name: "auto-flash",
 		fallbacks: [A, B, C],
-		jev: { provider: "typesafe", id: "jev-latest" },
+		decisionModel: RESOLVED_DECISION_MODEL,
 	};
 
 	function countingRegistry(): { registry: ReturnType<typeof makeFakeRegistry>; questionIds: () => string[][] } {

@@ -47,9 +47,9 @@ import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { IDLE_RESET_OPTIONS } from "./idle.ts";
 import type {
+	DecisionModelConfig,
 	DecisionModelEntry,
-	JevConfig,
-	JevRef,
+	DecisionModelId,
 	ModelId,
 	ResolvedSwitchbackConfig,
 	ResolvedSwitchbackFileConfig,
@@ -62,9 +62,10 @@ const PROVIDER = "switchback";
 const VIRTUAL_ID = "auto";
 const CONFIG_BASENAME = "switchback";
 
-/** Classifier wire APIs switchback can drive from a direct endpoint. */
-export const LOCAL_CLASSIFIER_APIS: readonly string[] = ["typesafe-system-one"];
-const SUPPORTED_LOCAL_CLASSIFIER_APIS = LOCAL_CLASSIFIER_APIS;
+/** Recognised keys, per level. Anything else is reported as a warning, not an error. */
+const FILE_KEYS = ["models", "decisionModels", "debug"] as const;
+const MODEL_KEYS = ["id", "name", "fallbacks", "decisionModel", "idleReset"] as const;
+const DECISION_MODEL_KEYS = ["baseUrl", "apiKey"] as const;
 
 /**
  * Built-in default used when no user config is present.
@@ -111,8 +112,14 @@ export function piConfigDir(): string {
  * `~/.config/opencode` or `~/.pi/agent`) are superposed on top of.
  */
 export function switchbackConfigDir(): string {
-	return join(homedir(), ".config", "switchback");
+	return process.env[SWITCHBACK_CONFIG_DIR_ENV] ?? join(homedir(), ".config", "switchback");
 }
+
+/**
+ * Env override naming the neutral config directory outright. Lets a host or a
+ * test pin the basis layer without touching the user's real `~/.config/switchback`.
+ */
+export const SWITCHBACK_CONFIG_DIR_ENV = "SWITCHBACK_CONFIG_DIR";
 
 /** Env override naming the shared switchback state directory outright. */
 export const SWITCHBACK_DIR_ENV = "SWITCHBACK_DIR";
@@ -178,101 +185,158 @@ function parseModelId(value: unknown, where: string): ModelId {
 	return value;
 }
 
-function parseJev(value: unknown, where: string): JevRef | undefined {
-	if (value === undefined) return undefined;
-	if (!isRecord(value)) throw new ConfigError(`${where}.jev must be an object`, where);
-	// Reference form: { decisionModel: <name> }. Must not mix with inline fields.
-	const ref = value["decisionModel"];
-	if (ref !== undefined) {
-		if (typeof ref !== "string" || ref.length === 0) {
-			throw new ConfigError(`${where}.jev.decisionModel must be a non-empty string`, where);
-		}
-		for (const key of Object.keys(value)) {
-			if (key !== "decisionModel") {
-				throw new ConfigError(
-					`${where}.jev mixes decisionModel with "${key}" - use either the reference or the inline form`,
-					where,
-				);
-			}
-		}
-		return { decisionModel: ref };
+/** Keys the previous schema used. They warn with the replacement instead of a generic message. */
+const RETIRED_KEYS: Record<string, string> = {
+	jev: "use decisionModel: <provider>/<model-id> instead",
+	api: "drop it - a decisionModels entry always speaks the SystemOne wire API",
+};
+
+/**
+ * Report keys this schema does not know. Stale or misspelled keys are warnings,
+ * not errors: the rest of the file still loads, and the message names the key so
+ * it can be fixed without reading the source.
+ */
+function noteUnknownKeys(
+	value: Record<string, unknown>,
+	allowed: readonly string[],
+	where: string,
+	warnings: string[],
+): void {
+	for (const key of Object.keys(value)) {
+		if (allowed.includes(key)) continue;
+		const retired = RETIRED_KEYS[key];
+		warnings.push(
+			retired === undefined
+				? `${where}.${key} is not a switchback config key and was ignored`
+				: `${where}.${key} is no longer supported; ${retired}`,
+		);
 	}
-	return parseJevInline(value, where);
 }
 
-/** Parse the inline JevConfig fields (shared by models[].jev and decisionModels[] entries). */
-function parseJevInline(value: Record<string, unknown>, where: string): JevConfig {
-	const provider = value["provider"];
-	const id = value["id"];
-	if (typeof provider !== "string" || provider.length === 0) {
-		throw new ConfigError(`${where}.jev.provider must be a non-empty string`, where);
-	}
-	if (typeof id !== "string" || id.length === 0) {
-		throw new ConfigError(`${where}.jev.id must be a non-empty string`, where);
-	}
+/** A decision-model address is "provider/model-id", the same shape as a fallback. */
+function parseDecisionModelId(value: unknown, where: string): DecisionModelId {
+	return parseModelId(value, `${where}.decisionModel`);
+}
 
-	// Optional direct endpoint (a local System One server, e.g. Ollama v0.35+).
-	// Presence of baseUrl switches switchback from "look the classifier up in
-	// pi's catalog" to "register this endpoint ourselves".
-	const rawBaseUrl = value["baseUrl"];
-	let baseUrl: string | undefined;
-	if (rawBaseUrl !== undefined) {
-		if (typeof rawBaseUrl !== "string" || rawBaseUrl.length === 0) {
-			throw new ConfigError(`${where}.jev.baseUrl must be a non-empty URL string`, where);
-		}
-		let parsed: URL;
-		try {
-			parsed = new URL(rawBaseUrl);
-		} catch {
-			throw new ConfigError(`${where}.jev.baseUrl is not a valid URL: ${rawBaseUrl}`, where);
-		}
-		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-			throw new ConfigError(`${where}.jev.baseUrl must be http(s), got ${parsed.protocol}`, where);
-		}
-		baseUrl = rawBaseUrl;
+/** Split an address on the first "/" - model ids may themselves contain ":" (e.g. tev1:0.8b). */
+function splitAddress(address: DecisionModelId, where: string): { provider: string; id: string } {
+	const slash = address.indexOf("/");
+	if (slash <= 0 || slash === address.length - 1) {
+		throw new ConfigError(`${where} must be of the form "provider/model-id"`, where);
 	}
+	return { provider: address.slice(0, slash), id: address.slice(slash + 1) };
+}
 
-	const rawApi = value["api"];
-	let api: string | undefined;
-	if (rawApi !== undefined) {
-		if (typeof rawApi !== "string" || !SUPPORTED_LOCAL_CLASSIFIER_APIS.includes(rawApi)) {
+/**
+ * Parse the `decisionModels:` map. Each key is a decision-model address; the
+ * value carries the connection details for a direct SystemOne endpoint.
+ */
+function parseDecisionModels(
+	value: unknown,
+	path: string,
+	warnings: string[],
+): Record<DecisionModelId, DecisionModelEntry> | undefined {
+	if (value === undefined) return undefined;
+	if (Array.isArray(value)) {
+		warnings.push(
+			`decisionModels is now a map keyed by "provider/model-id" (e.g. typesafe/jev-latest: { baseUrl, apiKey }); the list form was ignored (${path})`,
+		);
+		return undefined;
+	}
+	if (!isRecord(value)) throw new ConfigError('decisionModels must be an object keyed by "provider/model-id"', path);
+	const entries: Record<DecisionModelId, DecisionModelEntry> = {};
+	for (const [address, rawEntry] of Object.entries(value)) {
+		const where = `decisionModels.${address}`;
+		parseModelId(address, where);
+		if (!isRecord(rawEntry)) throw new ConfigError(`${where} must be an object with baseUrl and apiKey`, path);
+		noteUnknownKeys(rawEntry, DECISION_MODEL_KEYS, where, warnings);
+
+		const rawBaseUrl = rawEntry["baseUrl"];
+		let baseUrl: string | undefined;
+		if (rawBaseUrl !== undefined) {
+			if (typeof rawBaseUrl !== "string" || rawBaseUrl.length === 0) {
+				throw new ConfigError(`${where}.baseUrl must be a non-empty URL string`, path);
+			}
+			let parsed: URL;
+			try {
+				parsed = new URL(rawBaseUrl);
+			} catch {
+				throw new ConfigError(`${where}.baseUrl is not a valid URL: ${rawBaseUrl}`, path);
+			}
+			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+				throw new ConfigError(`${where}.baseUrl must be http(s), got ${parsed.protocol}`, path);
+			}
+			baseUrl = rawBaseUrl;
+		}
+
+		const rawApiKey = rawEntry["apiKey"];
+		let apiKey: string | undefined;
+		if (rawApiKey !== undefined) {
+			if (typeof rawApiKey !== "string" || rawApiKey.length === 0) {
+				throw new ConfigError(`${where}.apiKey must be a non-empty string`, path);
+			}
+			apiKey = rawApiKey;
+		}
+		if (baseUrl !== undefined && apiKey === undefined) {
+			// A direct endpoint needs a bearer token to send. Local servers ignore
+			// it, but the token is still the thing that makes "direct endpoint"
+			// explicit rather than a silent default.
 			throw new ConfigError(
-				`${where}.jev.api must be one of: ${SUPPORTED_LOCAL_CLASSIFIER_APIS.join(", ")}`,
-				where,
+				`${where}.apiKey is required with baseUrl - use "local" for endpoints that ignore the bearer token`,
+				path,
 			);
 		}
-		api = rawApi;
-	}
-	if (api !== undefined && baseUrl === undefined) {
-		throw new ConfigError(`${where}.jev.api requires ${where}.jev.baseUrl`, where);
-	}
-
-	const rawApiKey = value["apiKey"];
-	let apiKey: string | undefined;
-	if (rawApiKey !== undefined) {
-		if (typeof rawApiKey !== "string" || rawApiKey.length === 0) {
-			throw new ConfigError(`${where}.jev.apiKey must be a non-empty string`, where);
+		if (apiKey !== undefined && baseUrl === undefined) {
+			throw new ConfigError(`${where}.apiKey requires ${where}.baseUrl`, path);
 		}
-		apiKey = rawApiKey;
+		if (baseUrl === undefined) {
+			warnings.push(
+				`${where} has no connection details; it can only resolve through a classifier catalog (pi has one, OpenCode does not)`,
+			);
+		}
+		entries[address] = {
+			...(baseUrl !== undefined ? { baseUrl } : {}),
+			...(apiKey !== undefined ? { apiKey } : {}),
+		};
 	}
-	if (apiKey !== undefined && baseUrl === undefined) {
-		throw new ConfigError(`${where}.jev.apiKey requires ${where}.jev.baseUrl`, where);
-	}
+	return entries;
+}
 
+/**
+ * Resolve a chain's `decisionModel:` address against the `decisionModels:` map.
+ *
+ * A map entry with a `baseUrl` pins the endpoint. Without one the address stays
+ * catalog-resolved, which pi can do and OpenCode cannot - that stays a visible
+ * "no classifier" cycle there instead of a load error, because the same file is
+ * valid on pi.
+ */
+export function resolveDecisionModel(
+	decisionModels: Record<DecisionModelId, DecisionModelConfig> | undefined,
+	address: DecisionModelId | undefined,
+): DecisionModelConfig | undefined {
+	if (address === undefined) return undefined;
+	const { provider, id } = splitAddress(address, "decisionModel");
+	const entry = decisionModels?.[address];
 	return {
 		provider,
 		id,
-		...(baseUrl !== undefined ? { baseUrl } : {}),
-		...(api !== undefined ? { api } : {}),
-		...(apiKey !== undefined ? { apiKey } : {}),
+		...(entry?.baseUrl !== undefined ? { baseUrl: entry.baseUrl } : {}),
+		...(entry?.apiKey !== undefined ? { apiKey: entry.apiKey } : {}),
 	};
 }
 
-export type { SwitchbackConfig, SwitchbackFileConfig, JevConfig } from "./types.ts";
+export type {
+	SwitchbackConfig,
+	SwitchbackFileConfig,
+	DecisionModelConfig,
+	DecisionModelEntry,
+	DecisionModelId,
+} from "./types.ts";
 
-function parseSwitchbackModel(value: unknown, index: number): SwitchbackConfig {
+function parseSwitchbackModel(value: unknown, index: number, warnings: string[]): SwitchbackConfig {
 	const where = `models[${index}]`;
 	if (!isRecord(value)) throw new ConfigError(`${where} must be an object`, where);
+	noteUnknownKeys(value, MODEL_KEYS, where, warnings);
 	const id = value["id"];
 	const name = value["name"];
 	const fallbacks = value["fallbacks"];
@@ -287,13 +351,14 @@ function parseSwitchbackModel(value: unknown, index: number): SwitchbackConfig {
 		throw new ConfigError(`${where}.fallbacks must be a non-empty array of "provider/id" strings`, where);
 	}
 	const parsedFallbacks = fallbacks.map((entry, i) => parseModelId(entry, `${where}.fallbacks[${i}]`));
-	const jev = parseJev(value["jev"], where);
+	const rawDecisionModel = value["decisionModel"];
+	const decisionModel = rawDecisionModel === undefined ? undefined : parseDecisionModelId(rawDecisionModel, where);
 	const idleReset = parseIdleReset(value["idleReset"], where);
 	return {
 		id: fullId,
 		name,
 		fallbacks: parsedFallbacks,
-		...(jev ? { jev } : {}),
+		...(decisionModel !== undefined ? { decisionModel } : {}),
 		...(idleReset !== undefined ? { idleReset } : {}),
 	};
 }
@@ -305,50 +370,6 @@ function parseIdleReset(value: unknown, where: string): IdleResetConfig | undefi
 		throw new ConfigError(`${where}.idleReset must be one of ${IDLE_RESET_OPTIONS.join(", ")}`, where);
 	}
 	return value as IdleResetConfig;
-}
-
-/** Parse the top-level `decisionModels:` list. Names must be unique. */
-function parseDecisionModels(value: unknown, path: string): DecisionModelEntry[] {
-	if (value === undefined) return [];
-	if (!Array.isArray(value)) throw new ConfigError("decisionModels must be an array", path);
-	const entries: DecisionModelEntry[] = [];
-	const seen = new Set<string>();
-	value.forEach((entry, i) => {
-		const where = `decisionModels[${i}]`;
-		if (!isRecord(entry)) throw new ConfigError(`${where} must be an object`, path);
-		const name = entry["name"];
-		if (typeof name !== "string" || name.length === 0) {
-			throw new ConfigError(`${where}.name must be a non-empty string`, path);
-		}
-		if (seen.has(name)) throw new ConfigError(`decisionModels contains the name "${name}" more than once`, path);
-		seen.add(name);
-		const inline = parseJevInline(entry, where);
-		entries.push({ name, ...inline });
-	});
-	return entries;
-}
-
-/**
- * Resolve a model's `jev` to an inline config. A `decisionModel:` reference is
- * looked up in the given decision-model list; an unknown name is an actionable
- * load-time error, not a silent fall-through to no classifier.
- */
-export function resolveJevConfig(
-	decisionModels: readonly DecisionModelEntry[] | undefined,
-	jev: JevRef | undefined,
-): JevConfig | undefined {
-	if (jev === undefined) return undefined;
-	if (!("decisionModel" in jev)) return jev;
-	const name = jev.decisionModel;
-	const found = decisionModels?.find((d) => d.name === name);
-	if (found === undefined) {
-		throw new ConfigError(
-			`jev.decisionModel "${name}" is not defined in decisionModels (known: ${(decisionModels ?? []).map((d) => d.name).join(", ") || "none"})`,
-			"<config>",
-		);
-	}
-	const { name: _ignored, ...inline } = found;
-	return inline;
 }
 
 const SECRETS_PREFIX = "secret:";
@@ -382,48 +403,48 @@ export function resolveSecretApiKey(
 	return value;
 }
 
-/** Resolve every model's jev reference against the decision-model list. */
-function resolveAllJevs(
+/** Resolve every chain's `decisionModel:` address against the map, and the map's secret refs. */
+function resolveFile(
 	file: SwitchbackFileConfig,
 	secrets: { get(name: string): string | undefined } | undefined = undefined,
 ): ResolvedSwitchbackFileConfig {
-	const resolvedDecisionModels =
+	const resolvedDecisionModels: Record<DecisionModelId, DecisionModelConfig> | undefined =
 		file.decisionModels === undefined
 			? undefined
-			: file.decisionModels.map((entry) => {
-					const { apiKey, ...rest } = entry;
-					const resolvedApiKey = resolveSecretApiKey(apiKey, secrets);
-					return resolvedApiKey === undefined ? entry : { ...rest, apiKey: resolvedApiKey };
-				});
+			: Object.fromEntries(
+					Object.entries(file.decisionModels).map(([address, entry]) => {
+						const { provider, id } = splitAddress(address, `decisionModels.${address}`);
+						const apiKey = resolveSecretApiKey(entry.apiKey, secrets);
+						const descriptor: DecisionModelConfig = {
+							provider,
+							id,
+							...(entry.baseUrl !== undefined ? { baseUrl: entry.baseUrl } : {}),
+							...(apiKey !== undefined ? { apiKey } : {}),
+						};
+						return [address, descriptor];
+					}),
+				);
 	return {
 		models: file.models.map((model) => {
-			const { jev, ...rest } = model;
-			const inline = resolveJevConfig(
-				file.decisionModels === undefined ? undefined : resolvedDecisionModels,
-				jev,
-			);
-			if (inline === undefined) return rest;
-			const resolvedInline: JevConfig = (() => {
-				const apiKey = inline.apiKey;
-				const resolvedApiKey = resolveSecretApiKey(apiKey, secrets);
-				return resolvedApiKey === undefined ? inline : { ...inline, apiKey: resolvedApiKey };
-			})();
-			return { ...rest, jev: resolvedInline };
+			const { decisionModel, ...rest } = model;
+			const resolved = resolveDecisionModel(resolvedDecisionModels, decisionModel);
+			return resolved === undefined ? rest : { ...rest, decisionModel: resolved };
 		}),
-		...(file.decisionModels !== undefined && file.decisionModels.length > 0 && resolvedDecisionModels !== undefined
+		...(resolvedDecisionModels !== undefined && Object.keys(resolvedDecisionModels).length > 0
 			? { decisionModels: resolvedDecisionModels }
 			: {}),
 		...(file.debug !== undefined ? { debug: file.debug } : {}),
 	};
 }
 
-function parseFileConfig(value: unknown, path: string): SwitchbackFileConfig {
+function parseFileConfig(value: unknown, path: string, warnings: string[]): SwitchbackFileConfig {
 	if (!isRecord(value)) throw new ConfigError("root must be an object", path);
+	noteUnknownKeys(value, FILE_KEYS, "config", warnings);
 	const models = value["models"];
 	if (!Array.isArray(models) || models.length === 0) {
 		throw new ConfigError("models must be a non-empty array", path);
 	}
-	const parsed = models.map((entry, i) => parseSwitchbackModel(entry, i));
+	const parsed = models.map((entry, i) => parseSwitchbackModel(entry, i, warnings));
 	// Any set of virtual model ids is valid - `switchback/auto` is the conventional
 	// first entry, not a requirement. An unknown virtual id is already surfaced by
 	// findModelConfig() at extension load, and index.ts registers one virtual model
@@ -440,39 +461,27 @@ function parseFileConfig(value: unknown, path: string): SwitchbackFileConfig {
 	if (rawDebug !== undefined && typeof rawDebug !== "boolean") {
 		throw new ConfigError("debug must be a boolean", path);
 	}
-	const decisionModels = parseDecisionModels(value["decisionModels"], path);
-	// An orphan `decisionModels` entry is a silent foot-gun: the router would
-	// have no classifier for every model whose `jev` references the orphan and
-	// would emit blind-cycle traffic (the live crash store showed exactly this
-	// on 2026-10-06). Reject only when NONE of the entries are referenced -
-	// partial references are fine: at least one classifier still resolves and
-	// the user can keep the others around to wire up later.
-	if (decisionModels.length > 0) {
-		const referenced = new Set<string>();
-		for (const model of parsed) {
-			if (model.jev !== undefined && "decisionModel" in model.jev) {
-				referenced.add(model.jev.decisionModel);
+	const decisionModels = parseDecisionModels(value["decisionModels"], path, warnings);
+	// A `decisionModels` entry no chain references is harmless but almost always a
+	// leftover: warn (do not fail) so the block does not quietly rot.
+	if (decisionModels !== undefined) {
+		const referenced = new Set(parsed.map((model) => model.decisionModel).filter((id) => id !== undefined));
+		for (const address of Object.keys(decisionModels)) {
+			if (!referenced.has(address)) {
+				warnings.push(
+					`decisionModels.${address} is not referenced by any models[].decisionModel and was ignored`,
+				);
 			}
-		}
-		const orphans = decisionModels.filter((d) => !referenced.has(d.name));
-		if (orphans.length === decisionModels.length) {
-			throw new ConfigError(
-				"decisionModels entries are not referenced by any model.jev.decisionModel: " +
-					`${orphans.map((d) => `"${d.name}"`).join(", ")}. ` +
-					'A decisionModels entry must be referenced by at least one model.jev.decisionModel, otherwise the router sees no classifier and reports it as "not configured" - ' +
-					`reference one from a model ("${parsed[0]?.id ?? "<first model>"}".jev.decisionModel: <name>) or remove the decisionModels block.`,
-				path,
-			);
 		}
 	}
 	return {
 		models: parsed,
-		...(decisionModels.length > 0 ? { decisionModels } : {}),
+		...(decisionModels !== undefined ? { decisionModels } : {}),
 		...(rawDebug !== undefined ? { debug: rawDebug } : {}),
 	};
 }
 
-function readAndParse(path: string): SwitchbackFileConfig {
+function readAndParse(path: string, warnings: string[]): SwitchbackFileConfig {
 	// The only .json file in this project's surface is the simulate fixture;
 	// anything else ending in .json is a user config mistake.
 	if (path.endsWith(".json")) {
@@ -490,7 +499,10 @@ function readAndParse(path: string): SwitchbackFileConfig {
 			path,
 		);
 	}
-	return parseFileConfig(raw, path);
+	const layerWarnings: string[] = [];
+	const parsed = parseFileConfig(raw, path, layerWarnings);
+	for (const warning of layerWarnings) warnings.push(`${warning} (${path})`);
+	return parsed;
 }
 
 /**
@@ -512,8 +524,8 @@ function aggregateConfigs(global: SwitchbackFileConfig, project: SwitchbackFileC
 	}
 	return {
 		models: merged,
-		// Decision models follow the same layering rule as debug: the project list
-		// replaces the global list when present, so references resolve against one
+		// Decision models follow the same layering rule as debug: the project map
+		// replaces the global map when present, so addresses resolve against one
 		// predictable set. (A project layer without decisionModels keeps the global set.)
 		...(project.decisionModels !== undefined
 			? { decisionModels: project.decisionModels }
@@ -554,11 +566,15 @@ export interface SecretResolver {
  *
  * `dirs` overrides the layer locations; a host other than pi passes its own
  * agent config directory so its overlay participates.
+ *
+ * `warnings` carries recognised-but-suspicious findings (unknown keys, retired
+ * keys, unreferenced decision models). They never fail the load: a host shows
+ * them through its own notify channel.
  */
 export function loadConfig(
 	secrets?: SecretResolver,
 	dirs?: ConfigLayerDirs,
-): { config: ResolvedSwitchbackFileConfig; source: string } {
+): { config: ResolvedSwitchbackFileConfig; source: string; warnings: string[] } {
 	const [neutralPath, agentPath, projectPath] = candidatePaths(dirs) as [string, string, string];
 	const neutralExists = existsSync(neutralPath);
 	const agentExists = existsSync(agentPath);
@@ -567,26 +583,27 @@ export function loadConfig(
 	// Aggregate all existing layers, lowest precedence first.
 	let merged: SwitchbackFileConfig | undefined;
 	const sources: string[] = [];
+	const warnings: string[] = [];
 
 	if (neutralExists) {
-		merged = readAndParse(neutralPath);
+		merged = readAndParse(neutralPath, warnings);
 		sources.push(resolve(neutralPath));
 	}
 	if (agentExists) {
-		const agent = readAndParse(agentPath);
+		const agent = readAndParse(agentPath, warnings);
 		sources.push(resolve(agentPath));
 		merged = merged === undefined ? agent : aggregateConfigs(merged, agent);
 	}
 	if (projectExists) {
-		const project = readAndParse(projectPath);
+		const project = readAndParse(projectPath, warnings);
 		sources.push(resolve(projectPath));
 		merged = merged === undefined ? project : aggregateConfigs(merged, project);
 	}
 
 	if (merged === undefined) {
-		return { config: DEFAULT_CONFIG, source: "<default>" };
+		return { config: DEFAULT_CONFIG, source: "<default>", warnings };
 	}
-	return { config: resolveAllJevs(merged, secrets), source: sources.join(" + ") };
+	return { config: resolveFile(merged, secrets), source: sources.join(" + "), warnings };
 }
 
 /**
@@ -594,8 +611,10 @@ export function loadConfig(
  * loader applies; exposed so the interactive config editor validates a mutated
  * document at save time instead of maintaining a second rule set.
  */
-export function validateFileConfig(raw: unknown, path: string): SwitchbackFileConfig {
-	return parseFileConfig(raw, path);
+export function validateFileConfig(raw: unknown, path: string): { config: SwitchbackFileConfig; warnings: string[] } {
+	const warnings: string[] = [];
+	const config = parseFileConfig(raw, path, warnings);
+	return { config, warnings };
 }
 
 /** Look up the configuration entry for a given virtual model id. */

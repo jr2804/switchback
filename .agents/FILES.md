@@ -19,13 +19,13 @@
 | Host boundary ports (`ModelRegistryPort`, `AvailabilityPort`, `ClassifierPort`, `NotifyPort`, `RouterRegistryPort`, `ThinkingSupportPort`) | `packages/core/src/ports.ts` |
 | Classification (`classifyError`) | `packages/core/src/classify.ts` |
 | Local-classifier provider registration | `packages/pi/src/local-classifier.ts` |
-| System One classifier transport (switchback's own) | `packages/core/src/systemone.ts` |
+| System One classifier transport (delegates to `@typesafe-ai/sdk`) | `packages/core/src/systemone.ts` |
 | Catalog validity (`resolveFallbacks`) | `packages/core/src/availability.ts` |
 | Config loader (YAML) | `packages/core/src/config.ts` |
 | Config editor (comment-preserving YAML round-trip) | `packages/core/src/config-editor.ts` |
 | Interactive config dialogue (`/switchback-config`) | `packages/pi/src/dialogue.ts` |
 | …its shared session, screen-title and prompt primitives | `packages/pi/src/dialogue-ui.ts` |
-| …its decision-model wizard (`decisionModels`, provider/baseUrl/model prompts, API-key step) | `packages/pi/src/dialogue-classifier.ts` |
+| …its decision-model wizard (`decisionModel:` address picker, `decisionModels` map entry menu for rename/connection/probe/delete, `baseUrl` + API-key steps) | `packages/pi/src/dialogue-classifier.ts` |
 | Shared types | `packages/core/src/types.ts` |
 | Atomic store writes (per-write staging path, retried rename) | `packages/core/src/atomic-write.ts` |
 | Blocked-until store (atomic) | `packages/core/src/state.ts` |

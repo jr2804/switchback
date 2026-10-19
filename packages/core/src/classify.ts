@@ -33,7 +33,7 @@
  *      Kept deliberately: the directive explicitly allows typed signals from
  *      pi, only the message-derived heuristics are forbidden.
  *
- *   2. CLASSIFIER: the configured `jev` entry via `ctx.modelRegistry.classify`.
+ *   2. CLASSIFIER: the configured `decisionModel` entry via `ctx.modelRegistry.classify`.
  *      The structured-output answers (class / reset score / scope) are the
  *      ONLY message-derived decisions. Score is mapped to ms via
  *      `scoreToResetAtMs` (rubric index, 31d cap). Timeout, parse error,
@@ -90,7 +90,7 @@ const MAX_RESET_MS = 31 * 24 * 3_600_000;
  * v4 (2026-10-06): the `scope` question now anchors each option in wording the
  * message actually contains. v3 asked the model to judge counterfactuals ("other
  * models still work") and named only `unknown` in its instructions, so `unknown`
- * took the prior mass and won on every case measured - `typesafe/jev-latest`
+ * took the prior mass and won on every case measured - `typesafe/decisionModel-latest`
  * answered `unknown` at 84-92% with `account` second. The new text gives the
  * model the lexical cues an error message really carries (a named model, a key
  * or plan, an address) and asks for `unknown` only as a last resort. Verdicts
@@ -104,7 +104,7 @@ const MAX_RESET_MS = 31 * 24 * 3_600_000;
  * model or series / a credential, plan, balance or usage quota / an address or
  * region), which is a property of the question rather than of any provider.
  * Measured before and after on two held-out messages that were never in the
- * corpus: `typesafe/jev-latest` 7/7 with and without the examples, so the
+ * corpus: `typesafe/decisionModel-latest` 7/7 with and without the examples, so the
  * hosted classifier never needed them; `parable/tinyjev:latest` drops 7/7 ->
  * 5/7, losing `weekly token limit exhausted` and `monthly cap`, which the
  * smaller model needed a concrete anchor for. The hosted path is what the
@@ -239,9 +239,12 @@ function normaliseScope(value: unknown): ErrorScope {
 	return "unknown";
 }
 
-/** Find a classifier in the model registry. The provider+id are looked up via JevConfig. */
-function findJev(registry: ClassifierPort, jev: { provider: string; id: string }): ClassifierEntry | undefined {
-	return registry.findOfType("classifier", jev.provider, jev.id);
+/** Find a classifier in the model registry. The provider+id are looked up via DecisionModelConfig. */
+function findJev(
+	registry: ClassifierPort,
+	decisionModel: { provider: string; id: string },
+): ClassifierEntry | undefined {
+	return registry.findOfType("classifier", decisionModel.provider, decisionModel.id);
 }
 
 /**
@@ -340,14 +343,14 @@ export type ClassifierCallResult =
  */
 export async function callClassifier(
 	registry: ClassifierPort,
-	jev: { provider: string; id: string } | undefined,
+	decisionModel: { provider: string; id: string } | undefined,
 	context: ClassifierContext,
 	timeoutMs: number = CLASSIFIER_TIMEOUT_MS,
 ): Promise<ClassifierCallResult> {
-	if (jev === undefined) {
+	if (decisionModel === undefined) {
 		return { kind: "no-classifier", reason: "not-configured" };
 	}
-	const handle = findJev(registry, jev);
+	const handle = findJev(registry, decisionModel);
 	if (handle === undefined) {
 		return { kind: "no-classifier", reason: "unresolvable" };
 	}
@@ -408,7 +411,7 @@ export function readConfidence(result: ClassifierResult, questionId: string): nu
 export async function classifyError(
 	message: string,
 	registry: ClassifierPort,
-	jev: { provider: string; id: string } | undefined,
+	decisionModel: { provider: string; id: string } | undefined,
 	now: number = Date.now(),
 	stopReason?: StopReason,
 ): Promise<ClassificationResult> {
@@ -442,7 +445,7 @@ export async function classifyError(
 
 	// Branch 2: classifier. Any failure (not configured, unresolvable,
 	// timeout, threw, unparseable) falls through to "no-classifier".
-	const call = await callClassifier(registry, jev, {
+	const call = await callClassifier(registry, decisionModel, {
 		state: classifierState(message),
 		questions: JEV_QUESTIONS,
 	});

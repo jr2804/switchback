@@ -19,7 +19,7 @@ change the prompt.
 - **[Quickstart in the README](https://github.com/jr2804/switchback/blob/main/README.md)** — `pi install …` and
   first-run verification.
 - **[Configuration](configuration.md)** — `switchback.yaml`, lookup order,
-  greyed entries, `DEFAULT_CONFIG`, the `jev:` classifier config.
+  greyed entries, `DEFAULT_CONFIG`, the `decisionModel:` classifier config.
 - **[Interactive configuration](configuration-dialogue.md)** — the
   `/switchback-config` wizard: layers, fallbacks, decision models, the
   live model browse and the capability test.

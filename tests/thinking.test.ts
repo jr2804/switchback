@@ -99,7 +99,7 @@ describe("chooseThinkingLevel", () => {
 		const choice = await chooseThinkingLevel({
 			registry: classifier("max"),
 			support,
-			jev: JEV,
+			decisionModel: JEV,
 			model: model("glm-5.3", { thinkingLevelMap: ZAI_MAP }),
 			requested: "medium",
 			context: CONTEXT,
@@ -113,7 +113,7 @@ describe("chooseThinkingLevel", () => {
 		const choice = await chooseThinkingLevel({
 			registry: classifier("max"),
 			support,
-			jev: undefined,
+			decisionModel: undefined,
 			model: model("glm-5.3", { thinkingLevelMap: ZAI_MAP }),
 			requested: "off",
 			context: CONTEXT,
@@ -130,7 +130,7 @@ describe("chooseThinkingLevel", () => {
 		const choice = await chooseThinkingLevel({
 			registry: classifier("medium"),
 			support,
-			jev: JEV,
+			decisionModel: JEV,
 			model: model("glm-5.3", { thinkingLevelMap: ZAI_MAP }),
 			requested: "medium",
 			context: CONTEXT,
@@ -145,7 +145,7 @@ describe("chooseThinkingLevel", () => {
 		const choice = await chooseThinkingLevel({
 			registry: classifier("off", calls),
 			support,
-			jev: JEV,
+			decisionModel: JEV,
 			model: model("plain", { reasoning: false }),
 			requested: "medium",
 			context: CONTEXT,
@@ -169,7 +169,7 @@ describe("chooseThinkingLevel", () => {
 		await chooseThinkingLevel({
 			registry,
 			support,
-			jev: JEV,
+			decisionModel: JEV,
 			model: model("glm-5.3", { thinkingLevelMap: ZAI_MAP }),
 			requested: "medium",
 			context: { routeReason: "retry", failover: true },
@@ -190,7 +190,7 @@ describe("chooseThinkingLevel", () => {
 			const choice = await chooseThinkingLevel({
 				registry: classifier("max"),
 				support,
-				jev: JEV,
+				decisionModel: JEV,
 				model: target,
 				requested,
 				context: CONTEXT,

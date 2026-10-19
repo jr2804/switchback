@@ -68,13 +68,15 @@ The plugin reads the same [`switchback.yaml`](configuration.md) layers as pi:
 
 Runtime state (`blocks.json`, `crashes.json`) lives under
 `~/.pi/agent/switchback/` and is shared with pi; set `SWITCHBACK_DIR` to
-relocate it. With no classifier configured (`jev:` block), the plugin
-notifies that no verdict is available and lets OpenCode's own policy stand —
-it never blocks on a guess.
+relocate it. A `decisionModel:` address with no `decisionModels:` entry is a
+catalog lookup, and OpenCode has no classifier catalog — the plugin notifies
+that no verdict is available and lets OpenCode's own policy stand; it never
+blocks on a guess. Point the address at an entry with `baseUrl` to give the
+plugin a direct SystemOne endpoint (see [Configuration](configuration.md)).
 
 Secrets: OpenCode has no readable secret vault (its credential store
 activates stored profiles and never returns key material), so the OpenCode
-plugin resolves `secret:`-prefixed `jev.apiKey` references against
+plugin resolves `secret:`-prefixed `decisionModels[].apiKey` references against
 environment variables: `secret:MY_KEY` reads `MY_KEY` from the environment.
 A reference that does not resolve disables the plugin for that attempt with
 a visible notice — the same failure mode as pi, against a different store.

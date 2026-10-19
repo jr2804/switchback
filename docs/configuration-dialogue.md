@@ -24,7 +24,7 @@ the command reports and exits without prompting.
   `provider/id` and pressing `Enter` accepts it verbatim, which is how a model
   outside the catalog is added. At least one fallback is required.
 - **Decision models** — the reusable `decisionModels:` entries: add, edit
-  fields, rename (references in `models[].jev` are rewritten in the same step),
+  fields, rename (references in `models[].decisionModel` are rewritten in the same step),
   delete. **The provider list is pi's own**: every provider the model registry
   reports that ships at least one classifier model, with the registry's display
   name, base URL and model ids. Switchback names no provider, no URL and no model
@@ -129,6 +129,6 @@ for the on-disk format and platform notes.
 
 ## Reference
 
-The full YAML reference — layers and aggregation, the `jev:` classifier
-block, `decisionModels:`, and the `debug:` flag — lives in
+The full YAML reference — layers and aggregation, the `decisionModel:`
+address, the `decisionModels:` map, and the `debug:` flag — lives in
 [Configuration](configuration.md).

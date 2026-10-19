@@ -73,9 +73,11 @@ wholesale) and project-only models appended. A layer that exists but is invalid
 fails startup loudly instead of being skipped. The repo ships only
 `switchback.yaml.example` as the template.
 
-The optional `jev:` entry names a classifier (SystemOne); with `baseUrl` set, switchback
-registers a local endpoint itself (e.g. an Ollama v0.35+ decision model) — see
-[docs/configuration.md#classifier-jev](docs/configuration.md#classifier-jev).
+A chain names its classifier by address, exactly like a fallback
+(`decisionModel: provider/model-id`); an address with a `baseUrl` entry in
+`decisionModels:` is a direct SystemOne endpoint switchback registers itself
+(e.g. an Ollama v0.35+ decision model) — see
+[docs/configuration.md#decision-model-decisionmodel](docs/configuration.md#decision-model-decisionmodel).
 
 Greyed-out entries (model not in catalog or provider unavailable) are
 skipped at route time; the config is left untouched and they recover

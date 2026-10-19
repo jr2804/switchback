@@ -37,6 +37,8 @@ let fetchSpy: ReturnType<typeof vi.fn>;
 
 /** Canned structured answer: quota on the account, no reset time mentioned. */
 const CANNED_ANSWERS = {
+	model: "jev-fixture",
+	usage: { input_tokens: 9, output_tokens: 3 },
 	answers: {
 		class: { type: "choice", choice: "quota", confidence: 0.9, probabilities: { quota: 1 } },
 		reset: { type: "score", score: 0, confidence: 0.8 },
@@ -80,13 +82,12 @@ ${extra}`,
 	);
 }
 
-/** The jev block switching the classifier from catalog lookup to direct endpoint. */
-const JEV_BLOCK = `    jev:
-      provider: typesafe-system-one
-      id: jev-fixture
-      api: typesafe-system-one
-      baseUrl: http://127.0.0.1:9
-      apiKey: test-key-alpha-1
+/** Address + connection entry switching the classifier from catalog lookup to a direct endpoint. */
+const JEV_BLOCK = `    decisionModel: typesafe/jev-fixture
+decisionModels:
+  typesafe/jev-fixture:
+    baseUrl: http://127.0.0.1:9
+    apiKey: test-key-alpha-1
 `;
 
 beforeEach(() => {
@@ -100,12 +101,14 @@ beforeEach(() => {
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	// Redirect the neutral ~/.config basis too: os.homedir() honours USERPROFILE on Windows.
 	process.env.USERPROFILE = tmp;
-	fetchSpy = vi.fn(async (_url: unknown, _init?: unknown) => ({
-		ok: true,
-		status: 200,
-		text: async () => "",
-		json: async () => CANNED_ANSWERS,
-	}));
+	process.env["SWITCHBACK_CONFIG_DIR"] = tmp;
+	fetchSpy = vi.fn(
+		async (_url: unknown, _init?: unknown) =>
+			new Response(JSON.stringify(CANNED_ANSWERS), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			}),
+	);
 	vi.stubGlobal("fetch", fetchSpy);
 });
 
@@ -114,6 +117,7 @@ afterEach(() => {
 	delete process.env[SWITCHBACK_DIR_ENV];
 	delete process.env.PI_CODING_AGENT_DIR;
 	delete process.env.USERPROFILE;
+	delete process.env["SWITCHBACK_CONFIG_DIR"];
 	delete process.env.WIX11_CLASSIFIER_KEY;
 	rmSync(tmp, { recursive: true, force: true });
 });
@@ -267,12 +271,11 @@ describe("retry hook: without a real verdict", () => {
 
 describe("retry hook: secret refs", () => {
 	/** Same classifier endpoint as JEV_BLOCK but with the key behind a secret: ref. */
-	const SECRET_JEV_BLOCK = `    jev:
-      provider: typesafe-system-one
-      id: jev-fixture
-      api: typesafe-system-one
-      baseUrl: http://127.0.0.1:9
-      apiKey: secret:WIX11_CLASSIFIER_KEY
+	const SECRET_JEV_BLOCK = `    decisionModel: typesafe/jev-fixture
+decisionModels:
+  typesafe/jev-fixture:
+    baseUrl: http://127.0.0.1:9
+    apiKey: secret:WIX11_CLASSIFIER_KEY
 `;
 
 	it("resolves secret: refs against the environment", async () => {
@@ -283,8 +286,8 @@ describe("retry hook: secret refs", () => {
 		const { hooks } = await setup(CATALOG, switchModel, synthetic);
 		await hooks.get("retry")?.(retryPayload("sess-secret"));
 		expect(fetchSpy).toHaveBeenCalledTimes(1);
-		const init = fetchSpy.mock.calls[0]?.[1] as { headers?: Record<string, string> } | undefined;
-		expect(init?.headers?.authorization).toBe("Bearer env-resolved-key-7");
+		const init = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+		expect(new Headers(init?.headers).get("authorization")).toBe("Bearer env-resolved-key-7");
 		expect(switchModel).toHaveBeenCalledTimes(1); // the resolved classifier produced its verdict
 	});
 

@@ -31,7 +31,7 @@
 import type { ClassifierContext, ClassifierQuestion, Message } from "@earendil-works/pi-ai";
 import { callClassifier, readChoice, readConfidence, type NoClassifierReason } from "./classify.ts";
 import type { ClassifierPort } from "./ports.ts";
-import type { IdleResetConfig, JevConfig, ModelId } from "./types.ts";
+import type { IdleResetConfig, DecisionModelConfig, ModelId } from "./types.ts";
 
 /** Every accepted `idleReset:` value, in menu order. */
 export const IDLE_RESET_OPTIONS: readonly IdleResetConfig[] = [
@@ -136,7 +136,7 @@ export interface IdleResetDecision {
 
 export interface IdleResetInput {
 	registry: ClassifierPort;
-	jev: JevConfig | undefined;
+	decisionModel: DecisionModelConfig | undefined;
 	/** The virtual model's `idleReset:` setting. */
 	option: IdleResetConfig | undefined;
 	messages: readonly Message[];
@@ -210,7 +210,7 @@ async function askClassifier(input: IdleResetInput, idle: number): Promise<IdleR
 		preference_order: input.candidates.length > 0 ? input.candidates.join(", ") : "(none)",
 		blocked_models: input.blockedNotes.length > 0 ? input.blockedNotes.join(", ") : "(none)",
 	};
-	const call = await callClassifier(input.registry, input.jev, {
+	const call = await callClassifier(input.registry, input.decisionModel, {
 		state,
 		questions: { idle_reset: criteria },
 	});

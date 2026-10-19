@@ -68,7 +68,14 @@ import { chooseContextCandidate, fitsContext } from "./context-fit.ts";
 import { assessFailure, recordDecideCrash } from "./failure.ts";
 import { decideIdleReset } from "./idle.ts";
 import { getPinnedModel, isBlocked, unblockModel } from "./state.ts";
-import type { BlockedMap, JevConfig, ModelId, ResolvedSwitchbackConfig, SwitchbackState, ErrorScope } from "./types.ts";
+import type {
+	BlockedMap,
+	DecisionModelConfig,
+	ModelId,
+	ResolvedSwitchbackConfig,
+	SwitchbackState,
+	ErrorScope,
+} from "./types.ts";
 
 export interface RouteInputs {
 	now: number;
@@ -157,7 +164,7 @@ async function pickWithContextFit(opts: {
 	now: number;
 	startAfter: ModelId | undefined;
 	registry: RouterRegistryPort;
-	jev: JevConfig | undefined;
+	decisionModel: DecisionModelConfig | undefined;
 	contextTokens: number | undefined;
 	reason?: string;
 	failedScope?: ErrorScope | undefined;
@@ -188,7 +195,7 @@ async function pickWithContextFit(opts: {
 	if (ordered.length === 1) return { modelId: floor, degraded: false };
 	const choice = await chooseContextCandidate({
 		registry: opts.registry,
-		jev: opts.jev,
+		decisionModel: opts.decisionModel,
 		preferred: floor,
 		contextTokens: tokens ?? 0,
 		candidates: ordered.map((id) => {
@@ -227,7 +234,7 @@ function orderByScope(
 function describeNoClassifier(reason: NoClassifierReason): string {
 	switch (reason) {
 		case "not-configured":
-			return "no classifier configured (set jev: in switchback.yaml)";
+			return "no classifier configured (set decisionModel: in switchback.yaml)";
 		case "unresolvable":
 			return "configured classifier not found in registry";
 		case "timeout":
@@ -330,7 +337,7 @@ export async function decide(
 	// above still outranks it (it is the user's explicit override).
 	const idle = await decideIdleReset({
 		registry,
-		jev: modelConfig.jev,
+		decisionModel: modelConfig.decisionModel,
 		option: modelConfig.idleReset,
 		messages: request.messages,
 		now,
@@ -348,7 +355,7 @@ export async function decide(
 			now,
 			startAfter: undefined,
 			registry,
-			jev: modelConfig.jev,
+			decisionModel: modelConfig.decisionModel,
 			reason: "idle-reset",
 			contextTokens: inputs.contextTokens,
 		});
@@ -399,7 +406,7 @@ export async function decide(
 		now,
 		startAfter: current,
 		registry,
-		jev: modelConfig.jev,
+		decisionModel: modelConfig.decisionModel,
 		contextTokens: inputs.contextTokens,
 	});
 	if (!pick) {
@@ -473,7 +480,7 @@ async function decideRetry(
 			now,
 			startAfter: advanceFrom,
 			registry,
-			jev: modelConfig.jev,
+			decisionModel: modelConfig.decisionModel,
 			contextTokens: inputs.contextTokens,
 		});
 		if (!pick) {
@@ -493,7 +500,7 @@ async function decideRetry(
 		failedId,
 		errorMessage,
 		stopReason,
-		jev: modelConfig.jev,
+		decisionModel: modelConfig.decisionModel,
 		registry,
 		now,
 		blocked,
@@ -524,7 +531,7 @@ async function decideRetry(
 			now,
 			startAfter: advanceFrom,
 			registry,
-			jev: modelConfig.jev,
+			decisionModel: modelConfig.decisionModel,
 			contextTokens: inputs.contextTokens,
 		});
 		recordDecideCrash(failedId, registry, errorMessage, now, null, result.reason, "blind-cycle");
@@ -584,7 +591,7 @@ async function decideRetry(
 			now,
 			startAfter: advanceFrom,
 			registry,
-			jev: modelConfig.jev,
+			decisionModel: modelConfig.decisionModel,
 			contextTokens: inputs.contextTokens,
 		});
 		recordDecideCrash(
@@ -628,7 +635,7 @@ async function decideRetry(
 		now,
 		startAfter: advanceFrom,
 		registry,
-		jev: modelConfig.jev,
+		decisionModel: modelConfig.decisionModel,
 		contextTokens: inputs.contextTokens,
 	});
 	recordDecideCrash(

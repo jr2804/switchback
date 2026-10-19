@@ -15,7 +15,7 @@ timestamp wins) and then deleted.
 
 | File | Format | Role | Owned by | Location |
 |---|---|---|---|---|
-| `switchback.yaml` | YAML | Human config: fallback list, optional Jev classifier. Per-project override, agent overlay, or neutral basis. | user | see [Config layers](#config-layers-and-aggregation) |
+| `switchback.yaml` | YAML | Human config: fallback list, optional decision model. Per-project override, agent overlay, or neutral basis. | user | see [Config layers](#config-layers-and-aggregation) |
 | `blocks.json` | JSON | Runtime blocked-until map (atomic write, lazy prune). Created on first block. Migrated from the legacy `<cwd>/.pi/switchback.json` path on first read. Shared with the [OpenCode plugin](opencode.md). | switchback | state dir (`SWITCHBACK_DIR`) |
 | `crashes.json` | JSON | Runtime crash dedup store: sha256(raw) → entry. Created on first failure. User annotations become the Tier 2b cache. Shared with the [OpenCode plugin](opencode.md). | switchback | state dir (`SWITCHBACK_DIR`) |
 | `switchback.simulate.json` | JSON | Synthetic error scenarios. Now used by router tests + the opt-in live integration test; the user-facing simulate command was removed. | switchback | repo (cwd) |
@@ -188,41 +188,85 @@ With `debug: true` the reset reports itself:
 `idle-reset-threshold: idle 6h >= 5h` or
 `idle-reset-classifier: idle 8h, classifier says return to zai/glm-5.3`.
 
-## Classifier (`jev:`)
+## Decision model (`decisionModel:`)
 
-The `jev:` entry names a classifier model and (optionally) tells switchback
-to register that provider itself. With `baseUrl` present, switchback
-registers the provider through pi-ai's `typesafe-system-one` transport, so
-a local SystemOne server needs no pi provider and no `models.json` entry.
-This is the only supported way to run switchback against a local decision
-model.
+A virtual model names its classifier by **address**, exactly like a fallback:
+`provider/model-id`. There is no separate `jev:` block and no name indirection.
 
-Fields (all optional, except where noted):
+```yaml
+models:
+  - id: switchback/auto
+    name: Auto (Switchback)
+    fallbacks:
+      - zai/glm-5.3
+    decisionModel: typesafe/jev-latest
+```
 
-- `baseUrl` — presence switches to "register this endpoint ourselves".
-  `http(s)` URL.
-- `api` — wire API; only `typesafe-system-one` is accepted today. Requires
-  `baseUrl`.
-- `apiKey` — bearer token. Local servers ignore it, but the transport
-  refuses to send without one, so it defaults to the provider name.
+The address resolves one way or the other, and the difference is the presence of
+a `decisionModels:` entry for it:
 
-Omitting `baseUrl` keeps the catalog behaviour: the classifier is looked up
-in pi's catalog from `provider` + `id` only, and **pi supplies the endpoint,
-the wire API and the credential** — whatever `/login` or the provider's
-environment variable configured. Switchback stores nothing and asks for
-nothing on this path.
+- **No entry — catalog resolution.** pi looks the classifier up in its model
+  catalog and supplies the endpoint, wire API and credential (whatever `/login`
+  or the provider's environment variable configured). Switchback stores nothing
+  and asks for nothing on this path. OpenCode has no classifier catalog, so the
+  same address reports a visible no-classifier cycle there instead.
+- **Entry with `baseUrl` — a direct endpoint.** Switchback drives the endpoint
+  itself over the SystemOne wire API, in both hosts. This is the case that needs
+  a switchback-side credential.
 
-A `baseUrl` therefore marks a *direct* endpoint: one pi has no catalog entry
-for (a local Ollama server, a self-hosted gateway). Switchback registers the
-classifier itself from the config, and this is the only case that needs a
-switchback-side credential (`apiKey` / `secret:<name>`).
+### `decisionModels:` — connection details
+
+The top-level `decisionModels:` map is keyed by the same address and only
+carries connection details:
+
+```yaml
+decisionModels:
+  "ollama/tev1:0.8b":
+    baseUrl: http://localhost:11434/v1
+    apiKey: ollama
+```
+
+The key is the address, so it may contain `/` and `:` (both legal in a YAML
+plain key) — but quote it whenever the model id contains a colon: an unquoted
+`:` is a mapping break to a YAML parser, while a colon followed by a
+non-space character is just text. Quoting is always safe and is what the
+`/switchback-config` dialogue writes when an address needs it.
+
+Fields:
+
+- `baseUrl` — `http(s)` URL of the SystemOne endpoint. Optional: an entry
+  without one is catalog-only (and says so with a warning).
+- `apiKey` — bearer token. **Required with `baseUrl`**; use `local` for
+  endpoints that ignore the bearer token (Ollama), or `secret:<name>` to point
+  at the encrypted store on pi.
+
+The loader is deliberately strict about a half-configured entry and deliberately
+loud about a retired one. None of these are silent:
+
+| Config | Result |
+| ------ | ------ |
+| `baseUrl` without `apiKey` | error: `apiKey is required with baseUrl - use "local" for endpoints that ignore the bearer token` |
+| `apiKey` without `baseUrl` | error: `apiKey requires baseUrl` |
+| unknown key anywhere | warning naming the key and the file |
+| retired `jev:` block | warning: `use decisionModel: <provider>/<model-id> instead` |
+| retired `api:` field | warning: drop it — a `decisionModels` entry always speaks SystemOne |
+| list-form `decisionModels:` | warning; the list is ignored |
+| entry not referenced by any `models[].decisionModel` | warning; the entry is ignored |
+| entry with no connection details | warning: resolves from the classifier catalog only |
+
+### Direct endpoints and pi's registry
+
+With `baseUrl` present, switchback registers the provider through pi-ai's
+`typesafe-system-one` transport, so a local SystemOne server needs no pi
+provider and no `models.json` entry. This is the only supported way to run pi
+against a local decision model. The OpenCode adapter has no host registry: it
+drives the same endpoint directly through the official `@typesafe-ai/sdk`
+(same wire protocol, same URL conventions).
 
 Several decision models may share one endpoint. They are registered together in
 a single provider declaration, because pi replaces a provider's whole model list
 when an extension supplies one — a model left out of that call would be invisible
-to the registry and classify as `unresolvable`. Decision models that no virtual
-model currently references are registered too, so an endpoint stays available
-while a model list is being edited.
+to the registry and classify as `unresolvable`.
 
 The wizard refuses to write a direct endpoint under a provider id pi already
 serves chat models for: registering a classifier there would make pi replace
@@ -237,15 +281,12 @@ would replace them with the classifier alone - pick a distinct provider id
 ("<provider>-<suffix>") instead.
 ```
 
-A `decisionModels:` block whose entries are not referenced by **any**
-`models[].jev.decisionModel` is a startup error too: every entry becomes an
-orphan, the router sees no classifier, and every error is reported as
-`not-configured`. Partial references (some entries referenced, others not)
-are allowed: keep the unreferenced ones around to wire up later, the loader
-does not complain. An orphan-everything error names every unreferenced
-entry in one go.
+A `decisionModels:` entry that no virtual model references is reported with a
+warning and ignored — the entry is not registered and the router sees no
+classifier for that address. Entries can stay in the map while a model list is
+being edited.
 
-Example — pi's own catalog (no endpoint, no key in the config):
+Example — pi's own catalog (no entry, no key in the config):
 
 ```yaml
 models:
@@ -253,9 +294,7 @@ models:
     name: Auto (Switchback)
     fallbacks:
       - zai/glm-5.3
-    jev:
-      provider: typesafe
-      id: jev-latest
+    decisionModel: typesafe/jev-latest
 ```
 
 Example — a direct endpoint pi does not know (Ollama v0.35+):
@@ -266,12 +305,12 @@ models:
     name: Auto (Switchback)
     fallbacks:
       - ollama/minimax-m3
-    jev:
-      provider: ollama
-      id: tev1:0.8b
-      baseUrl: http://localhost:11434/v1
-      api: typesafe-system-one
-      apiKey: ollama
+    decisionModel: ollama/tev1:0.8b
+
+decisionModels:
+  "ollama/tev1:0.8b":
+    baseUrl: http://localhost:11434/v1
+    apiKey: local
 ```
 
 Notes:
@@ -288,9 +327,7 @@ secret instead of a literal value.
 
 ```yaml
 decisionModels:
-  - name: hosted
-    provider: my-provider
-    id: my-model
+  my-provider/my-model:
     baseUrl: https://example.invalid/v1
     apiKey: secret:my-provider-key
 ```

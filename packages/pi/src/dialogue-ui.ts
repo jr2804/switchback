@@ -12,8 +12,8 @@
  *    reverts exactly the failed action, and a model lookup,
  *  - every prompt (required, name-last, optional) in one place, so the wording
  *    of "a value is required" or "empty clears, Esc keeps" is defined once,
- *  - the two pure formatters that render a classifier for a menu
- *    (`describeJev`) or name its secret entry (`secretNameFor`).
+ *  - the two pure formatters that render a decision model for a menu
+ *    (`describeDecisionModel`) or name its secret entry (`secretNameFor`).
  *
  * It is a module of its own so the two halves can both depend on it without
  * importing each other.
@@ -25,7 +25,12 @@ import { loadLayer, readLayerConfig, saveLayer, type LoadedLayer } from "switchb
 import type { ClassifierProviderOption } from "switchback-core/classifier-catalog.ts";
 import type { ProbeResult } from "switchback-core/classifier-probe.ts";
 import type { SecretStore } from "./secrets.ts";
-import type { JevConfig, JevRef, SwitchbackConfig, SwitchbackFileConfig } from "switchback-core/types.ts";
+import type {
+	DecisionModelConfig,
+	DecisionModelId,
+	SwitchbackConfig,
+	SwitchbackFileConfig,
+} from "switchback-core/types.ts";
 
 /** The dialog surface the dialogue needs (a subset of pi's `ctx.ui`). */
 export interface DialogueUi {
@@ -56,19 +61,17 @@ export interface DialogueContext {
 	 * decision model. Supplied by the command handler, which has the model registry
 	 * and switchback's transport; absent means the test is not offered.
 	 */
-	probeClassifier?: (jev: JevConfig) => Promise<ProbeResult>;
+	probeClassifier?: (decisionModel: DecisionModelConfig) => Promise<ProbeResult>;
 }
 
 export interface DialogueSession {
 	loaded: LoadedLayer;
 	secrets: SecretStore;
 }
-/** Describe a model's classifier for menus: reference, inline, or none. */
-export function describeJev(jev: JevRef | undefined): string {
-	if (jev === undefined) return "(none - report and cycle)";
-	if ("decisionModel" in jev) return `decision model "${jev.decisionModel}"`;
-	const direct = jev.baseUrl !== undefined ? ` (direct: ${jev.baseUrl})` : "";
-	return `${jev.provider}/${jev.id}${direct}`;
+/** Describe a model's decision model for menus: its address, or none. */
+export function describeDecisionModel(decisionModel: DecisionModelId | undefined): string {
+	if (decisionModel === undefined) return "(none - report and cycle)";
+	return `decision model ${decisionModel}`;
 }
 export function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -145,29 +148,34 @@ export async function promptRequired(
 	}
 }
 /**
- * Name-last step of the decision-model wizard: the input arrives prefilled with
- * a derived default, empty input keeps the default, Esc aborts. A name already
- * in use is rejected with a warning and the prompt loops.
+ * Address-last step of the decision-model wizard: the input arrives prefilled
+ * with a derived `provider/model-id`, empty input keeps the default, Esc aborts.
+ * An address already in use, or one without a `/`, is rejected with a warning
+ * and the prompt loops.
  */
-export async function promptNameLast(
+export async function promptAddressLast(
 	ctx: DialogueContext,
 	loaded: LoadedLayer,
-	suggestedName: string,
-	knownNames: readonly string[],
+	suggestedAddress: string,
+	knownAddresses: readonly string[],
 ): Promise<string | undefined> {
 	for (;;) {
 		const value = await ctx.ui.input(
-			screenTitle(loaded, `new decision model - name (Enter keeps "${suggestedName}")`),
-			suggestedName,
+			screenTitle(loaded, `new decision model - address (Enter keeps "${suggestedAddress}")`),
+			suggestedAddress,
 		);
 		if (value === undefined) return undefined;
 		const trimmed = value.trim();
-		const name = trimmed.length === 0 ? suggestedName : trimmed;
-		if (knownNames.includes(name)) {
-			ctx.ui.notify(`a decision model named "${name}" already exists`, "warning");
+		const address = trimmed.length === 0 ? suggestedAddress : trimmed;
+		if (!address.includes("/")) {
+			ctx.ui.notify(`an address is "provider/model-id" - "${address}" has no provider`, "warning");
 			continue;
 		}
-		return name;
+		if (knownAddresses.includes(address)) {
+			ctx.ui.notify(`a decision model at "${address}" already exists`, "warning");
+			continue;
+		}
+		return address;
 	}
 }
 
@@ -188,7 +196,7 @@ export function findModel(config: SwitchbackFileConfig, id: string): SwitchbackC
 }
 /**
  * Secret names are an internal detail of the encrypted store, so the dialogue
- * derives one instead of asking: `ollama-key`, `local-jev-key`, and so on. A
+ * derives one instead of asking: `ollama-key`, `local-decisionModel-key`, and so on. A
  * second key for the same entry simply replaces the stored value under that name.
  */
 export function secretNameFor(hint: string): string {

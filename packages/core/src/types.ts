@@ -5,46 +5,57 @@
 /** A physical-model preference as "provider/id" (e.g. "zai/glm-4.7"). */
 export type ModelId = string;
 
-/** Jev classifier configuration (locked at the top of the user config). */
-export interface JevConfig {
-	/** Provider id under which the classifier model is registered (e.g. "typesafe"). */
+/**
+ * A decision-model address as "provider/model-id" - the same shape as a
+ * fallback entry, e.g. "typesafe/jev-latest" or "ollama/tev1:0.8b".
+ */
+export type DecisionModelId = string;
+
+/**
+ * A decision model after address resolution.
+ *
+ * With a `baseUrl` the host drives the SystemOne endpoint directly (both pi and
+ * OpenCode can do this). Without one the host resolves the address from its own
+ * classifier catalog - pi has one, OpenCode does not, so a catalog-only address
+ * stays an explicit "no classifier" cycle there.
+ */
+export interface DecisionModelConfig {
+	/** Provider id (e.g. "typesafe", "ollama", "openrouter"). */
 	provider: string;
-	/** Classifier model id (e.g. "jev-latest"). */
+	/** Model id within that provider (e.g. "jev-latest", "tev1:0.8b"). */
 	id: string;
-	/**
-	 * Optional direct endpoint. When set, switchback registers this classifier
-	 * itself instead of looking it up in pi's catalog - for a local System One
-	 * server such as Ollama v0.35+ (`http://localhost:11434/v1`). This is
-	 * deliberately outside pi's normal provider/model configuration: exactly one
-	 * decision model, configured here, used only by this extension.
-	 */
+	/** Direct SystemOne endpoint. When set, no catalog lookup happens. */
 	baseUrl?: string;
-	/** Wire API for the direct endpoint. Only "typesafe-system-one" is supported today. */
-	api?: string;
-	/** Bearer token for the direct endpoint, or `secret:<name>` referencing the encrypted store. */
+	/** Bearer token for the direct endpoint, or `secret:<name>` referencing a secret store. */
 	apiKey?: string;
 }
 
-/** A named, reusable decision-model entry (`decisionModels:` in the config). */
-export interface DecisionModelEntry extends JevConfig {
-	/** Unique name `models[].jev.decisionModel` references. */
-	name: string;
+/**
+ * Connection details for one decision-model address - a `decisionModels:` map
+ * value. `baseUrl` and `apiKey` come as a pair: a direct endpoint needs a bearer
+ * token even when the endpoint ignores it (`apiKey: local`).
+ */
+export interface DecisionModelEntry {
+	/** Direct SystemOne endpoint (http/https). */
+	baseUrl?: string;
+	/** Bearer token, or `secret:<name>`. Required with `baseUrl`. */
+	apiKey?: string;
 }
 
-/** A model's classifier: inline config, or a `decisionModel:` reference by name. */
-export type JevRef = JevConfig | { decisionModel: string };
-
 /**
- * A config entry after reference resolution: `jev` is always the inline form.
- * This is what the router and the extension consume; the reference form exists
- * only in the YAML file and the config editor.
+ * A config entry after address resolution: `decisionModel` is always the
+ * provider/id descriptor. This is what the router and the extension consume; the
+ * address form exists only in the YAML file and the config editor.
  */
-export type ResolvedSwitchbackConfig = Omit<SwitchbackConfig, "jev"> & { jev?: JevConfig };
+export type ResolvedSwitchbackConfig = Omit<SwitchbackConfig, "decisionModel"> & {
+	decisionModel?: DecisionModelConfig;
+};
 
-/** A config file after aggregation and reference resolution. */
+/** A config file after aggregation and address resolution. */
 export interface ResolvedSwitchbackFileConfig {
 	models: ResolvedSwitchbackConfig[];
-	decisionModels?: DecisionModelEntry[];
+	/** Resolved `decisionModels:` entries, keyed by their address. */
+	decisionModels?: Record<DecisionModelId, DecisionModelConfig>;
 	debug?: boolean;
 }
 
@@ -63,8 +74,12 @@ export interface SwitchbackConfig {
 	name: string;
 	/** Ordered preference of physical models ("provider/id"). First entry is the preferred model. */
 	fallbacks: ModelId[];
-	/** Inline classifier config or a `decisionModel:` name reference. Absent: report and blind-cycle. */
-	jev?: JevRef;
+	/**
+	 * Decision model as "provider/model-id". Connection details for direct
+	 * endpoints live in the top-level `decisionModels:` map under the same
+	 * address. Absent: report and blind-cycle.
+	 */
+	decisionModel?: DecisionModelId;
 	/** Return to the head of the list after this much idle time (default `never`). */
 	idleReset?: IdleResetConfig;
 }
@@ -72,8 +87,12 @@ export interface SwitchbackConfig {
 /** Top-level switchback configuration. */
 export interface SwitchbackFileConfig {
 	models: SwitchbackConfig[];
-	/** Named, reusable decision models; `models[].jev.decisionModel` references these. */
-	decisionModels?: DecisionModelEntry[];
+	/**
+	 * Connection details for decision-model addresses that need a direct
+	 * SystemOne endpoint, keyed by the same "provider/model-id" address a chain
+	 * names in `decisionModel:`.
+	 */
+	decisionModels?: Record<DecisionModelId, DecisionModelEntry>;
 	/**
 	 * Emit one diagnostics notification per model switch (the classifier's verdict
 	 * and how the requested reasoning category resolved against the activated

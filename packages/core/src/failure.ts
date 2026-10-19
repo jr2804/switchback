@@ -29,7 +29,7 @@ import { classifyError, PROMPT_VERSION, type NoClassifierReason } from "./classi
 import { recordCrash, type CrashAction } from "./crashes.ts";
 import type { AvailabilityPort, ClassifierPort, ModelRegistryPort, NotifyPort, RouterRegistryPort } from "./ports.ts";
 import { blockModel, isBlocked, unblockModel } from "./state.ts";
-import type { BlockedMap, ClassifiedError, JevConfig, ModelId } from "./types.ts";
+import type { BlockedMap, ClassifiedError, DecisionModelConfig, ModelId } from "./types.ts";
 
 /** Maximum number of transient retries on the same model before the router moves on. */
 export const MAX_TRANSIENT_RETRIES = 1;
@@ -112,14 +112,14 @@ export async function assessFailure(opts: {
 	failedId: string | undefined;
 	errorMessage: string;
 	stopReason: StopReason | undefined;
-	jev: JevConfig | undefined;
+	decisionModel: DecisionModelConfig | undefined;
 	registry: ClassifierPort;
 	now: number;
 	blocked: BlockedMap;
 	transientRetries: number;
 }): Promise<AssessedFailure> {
-	const { failedId, errorMessage, stopReason, jev, registry, now, blocked } = opts;
-	const result = await classifyError(errorMessage, registry, jev, now, stopReason);
+	const { failedId, errorMessage, stopReason, decisionModel, registry, now, blocked } = opts;
+	const result = await classifyError(errorMessage, registry, decisionModel, now, stopReason);
 	if (result.kind === "no-classifier") {
 		// The universal cycle: advance, but never fabricate a class and never write a
 		// block - there is nothing to justify one with.
@@ -186,7 +186,7 @@ export async function observeUnretriedFailure(opts: {
 	failedId: string | undefined;
 	errorMessage: string;
 	stopReason: StopReason | undefined;
-	jev: JevConfig | undefined;
+	decisionModel: DecisionModelConfig | undefined;
 	registry: RouterRegistryPort;
 	now: number;
 	blocked: BlockedMap;
@@ -197,7 +197,7 @@ export async function observeUnretriedFailure(opts: {
 		failedId,
 		errorMessage,
 		stopReason: opts.stopReason,
-		jev: opts.jev,
+		decisionModel: opts.decisionModel,
 		registry: opts.registry,
 		now,
 		blocked: opts.blocked,

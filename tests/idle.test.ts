@@ -123,19 +123,24 @@ describe("idle — decisions", () => {
 		const absent = await decideIdleReset({
 			...base,
 			registry: classifierAbsent(),
-			jev: undefined,
+			decisionModel: undefined,
 			option: undefined,
 		});
 		expect(absent.reset).toBe(false);
 		expect(absent.source).toBe("none");
-		const never = await decideIdleReset({ ...base, registry: classifierAbsent(), jev: undefined, option: "never" });
+		const never = await decideIdleReset({
+			...base,
+			registry: classifierAbsent(),
+			decisionModel: undefined,
+			option: "never",
+		});
 		expect(never.reset).toBe(false);
 	});
 
 	it("does nothing when the conversation carries no usable timestamp", async () => {
 		const decision = await decideIdleReset({
 			registry: classifierAbsent(),
-			jev: undefined,
+			decisionModel: undefined,
 			option: "5h",
 			messages: [],
 			now: T0 + 10 * HOUR,
@@ -150,7 +155,7 @@ describe("idle — decisions", () => {
 	it("resets at or above a fixed threshold and stays below it", async () => {
 		const at = await decideIdleReset({
 			registry: classifierAbsent(),
-			jev: undefined,
+			decisionModel: undefined,
 			option: "5h",
 			messages: [messageAt(T0)],
 			now: T0 + 5 * HOUR,
@@ -164,7 +169,7 @@ describe("idle — decisions", () => {
 
 		const below = await decideIdleReset({
 			registry: classifierAbsent(),
-			jev: undefined,
+			decisionModel: undefined,
 			option: "5h",
 			messages: [messageAt(T0)],
 			now: T0 + 5 * HOUR - MINUTE,
@@ -178,7 +183,7 @@ describe("idle — decisions", () => {
 	it("does not ask the classifier below the floor", async () => {
 		const decision = await decideIdleReset({
 			registry: classifierAnswering("return_to_initial"),
-			jev: { provider: "typesafe", id: "jev-latest" },
+			decisionModel: { provider: "typesafe", id: "jev-latest" },
 			option: "classifier",
 			messages: [messageAt(T0)],
 			now: T0 + IDLE_CLASSIFIER_FLOOR_MS - MINUTE,
@@ -193,7 +198,7 @@ describe("idle — decisions", () => {
 	it("follows the classifier's return answer above the floor", async () => {
 		const decision = await decideIdleReset({
 			registry: classifierAnswering("return_to_initial"),
-			jev: { provider: "typesafe", id: "jev-latest" },
+			decisionModel: { provider: "typesafe", id: "jev-latest" },
 			option: "classifier",
 			messages: [messageAt(T0)],
 			now: T0 + 8 * HOUR,
@@ -210,7 +215,7 @@ describe("idle — decisions", () => {
 	it("keeps the current model on a keep answer", async () => {
 		const decision = await decideIdleReset({
 			registry: classifierAnswering("keep_current"),
-			jev: { provider: "typesafe", id: "jev-latest" },
+			decisionModel: { provider: "typesafe", id: "jev-latest" },
 			option: "classifier",
 			messages: [messageAt(T0)],
 			now: T0 + 8 * HOUR,
@@ -224,7 +229,7 @@ describe("idle — decisions", () => {
 
 	it("keeps the current model when the classifier is unavailable or unreadable", async () => {
 		const base = {
-			jev: { provider: "typesafe", id: "jev-latest" },
+			decisionModel: { provider: "typesafe", id: "jev-latest" },
 			option: "classifier" as const,
 			messages: [messageAt(T0)],
 			now: T0 + 8 * HOUR,
@@ -238,7 +243,11 @@ describe("idle — decisions", () => {
 		expect(absent.noClassifierReason).toBe("unresolvable");
 
 		// No classifier configured at all (the model has no `jev:`).
-		const notConfigured = await decideIdleReset({ ...base, jev: undefined, registry: classifierAbsent() });
+		const notConfigured = await decideIdleReset({
+			...base,
+			decisionModel: undefined,
+			registry: classifierAbsent(),
+		});
 		expect(notConfigured.reset).toBe(false);
 		expect(notConfigured.noClassifierReason).toBe("not-configured");
 
@@ -250,7 +259,7 @@ describe("idle — decisions", () => {
 	it("does not reset to an initial model when none is usable", async () => {
 		const decision = await decideIdleReset({
 			registry: classifierAnswering("return_to_initial"),
-			jev: { provider: "typesafe", id: "jev-latest" },
+			decisionModel: { provider: "typesafe", id: "jev-latest" },
 			option: "classifier",
 			messages: [messageAt(T0)],
 			now: T0 + 8 * HOUR,

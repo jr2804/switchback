@@ -8,8 +8,8 @@
  * one (its schema has no classifier model type). So switchback declares the
  * endpoint itself, from its own config.
  *
- * `jev.baseUrl` in `switchback.yaml` is the switch. When present, switchback
- * registers `jev.provider` with the classifier model(s) for that endpoint and
+ * `decisionModel.baseUrl` in `switchback.yaml` is the switch. When present, switchback
+ * registers `decisionModel.provider` with the classifier model(s) for that endpoint and
  * its own System One transport (packages/core/src/systemone.ts), so the normal
  * `ctx.modelRegistry.classify()` path - block map, Tier 2b annotation cache,
  * reset scoring - works unchanged.
@@ -39,7 +39,7 @@
 import type { ClassifierApi, ClassifierModel } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { SYSTEM_ONE_API, systemOneClassifier } from "switchback-core/systemone.ts";
-import type { JevConfig } from "switchback-core/types.ts";
+import type { DecisionModelConfig } from "switchback-core/types.ts";
 
 /** The only System One wire protocol switchback drives directly today. */
 export const LOCAL_CLASSIFIER_API = SYSTEM_ONE_API;
@@ -52,8 +52,8 @@ export const LOCAL_CLASSIFIER_API = SYSTEM_ONE_API;
 const LOCAL_CLASSIFIER_CONTEXT_WINDOW = 32_768;
 
 /** True when the classifier block names its own endpoint instead of a pi catalog entry. */
-export function isLocalClassifier(jev: JevConfig | undefined): boolean {
-	return jev?.baseUrl !== undefined;
+export function isLocalClassifier(decisionModel: DecisionModelConfig | undefined): boolean {
+	return decisionModel?.baseUrl !== undefined;
 }
 
 /** One direct endpoint and every classifier model that lives on it. */
@@ -68,7 +68,7 @@ export interface LocalClassifierEndpoint {
 	 */
 	apiKey: string;
 	/** Distinct classifier models to register under this provider. */
-	models: readonly JevConfig[];
+	models: readonly DecisionModelConfig[];
 }
 
 /**
@@ -80,14 +80,21 @@ export interface LocalClassifierEndpoint {
  * model id collapses to one entry - the same classifier is often named by
  * several virtual models, and by a `decisionModels` entry as well.
  */
-export function groupLocalEndpoints(jevs: readonly JevConfig[]): LocalClassifierEndpoint[] {
-	const byEndpoint = new Map<string, { provider: string; baseUrl: string; apiKey?: string; models: JevConfig[] }>();
-	for (const jev of jevs) {
-		if (jev.baseUrl === undefined) continue;
-		const key = `${jev.provider}|${jev.baseUrl}`;
-		const group = byEndpoint.get(key) ?? { provider: jev.provider, baseUrl: jev.baseUrl, models: [] };
-		if (group.apiKey === undefined && jev.apiKey !== undefined) group.apiKey = jev.apiKey;
-		if (!group.models.some((model) => model.id === jev.id)) group.models.push(jev);
+export function groupLocalEndpoints(jevs: readonly DecisionModelConfig[]): LocalClassifierEndpoint[] {
+	const byEndpoint = new Map<
+		string,
+		{ provider: string; baseUrl: string; apiKey?: string; models: DecisionModelConfig[] }
+	>();
+	for (const decisionModel of jevs) {
+		if (decisionModel.baseUrl === undefined) continue;
+		const key = `${decisionModel.provider}|${decisionModel.baseUrl}`;
+		const group = byEndpoint.get(key) ?? {
+			provider: decisionModel.provider,
+			baseUrl: decisionModel.baseUrl,
+			models: [],
+		};
+		if (group.apiKey === undefined && decisionModel.apiKey !== undefined) group.apiKey = decisionModel.apiKey;
+		if (!group.models.some((model) => model.id === decisionModel.id)) group.models.push(decisionModel);
 		byEndpoint.set(key, group);
 	}
 	return [...byEndpoint.values()].map((group) => ({
@@ -105,10 +112,10 @@ export function groupLocalEndpoints(jevs: readonly JevConfig[]): LocalClassifier
  */
 export function registerLocalClassifier(pi: ExtensionAPI, endpoint: LocalClassifierEndpoint): void {
 	const { provider, baseUrl, apiKey } = endpoint;
-	const models: ClassifierModel<ClassifierApi>[] = endpoint.models.map((jev) => ({
+	const models: ClassifierModel<ClassifierApi>[] = endpoint.models.map((decisionModel) => ({
 		type: "classifier",
-		id: jev.id,
-		name: `${jev.id} (switchback local classifier)`,
+		id: decisionModel.id,
+		name: `${decisionModel.id} (switchback local classifier)`,
 		api: LOCAL_CLASSIFIER_API,
 		provider,
 		baseUrl,

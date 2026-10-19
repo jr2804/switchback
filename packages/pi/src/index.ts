@@ -10,7 +10,7 @@
 export * from "switchback-core";
 export { buildRoute, ConfigInvalidError } from "./build-route.ts";
 export { runDialogue, layerOptionLabel } from "./dialogue.ts";
-export { describeJev } from "./dialogue-ui.ts";
+export { describeDecisionModel } from "./dialogue-ui.ts";
 export { createModelPicker, buildModelItems, MODEL_PICKER_MAX_VISIBLE } from "./model-picker.ts";
 export type { ModelPickerSource, PickerColor, PickerKeybindings, PickerTheme, PickerTui } from "./model-picker.ts";
 export type { DialogueContext, DialogueUi } from "./dialogue-ui.ts";

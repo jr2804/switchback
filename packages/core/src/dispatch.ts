@@ -69,7 +69,7 @@ export async function resolveDispatchLevel(
 	const choice = await chooseThinkingLevel({
 		registry,
 		support: inputs.support,
-		jev: modelConfig.jev,
+		decisionModel: modelConfig.decisionModel,
 		model,
 		requested,
 		context,

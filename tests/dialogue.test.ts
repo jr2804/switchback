@@ -41,10 +41,15 @@ import {
 	type LoadedLayer,
 } from "switchback-core/config-editor.ts";
 import { layerOptionLabel, runDialogue } from "pi-switchback/dialogue.ts";
-import { describeJev, secretNameFor, type DialogueContext, type DialogueUi } from "pi-switchback/dialogue-ui.ts";
+import {
+	describeDecisionModel,
+	secretNameFor,
+	type DialogueContext,
+	type DialogueUi,
+} from "pi-switchback/dialogue-ui.ts";
 import type { ClassifierProviderOption } from "switchback-core/classifier-catalog.ts";
 import type { ProbeResult } from "switchback-core/classifier-probe.ts";
-import type { JevConfig } from "switchback-core/types.ts";
+import type { DecisionModelConfig } from "switchback-core/types.ts";
 import { ConfigError } from "switchback-core/config.ts";
 import type { SecretStore } from "pi-switchback/secrets.ts";
 
@@ -57,15 +62,12 @@ models:
     fallbacks:
       - zai/glm-5.3     # first choice
       - minimax/MiniMax-M3
-    jev:
-      decisionModel: local
+    decisionModel: ollama/tev1
 decisionModels:
   # local ollama classifier
-  - name: local
-    provider: ollama
-    id: tev1
+  ollama/tev1:
     baseUrl: http://localhost:11434/v1
-    api: typesafe-system-one
+    apiKey: local
 debug: false
 `;
 
@@ -160,7 +162,6 @@ class ScriptedUi implements DialogueUi {
 		if (this.selectQueue.length === 0) throw new Error("script ran dry: unexpected select call");
 		return this.selectQueue.shift();
 	}
-
 	async input(_title: string, _placeholder?: string): Promise<string | undefined> {
 		if (this.inputQueue.length === 0) throw new Error("script ran dry: unexpected input call");
 		return this.inputQueue.shift();
@@ -255,7 +256,7 @@ describe("config-editor: comment-preserving round-trip", () => {
 		expect(config.models[0]?.fallbacks).toEqual(["minimax/MiniMax-M3", "zai/glm-5.3"]);
 		// The ref form survives: bare id stays bare, decisionModel reference intact.
 		expect(text).toContain("id: auto");
-		expect(config.models[0]?.jev).toEqual({ decisionModel: "local" });
+		expect(config.models[0]?.decisionModel).toEqual("ollama/tev1");
 	});
 
 	it("finds a model stored under a bare id by its normalized form", () => {
@@ -294,22 +295,24 @@ describe("config-editor: the loader's gate owns every rule", () => {
 		expect(readText()).not.toContain("noprovider");
 	});
 
-	it("rejects a dangling decisionModel reference at save time via resolveJevConfig", () => {
+	it("sets a decision model by address and writes the scalar form", () => {
 		seed(SAMPLE);
 		const loaded = load();
-		setDecisionModel(loaded, "switchback/auto", { decisionModel: "missing" });
-		expect(() => saveLayer(loaded)).toThrow(
-			/not referenced by any model\.jev\.decisionModel|is not defined in decisionModels/,
-		);
+		setDecisionModel(loaded, "switchback/auto", "typesafe/jev-latest");
+		saveLayer(loaded);
+		expect(readLayerConfig(load()).models[0]?.decisionModel).toBe("typesafe/jev-latest");
 	});
 
-	it("rejects removing a still-referenced decision model at save time", () => {
+	it("removing a decision model leaves the referencing chain on catalog resolution", () => {
 		seed(SAMPLE);
 		const loaded = load();
-		removeDecisionModel(loaded, "local");
-		expect(() => saveLayer(loaded)).toThrow(
-			/not referenced by any model\.jev\.decisionModel|is not defined in decisionModels/,
-		);
+		removeDecisionModel(loaded, "ollama/tev1");
+		saveLayer(loaded);
+		const config = readLayerConfig(load());
+		expect(config.decisionModels).toBeUndefined();
+		// The chain keeps the address: without an entry, pi resolves it from its own
+		// classifier catalog. Clearing it silently would hide that choice.
+		expect(config.models[0]?.decisionModel).toBe("ollama/tev1");
 	});
 
 	it("reads an invalid file through the loader's message and refuses to open it", () => {
@@ -325,11 +328,8 @@ describe("config-editor: decision models and debug", () => {
 		seed(SAMPLE);
 		const loaded = load();
 		addDecisionModel(loaded, {
-			name: "k2",
-			provider: "ollama",
-			id: "tev2",
+			address: "ollama/tev2",
 			baseUrl: "http://localhost:11434/v1",
-			api: "typesafe-system-one",
 			apiKeySecretName: "svc-key",
 		});
 		saveLayer(loaded);
@@ -340,11 +340,12 @@ describe("config-editor: decision models and debug", () => {
 	it("renaming a decision model rewrites the references in the same transaction", () => {
 		seed(SAMPLE);
 		const loaded = load();
-		renameDecisionModel(loaded, "local", "renamed");
+		renameDecisionModel(loaded, "ollama/tev1", "ollama/tev2");
 		saveLayer(loaded);
 		const config = readLayerConfig(load());
-		expect(config.decisionModels?.[0]?.name).toBe("renamed");
-		expect(config.models[0]?.jev).toEqual({ decisionModel: "renamed" });
+		expect(config.decisionModels?.["ollama/tev2"]).toBeDefined();
+		expect(config.decisionModels?.["ollama/tev1"]).toBeUndefined();
+		expect(config.models[0]?.decisionModel).toBe("ollama/tev2");
 	});
 
 	it("toggles the debug flag", () => {
@@ -477,23 +478,23 @@ describe("dialogue", () => {
 				"Back",
 				"Done",
 			],
-			// Wizard order (with no catalog context): provider, baseUrl, modelId,
-			// apiKey value, name (LAST, prefilled).
+			// Wizard order (a declared endpoint): provider, baseUrl, modelId, the apiKey
+			// value, then the address LAST (prefilled provider/modelId).
 			input: [
 				"ollama",
 				"http://localhost:11434/v1",
 				"tev2",
 				"sk-switchback-TESTVALUE-42-not-a-real-key",
-				"second",
+				"ollama/tev2",
 			],
 		});
 		await run(ui, store);
 		expect(store.setCalls).toEqual([
 			// The store name is derived from the decision model, never asked for.
-			{ name: "second-key", value: "sk-switchback-TESTVALUE-42-not-a-real-key" },
+			{ name: "ollama-tev2-key", value: "sk-switchback-TESTVALUE-42-not-a-real-key" },
 		]);
 		const text = readText();
-		expect(text).toContain("secret:second-key");
+		expect(text).toContain("secret:ollama-tev2-key");
 		// The literal value must be absent from the config file (tests/AGENTS.md rule).
 		expect(text).not.toContain("sk-switchback-TESTVALUE-42-not-a-real-key");
 	});
@@ -504,7 +505,7 @@ describe("dialogue", () => {
 			select: [
 				layerOptionLabel("global"),
 				"Decision models (1)...",
-				"local - ollama/tev1",
+				"ollama/tev1 - direct: http://localhost:11434/v1",
 				"Delete",
 				undefined,
 				undefined,
@@ -512,8 +513,8 @@ describe("dialogue", () => {
 			],
 		});
 		await run(ui);
-		expect(ui.notifications.some((n) => n.message.includes("still referenced"))).toBe(true);
-		expect(readLayerConfig(load()).decisionModels?.[0]?.name).toBe("local");
+		expect(ui.notifications.some((n) => n.message.includes("still named by"))).toBe(true);
+		expect(readLayerConfig(load()).decisionModels?.["ollama/tev1"]).toBeDefined();
 	});
 
 	it("removes a model after confirm and keeps it on cancel", async () => {
@@ -682,12 +683,13 @@ describe("dialogue: catalog-assisted setup", () => {
 	it("keeps a catalog provider catalog-resolved: no baseUrl, no api, no secret", async () => {
 		seed(SAMPLE);
 		const store = new FakeSecretStore();
-		const probed: JevConfig[] = [];
+		const probed: DecisionModelConfig[] = [];
 		const ui = new ScriptedUi({
 			// Wizard order: provider (from the registry), baseUrl (Enter = keep pi's
 			// resolution), modelId (from the provider's own classifier list), then the
-			// name LAST. There is no apiKey step: pi holds the credential, so
-			// switchback neither asks for one nor writes a secret reference.
+			// address LAST (prefilled with provider/modelId). There is no apiKey step:
+			// pi holds the credential, so switchback neither asks for one nor writes a
+			// secret reference.
 			select: [
 				layerOptionLabel("global"),
 				"Decision models (1)...",
@@ -697,7 +699,7 @@ describe("dialogue: catalog-assisted setup", () => {
 				"Back",
 				"Done",
 			],
-			input: ["", "dm2"],
+			input: ["", ""],
 			confirm: [true],
 		});
 		await run(ui, store, {
@@ -707,19 +709,16 @@ describe("dialogue: catalog-assisted setup", () => {
 				return probeResult(true);
 			},
 		});
-		const entry = readLayerConfig(load()).decisionModels?.find((d) => d.name === "dm2");
-		expect(entry?.provider).toBe("typesafe");
-		expect(entry?.id).toBe("jev-latest");
-		// pi resolves the endpoint, the wire api and the credential from its own
-		// catalog (whatever /login configured), so the config carries none of them.
+		const entry = readLayerConfig(load()).decisionModels?.["typesafe/jev-latest"];
+		// pi resolves the endpoint and the credential from its own catalog (whatever
+		// /login configured), so the entry stays empty.
 		expect(entry?.baseUrl).toBeUndefined();
-		expect(entry?.api).toBeUndefined();
 		expect(entry?.apiKey).toBeUndefined();
 		expect(store.setCalls).toEqual([]);
 		// The capability test runs with whatever pi resolves for the provider (there
 		// is no switchback-side key to resolve), and reports the verdict.
 		expect(probed).toHaveLength(1);
-		expect(probed[0]?.apiKey).toBeUndefined();
+		expect(probed[0]).toEqual({ provider: "typesafe", id: "jev-latest" });
 		expect(ui.notifications.some((n) => n.message.includes("choice  ✓ sunny"))).toBe(true);
 	});
 
@@ -736,7 +735,7 @@ describe("dialogue: catalog-assisted setup", () => {
 		try {
 			const ui = new ScriptedUi({
 				// provider ("Other"), provider id, baseUrl, modelId (live list),
-				// apiKey action, apiKey value, name LAST.
+				// apiKey action, apiKey value, address LAST (prefilled).
 				select: [
 					layerOptionLabel("global"),
 					"Decision models (1)...",
@@ -751,17 +750,15 @@ describe("dialogue: catalog-assisted setup", () => {
 					"local-ollama",
 					"http://localhost:11434/v1",
 					"sk-switchback-TESTVALUE-42-not-a-real-key",
-					"dm3",
+					"local-ollama/tev1:0.8b",
 				],
 			});
 			await run(ui, store, { classifierProviders: [CATALOG_PROVIDER] });
-			const entry = readLayerConfig(load()).decisionModels?.find((d) => d.name === "dm3");
-			expect(entry?.provider).toBe("local-ollama");
-			expect(entry?.id).toBe("tev1:0.8b");
+			const entry = readLayerConfig(load()).decisionModels?.["local-ollama/tev1:0.8b"];
 			expect(entry?.baseUrl).toBe("http://localhost:11434/v1");
-			// switchback supports one direct wire protocol, so it is written, not asked.
-			expect(entry?.api).toBe("typesafe-system-one");
-			expect(entry?.apiKey).toBe(`secret:${secretNameFor("dm3")}`);
+			// switchback speaks one wire protocol, so the entry carries only the
+			// transport and the credential reference.
+			expect(entry?.apiKey).toBe(`secret:${secretNameFor("local-ollama/tev1:0.8b")}`);
 		} finally {
 			vi.unstubAllGlobals();
 		}
@@ -783,23 +780,19 @@ describe("dialogue: catalog-assisted setup", () => {
 					"Back",
 					"Done",
 				],
-				input: ["", "dm4"],
+				input: ["", "typesafe/jev-1.13"],
 			}),
 			undefined,
 			{ classifierProviders: [CATALOG_PROVIDER] },
 		);
-		const entry = readLayerConfig(load()).decisionModels?.find((d) => d.name === "dm4");
-		expect(entry?.id).toBe("jev-1.13");
+		const entry = readLayerConfig(load()).decisionModels?.["typesafe/jev-1.13"];
 		expect(entry?.baseUrl).toBeUndefined();
 	});
 });
 
-describe("describeJev", () => {
-	it("formats none, reference and inline forms", () => {
-		expect(describeJev(undefined)).toBe("(none - report and cycle)");
-		expect(describeJev({ decisionModel: "x" })).toBe('decision model "x"');
-		expect(describeJev({ provider: "ollama", id: "tev1", baseUrl: "http://localhost:11434/v1" })).toBe(
-			"ollama/tev1 (direct: http://localhost:11434/v1)",
-		);
+describe("describeDecisionModel", () => {
+	it("formats none and an address", () => {
+		expect(describeDecisionModel(undefined)).toBe("(none - report and cycle)");
+		expect(describeDecisionModel("typesafe/jev-latest")).toBe("decision model typesafe/jev-latest");
 	});
 });

@@ -8,7 +8,7 @@
  *  1. OpenCode classifies a failure and proposes its own retry policy; this
  *     hook runs after that decision, before any retry is scheduled.
  *  2. The plugin classifies the error with the shared config's classifier
- *     (switchback.yaml's `jev`) and, per the verdict, updates the shared
+ *     (switchback.yaml's `decisionModel`) and, per the verdict, updates the shared
  *     account-scoped block state.
  *  3. When the failing model belongs to a configured fallback chain, the
  *     session is switched to the next effective fallback via
@@ -114,20 +114,20 @@ async function handleRetry(ctx: Plugin.Context, input: RetryPayload): Promise<vo
 	if (chain === undefined) return; // This model answers to no configured chain; OpenCode's policy stands.
 
 	const availability = catalogPort(catalog);
-	const jev = chain.jev;
+	const decisionModel = chain.decisionModel;
 	const registry: RouterRegistryPort = {
 		...availability,
 		...systemOneClassifierPort({
-			baseUrl: jev?.baseUrl,
-			...(jev?.apiKey !== undefined ? { apiKey: jev.apiKey } : {}),
-			identity: { provider: jev?.provider ?? "", id: jev?.id ?? "" },
+			baseUrl: decisionModel?.baseUrl,
+			...(decisionModel?.apiKey !== undefined ? { apiKey: decisionModel.apiKey } : {}),
+			identity: { provider: decisionModel?.provider ?? "", id: decisionModel?.id ?? "" },
 		}),
 	};
 	const assessed = await assessFailure({
 		failedId: failing,
 		errorMessage: rawMessage,
 		stopReason: undefined,
-		jev,
+		decisionModel,
 		registry,
 		now,
 		blocked: readBlockedMap(now),

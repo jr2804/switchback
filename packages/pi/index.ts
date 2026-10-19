@@ -48,7 +48,7 @@ import { getPinnedModel, isBlocked, readBlockedMap, readPinMap, setPinnedModel }
 import { annotateCrash, hashSample, isValidAnnotationClass, readCrashMap, shortHash } from "switchback-core/crashes.ts";
 import type {
 	ErrorClass,
-	JevConfig,
+	DecisionModelConfig,
 	ModelId,
 	ResolvedSwitchbackConfig,
 	ResolvedSwitchbackFileConfig,
@@ -66,7 +66,7 @@ export default function (pi: ExtensionAPI) {
 	// SWITCHBACK_DEBUG environment variable for quick toggling without a config edit.
 	const debug = debugFlag(process.env["SWITCHBACK_DEBUG"]) ?? initial.config.debug ?? false;
 
-	// A classifier that names its own endpoint (jev.baseUrl) is registered here, so
+	// A classifier that names its own endpoint (decisionModel.baseUrl) is registered here, so
 	// switchback can classify through a local System One server (e.g. Ollama
 	// v0.35+) without a pi provider for it. No-op for catalog classifiers. Every
 	// direct endpoint is registered **once**, carrying all the classifier models
@@ -75,8 +75,10 @@ export default function (pi: ExtensionAPI) {
 	// `findOfType`. Decision models count even when no virtual model references
 	// them, so an endpoint stays registered while a model list is being edited.
 	for (const endpoint of groupLocalEndpoints([
-		...modelConfigs.flatMap((modelConfig) => (modelConfig.jev === undefined ? [] : [modelConfig.jev])),
-		...(initial.config.decisionModels ?? []),
+		...modelConfigs.flatMap((modelConfig) =>
+			modelConfig.decisionModel === undefined ? [] : [modelConfig.decisionModel],
+		),
+		...Object.values(initial.config.decisionModels ?? {}),
 	])) {
 		registerLocalClassifier(pi, endpoint);
 	}
@@ -184,7 +186,7 @@ export default function (pi: ExtensionAPI) {
 						failedId: `${message.provider}/${message.model}`,
 						errorMessage,
 						stopReason: message.stopReason,
-						jev: modelConfig.jev,
+						decisionModel: modelConfig.decisionModel,
 						registry: ctx.modelRegistry,
 						now,
 						blocked: readBlockedMap(now),
@@ -245,10 +247,10 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	// `/switchback-config` — interactive editor for the switchback.yaml layers:
+	// `/switchback-config` - interactive editor for the switchback.yaml layers:
 	// virtual models, fallback order, decision models, encrypted API-key secrets
 	// and the debug flag. Each action is validated through the loader's single
-	// gate (validateFileConfig + resolveJevConfig) and saved immediately, so the
+	// gate (`validateFileConfig`) and saved immediately, so the
 	// file on disk always holds the last good config; a failed action reverts.
 	pi.registerCommand("switchback-config", {
 		description: "Interactively configure virtual models, fallbacks, decision models, API keys and debug",
@@ -266,7 +268,7 @@ export default function (pi: ExtensionAPI) {
 							}
 						: {}),
 					classifierProviders: classifierProvidersFrom(ctx.modelRegistry),
-					probeClassifier: (jev: JevConfig) => probeClassifierConfig(ctx, jev),
+					probeClassifier: (decisionModel: DecisionModelConfig) => probeClassifierConfig(ctx, decisionModel),
 				},
 				secrets,
 			);
@@ -527,23 +529,23 @@ function classifierProvidersFrom(registry: ExtensionContext["modelRegistry"]) {
  * through switchback's own transport (the registered provider only appears after
  * a restart), a catalog classifier through pi's registry.
  */
-async function probeClassifierConfig(ctx: ExtensionContext, jev: JevConfig): Promise<ProbeResult> {
-	if (jev.baseUrl !== undefined) {
+async function probeClassifierConfig(ctx: ExtensionContext, decisionModel: DecisionModelConfig): Promise<ProbeResult> {
+	if (decisionModel.baseUrl !== undefined) {
 		return probeLocalClassifier({
-			baseUrl: jev.baseUrl,
-			apiKey: jev.apiKey ?? jev.provider,
-			provider: jev.provider,
-			id: jev.id,
+			baseUrl: decisionModel.baseUrl,
+			apiKey: decisionModel.apiKey ?? decisionModel.provider,
+			provider: decisionModel.provider,
+			id: decisionModel.id,
 		});
 	}
-	const handle = ctx.modelRegistry.findOfType("classifier", jev.provider, jev.id);
+	const handle = ctx.modelRegistry.findOfType("classifier", decisionModel.provider, decisionModel.id);
 	if (handle === undefined) {
 		return {
 			ok: false,
 			answers: {},
 			missing: ["choice", "score", "noul"],
 			ms: 0,
-			error: `pi has no classifier "${jev.provider}/${jev.id}" in its catalog`,
+			error: `pi has no classifier "${decisionModel.provider}/${decisionModel.id}" in its catalog`,
 		};
 	}
 	const started = Date.now();

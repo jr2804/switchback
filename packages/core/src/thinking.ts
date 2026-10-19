@@ -116,7 +116,7 @@ export interface ThinkingLevelChoice {
 export async function chooseThinkingLevel(opts: {
 	registry: ClassifierPort;
 	support: ThinkingSupportPort;
-	jev: { provider: string; id: string } | undefined;
+	decisionModel: { provider: string; id: string } | undefined;
 	model: HostModel;
 	requested: ThinkingLevelId;
 	context: ThinkingLevelContext;
@@ -144,7 +144,7 @@ export async function chooseThinkingLevel(opts: {
 		failover: opts.context.failover ? "yes" : "no",
 	};
 
-	const call = await callClassifier(opts.registry, opts.jev, {
+	const call = await callClassifier(opts.registry, opts.decisionModel, {
 		state,
 		questions: { level: criteria },
 	});

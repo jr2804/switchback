@@ -11,10 +11,9 @@
  * Validation lives in exactly one place. Every mutation is structural only
  * (locate a node, set/splice/delete); `saveLayer()` re-validates the whole
  * document through the exported `validateFileConfig()` - the same gate the
- * loader applies - and then re-checks every `jev.decisionModel` reference
- * through the exported `resolveJevConfig()`. The editor therefore carries
- * no rule set of its own: a save either produces exactly what `loadConfig()`
- * would accept, or throws the loader's own ConfigError messages.
+ * loader applies. The editor therefore carries no rule set of its own: a save
+ * either produces exactly what `loadConfig()` would accept, or throws the
+ * loader's own ConfigError messages.
  *
  * Secrets: API keys never enter the file as literals. The decision-model
  * operations accept a secret NAME (`apiKeySecretName`), and the value is
@@ -36,8 +35,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "./atomic-write.ts";
 import { isMap, isSeq, parseDocument, type Document, type YAMLMap, type YAMLSeq } from "yaml";
-import { ConfigError, LOCAL_CLASSIFIER_APIS, piConfigDir, resolveJevConfig, validateFileConfig } from "./config.ts";
-import type { DecisionModelEntry, JevConfig, JevRef, ModelId, SwitchbackFileConfig } from "./types.ts";
+import { ConfigError, piConfigDir, validateFileConfig } from "./config.ts";
+import type { ModelId, SwitchbackFileConfig } from "./types.ts";
 
 /** Which switchback.yaml layer the editor has open. */
 export type ConfigLayer = "global" | "project";
@@ -130,7 +129,7 @@ export function loadLayer(layer: ConfigLayer): LoadedLayer {
  * an invalid state.
  */
 export function readLayerConfig(loaded: LoadedLayer): SwitchbackFileConfig {
-	return validateFileConfig(loaded.doc.toJSON(), loaded.path);
+	return validateFileConfig(loaded.doc.toJSON(), loaded.path).config;
 }
 
 function errorMessage(error: unknown): string {
@@ -262,159 +261,146 @@ export function moveFallback(loaded: LoadedLayer, virtualId: string, from: numbe
 }
 
 /**
- * Set or clear a model's classifier. `null` clears the key (the model then
- * reports and blind-cycles without classifying), the ref form points at a
- * `decisionModels:` entry by name, and the inline form writes a complete
- * `JevConfig`. Reference validity is enforced at save time through
- * `resolveJevConfig`, so a dangling name fails the save, not the next load.
+ * Set or clear a model's decision model. `null` clears the key (the model then
+ * reports and blind-cycles without classifying). The value is a decision-model
+ * address ("provider/model-id"); connection details, when the address needs a
+ * direct endpoint, live in the top-level `decisionModels:` map under the same
+ * address.
  */
-export function setDecisionModel(
-	loaded: LoadedLayer,
-	virtualId: string,
-	value: JevConfig | { decisionModel: string } | null,
-): void {
+export function setDecisionModel(loaded: LoadedLayer, virtualId: string, address: string | null): void {
 	const { node } = findModelNode(loaded, virtualId);
-	if (value === null) {
-		node.delete("jev");
+	if (address === null) {
+		node.delete("decisionModel");
 		return;
 	}
-	node.set("jev", loaded.doc.createNode(value));
+	node.set("decisionModel", address);
 }
 
-/** A decision-model entry as the editor accepts it: the apiKey is a secret NAME, never a value. */
+/** A decision-model entry as the editor accepts it. */
 export interface DecisionModelInput {
-	name: string;
-	provider: string;
-	id: string;
+	/** "provider/model-id" - the map key, and the value a chain names. */
+	address: string;
+	/** Direct SystemOne endpoint; omit for catalog resolution. */
 	baseUrl?: string;
-	api?: string;
-	/** Stored in YAML as `secret:<name>`; the value itself goes into the encrypted store. */
+	/**
+	 * Secret-store name, written as `secret:<name>`. Omit for an endpoint that
+	 * ignores the bearer token; the entry then carries `apiKey: local`.
+	 */
 	apiKeySecretName?: string;
 }
 
-/** Field-level patch for an existing decision model; `null` clears an optional field. */
+/** Field-level patch for an existing decision model; `null` clears the field. */
 export interface DecisionModelPatch {
-	provider?: string;
-	id?: string;
+	/** `null` also clears `apiKey` (the loader rule: it requires baseUrl). */
 	baseUrl?: string | null;
-	api?: string | null;
+	/** `null` writes `apiKey: local` - only meaningful with a baseUrl. */
 	apiKeySecretName?: string | null;
 }
 
-/** A file-level decisionModels entry as the parser produces it. */
-type DecisionModelNode = Omit<DecisionModelEntry, "apiKey"> & { apiKey?: string };
+/** A `decisionModels:` map value as the parser produces it. */
+interface DecisionModelNode {
+	baseUrl?: string;
+	apiKey?: string;
+}
 
 function decisionModelToNode(doc: Document, input: DecisionModelInput): YAMLMap {
 	const entry: DecisionModelNode = {
-		name: input.name,
-		provider: input.provider,
-		id: input.id,
 		...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
-		...(input.api !== undefined ? { api: input.api } : {}),
-		...(input.apiKeySecretName !== undefined ? { apiKey: `secret:${input.apiKeySecretName}` } : {}),
+		...(input.baseUrl !== undefined
+			? { apiKey: input.apiKeySecretName === undefined ? "local" : `secret:${input.apiKeySecretName}` }
+			: {}),
 	};
 	return doc.createNode(entry) as YAMLMap;
 }
 
-function requireDecisionModelsSeq(loaded: LoadedLayer): YAMLSeq {
-	const seq = loaded.doc.get("decisionModels");
-	if (seq === undefined || seq === null) {
-		const created = loaded.doc.createNode([]) as YAMLSeq;
+function requireDecisionModelsMap(loaded: LoadedLayer): YAMLMap {
+	const map = loaded.doc.get("decisionModels");
+	if (map === undefined || map === null) {
+		const created = loaded.doc.createNode({}) as YAMLMap;
 		loaded.doc.set("decisionModels", created);
 		return created;
 	}
-	if (!isSeq(seq)) throw new ConfigError("decisionModels must be an array", loaded.path);
-	return seq;
-}
-
-/** Find a decisionModels entry node by name (the reference key). */
-function findDecisionModelNode(loaded: LoadedLayer, name: string): { seq: YAMLSeq; index: number; node: YAMLMap } {
-	const seq = requireDecisionModelsSeq(loaded);
-	for (const [index, item] of seq.items.entries()) {
-		if (item === null || !isMap(item)) continue;
-		if (item.get("name") === name) return { seq, index, node: item };
+	if (!isMap(map)) {
+		throw new ConfigError('decisionModels must be a map keyed by "provider/model-id"', loaded.path);
 	}
-	throw new ConfigError(`decisionModel "${name}" not found`, loaded.path);
+	return map;
 }
 
-/** Append a decision-model entry (duplicate names fail the save via `validateFileConfig`). */
+/** Find a decisionModels entry node by its address (the map key). */
+function findDecisionModelNode(loaded: LoadedLayer, address: string): { map: YAMLMap; node: YAMLMap } {
+	const map = requireDecisionModelsMap(loaded);
+	const node = map.get(address, true);
+	if (node === undefined || node === null || !isMap(node)) {
+		throw new ConfigError(`decisionModels.${address} not found`, loaded.path);
+	}
+	return { map, node };
+}
+
+/** Add a decision-model entry (duplicate addresses fail the save via `validateFileConfig`). */
 export function addDecisionModel(loaded: LoadedLayer, input: DecisionModelInput): void {
-	const seq = requireDecisionModelsSeq(loaded);
-	for (const item of seq.items) {
-		if (item !== null && isMap(item) && item.get("name") === input.name) {
-			throw new ConfigError(`decisionModels contains the name "${input.name}" more than once`, loaded.path);
-		}
+	const map = requireDecisionModelsMap(loaded);
+	if (map.has(input.address)) {
+		throw new ConfigError(`decisionModels already contains "${input.address}"`, loaded.path);
 	}
-	seq.items.push(decisionModelToNode(loaded.doc, input));
+	map.set(input.address, decisionModelToNode(loaded.doc, input));
 }
 
-/** Patch one decision model's fields. `baseUrl: null` also clears `api`/`apiKey` (loader rule: they require baseUrl). */
-export function updateDecisionModel(loaded: LoadedLayer, name: string, patch: DecisionModelPatch): void {
-	const { node } = findDecisionModelNode(loaded, name);
-	if (patch.provider !== undefined) node.set("provider", patch.provider);
-	if (patch.id !== undefined) node.set("id", patch.id);
+/** Patch one decision model's connection details. */
+export function updateDecisionModel(loaded: LoadedLayer, address: string, patch: DecisionModelPatch): void {
+	const { node } = findDecisionModelNode(loaded, address);
 	if (patch.baseUrl !== undefined) {
 		if (patch.baseUrl === null) {
 			node.delete("baseUrl");
-			// api and apiKey are only valid alongside baseUrl; clearing baseUrl clears them.
-			node.delete("api");
+			// apiKey is only valid alongside baseUrl; clearing baseUrl clears it.
 			node.delete("apiKey");
 		} else {
 			node.set("baseUrl", patch.baseUrl);
+			if (!node.has("apiKey")) node.set("apiKey", "local");
 		}
-	}
-	if (patch.api !== undefined) {
-		if (patch.api === null) node.delete("api");
-		else node.set("api", patch.api);
 	}
 	if (patch.apiKeySecretName !== undefined) {
-		if (patch.apiKeySecretName === null) node.delete("apiKey");
-		else node.set("apiKey", `secret:${patch.apiKeySecretName}`);
+		node.set("apiKey", patch.apiKeySecretName === null ? "local" : `secret:${patch.apiKeySecretName}`);
 	}
 }
 
 /**
- * Rename a decision model and rewrite every `jev.decisionModel` reference to
- * it in the same transaction, so a rename cannot dangle references.
+ * Rename a decision-model address and rewrite every `models[].decisionModel`
+ * that names it in the same transaction, so a rename cannot dangle references.
  */
-export function renameDecisionModel(loaded: LoadedLayer, oldName: string, newName: string): void {
-	if (oldName !== newName) {
-		const seq = requireDecisionModelsSeq(loaded);
-		for (const item of seq.items) {
-			if (item !== null && isMap(item) && item.get("name") === newName) {
-				throw new ConfigError(`decisionModels contains the name "${newName}" more than once`, loaded.path);
-			}
+export function renameDecisionModel(loaded: LoadedLayer, oldAddress: string, newAddress: string): void {
+	if (oldAddress !== newAddress) {
+		const { map, node } = findDecisionModelNode(loaded, oldAddress);
+		if (map.has(newAddress)) {
+			throw new ConfigError(`decisionModels already contains "${newAddress}"`, loaded.path);
 		}
+		map.delete(oldAddress);
+		map.set(newAddress, node);
 	}
-	const { node } = findDecisionModelNode(loaded, oldName);
-	node.set("name", newName);
 	for (const item of requireModelsSeq(loaded).items) {
 		if (item === null || !isMap(item)) continue;
-		const jev = item.get("jev");
-		if (jev === null || jev === undefined || !isMap(jev)) continue;
-		if (jev.get("decisionModel") === oldName) jev.set("decisionModel", newName);
+		if (item.get("decisionModel") === oldAddress) item.set("decisionModel", newAddress);
 	}
 }
 
 /**
- * Remove a decision model. References are NOT rewritten: a model that still
- * names the removed entry fails `saveLayer()` through `resolveJevConfig` with
- * the loader's actionable message, so the user decides what happens to the
- * referencing model instead of the editor silently clearing it.
+ * Remove a decision model. References are NOT rewritten: a chain that still
+ * names the removed address falls back to catalog resolution, which pi can do
+ * and OpenCode cannot - the user decides what happens to the referencing model
+ * instead of the editor silently clearing it.
  */
-export function removeDecisionModel(loaded: LoadedLayer, name: string): void {
-	const { seq, index } = findDecisionModelNode(loaded, name);
-	seq.items.splice(index, 1);
+export function removeDecisionModel(loaded: LoadedLayer, address: string): void {
+	const { map } = findDecisionModelNode(loaded, address);
+	map.delete(address);
+	// An empty map is litter: drop the key so the file reads as if no entry was ever made.
+	if (map.items.length === 0) loaded.doc.delete("decisionModels");
 }
 
-/** How many configured models reference a decision model (the dialogue's confirm/warning text). */
-export function countDecisionModelReferences(loaded: LoadedLayer, name: string): number {
+/** How many configured models name a decision model (the dialogue's confirm/warning text). */
+export function countDecisionModelReferences(loaded: LoadedLayer, address: string): number {
 	let count = 0;
 	for (const item of requireModelsSeq(loaded).items) {
 		if (item === null || !isMap(item)) continue;
-		const jev = item.get("jev");
-		if (jev === null || jev === undefined || !isMap(jev)) continue;
-		if (jev.get("decisionModel") === name) count += 1;
+		if (item.get("decisionModel") === address) count += 1;
 	}
 	return count;
 }
@@ -427,25 +413,17 @@ export function setDebug(loaded: LoadedLayer, enabled: boolean): void {
 /**
  * Validate the mutated document through the loader's single gate and write it
  * atomically. Throws ConfigError (the loader's own messages) when the edited
- * state is not a config `loadConfig()` would accept - including dangling
- * `jev.decisionModel` references, checked here through the exported
- * `resolveJevConfig`. On a throw the in-memory document keeps the edit so the
- * dialogue can re-enter the same editor for a fix.
+ * state is not a config `loadConfig()` would accept. On a throw the in-memory
+ * document keeps the edit so the dialogue can re-enter the same editor for a fix.
  */
 export function saveLayer(loaded: LoadedLayer): void {
 	if (loaded.doc.contents === undefined || loaded.doc.contents === null) {
 		loaded.doc.contents = loaded.doc.createNode({});
 	}
-	const parsed = validateFileConfig(loaded.doc.toJSON(), loaded.path);
-	for (const model of parsed.models) {
-		resolveJevConfig(parsed.decisionModels, model.jev as JevRef | undefined);
-	}
+	validateFileConfig(loaded.doc.toJSON(), loaded.path);
 	try {
 		writeFileAtomic(loaded.path, loaded.doc.toString());
 	} catch (error) {
 		throw new ConfigError(`cannot write config: ${errorMessage(error)}`, loaded.path);
 	}
 }
-
-/** The wire APIs a direct-endpoint decision model may use (re-exported for the dialogue menu). */
-export { LOCAL_CLASSIFIER_APIS };

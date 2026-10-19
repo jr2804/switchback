@@ -33,7 +33,7 @@
 import type { ClassifierContext, ClassifierQuestion } from "@earendil-works/pi-ai";
 import { callClassifier, readChoice, readConfidence, type NoClassifierReason } from "./classify.ts";
 import type { ClassifierPort } from "./ports.ts";
-import type { JevConfig, ModelId } from "./types.ts";
+import type { DecisionModelConfig, ModelId } from "./types.ts";
 
 /**
  * Headroom kept free when judging whether a model can hold the current context.
@@ -71,7 +71,7 @@ export interface CandidateWindow {
 
 export interface ContextCandidateInput {
 	registry: ClassifierPort;
-	jev: JevConfig | undefined;
+	decisionModel: DecisionModelConfig | undefined;
 	/** The deterministic pick: the floor the classifier may only reorder. */
 	preferred: ModelId;
 	/** Current context size in tokens. */
@@ -145,7 +145,7 @@ export async function chooseContextCandidate(input: ContextCandidateInput): Prom
 			.map((candidate) => `${candidate.id}: ${compactTokens(candidate.contextWindow)} window`)
 			.join("; "),
 	};
-	const call = await callClassifier(input.registry, input.jev, {
+	const call = await callClassifier(input.registry, input.decisionModel, {
 		state,
 		questions: { candidate: criteria },
 	});

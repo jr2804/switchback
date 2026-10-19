@@ -48,7 +48,7 @@ const CANDIDATES = [
 
 const input = (overrides: Partial<Parameters<typeof chooseContextCandidate>[0]> = {}) => ({
 	registry: registryAnswering("minimax/MiniMax-M3"),
-	jev: { provider: "typesafe", id: "jev-latest" },
+	decisionModel: { provider: "typesafe", id: "jev-latest" },
 	preferred: "zai/glm-5.3",
 	contextTokens: 300_000,
 	candidates: CANDIDATES,

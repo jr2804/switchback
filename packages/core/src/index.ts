@@ -70,13 +70,17 @@ export {
 	ConfigError,
 	piConfigDir,
 	switchbackStateDir,
-	LOCAL_CLASSIFIER_APIS,
-	resolveJevConfig,
+	resolveDecisionModel,
 	resolveSecretApiKey,
 	validateFileConfig,
 } from "./config.ts";
-export type { SwitchbackConfig, SwitchbackFileConfig, JevConfig, SecretResolver } from "./config.ts";
-export type { JevRef, DecisionModelEntry, ResolvedSwitchbackConfig, ResolvedSwitchbackFileConfig } from "./types.ts";
+export type { SwitchbackConfig, SwitchbackFileConfig, DecisionModelConfig, SecretResolver } from "./config.ts";
+export type {
+	DecisionModelEntry,
+	DecisionModelId,
+	ResolvedSwitchbackConfig,
+	ResolvedSwitchbackFileConfig,
+} from "./types.ts";
 export {
 	addDecisionModel,
 	addFallback,

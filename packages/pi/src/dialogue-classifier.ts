@@ -1,7 +1,13 @@
 /**
- * The decision-model half of the `/switchback-config` dialogue: choosing a
- * classifier for a virtual model, and the wizard that creates, edits, renames,
- * tests and deletes reusable `decisionModels` entries.
+ * The decision-model half of the `/switchback-config` dialogue: naming the
+ * decision model a virtual model uses, and the wizard that creates, edits,
+ * renames, tests and deletes `decisionModels` entries.
+ *
+ * A decision model is addressed as `provider/model-id` - the same shape as a
+ * fallback. The address alone is enough when the host can resolve it from its
+ * classifier catalog; a `decisionModels` entry at the same address adds the
+ * connection details (`baseUrl`, `apiKey`) that make a direct SystemOne endpoint
+ * reachable from any host.
  *
  * Split out of `src/dialogue.ts` because it is the larger half and grew
  * independently: it is the only part that needs the provider catalog, the live
@@ -26,20 +32,18 @@ import {
 	type DecisionModelInput,
 	type DecisionModelPatch,
 } from "switchback-core/config-editor.ts";
-import { LOCAL_CLASSIFIER_APIS } from "switchback-core/config.ts";
 import {
 	classifierBaseUrlNote,
-	defaultDecisionModelName,
 	directEndpointWouldClobber,
 	type ClassifierProviderOption,
 } from "switchback-core/classifier-catalog.ts";
 import { discoverOllamaModels } from "switchback-core/classifier-discovery.ts";
 import { formatProbeReport } from "switchback-core/classifier-probe.ts";
 import {
-	describeJev,
+	describeDecisionModel,
 	errorMessage,
 	findModel,
-	promptNameLast,
+	promptAddressLast,
 	promptOptional,
 	promptRequired,
 	readConfigOrReport,
@@ -50,7 +54,7 @@ import {
 	type DialogueContext,
 	type DialogueSession,
 } from "./dialogue-ui.ts";
-import type { DecisionModelEntry, JevConfig } from "switchback-core/types.ts";
+import type { DecisionModelConfig, DecisionModelEntry } from "switchback-core/types.ts";
 
 export async function decisionModelPicker(
 	ctx: DialogueContext,
@@ -58,7 +62,6 @@ export async function decisionModelPicker(
 	virtualId: string,
 ): Promise<void> {
 	const noneOption = "(none - report and cycle)";
-	const inlineOption = "(inline - configure directly)...";
 	const newOption = "New decision model...";
 	const backOption = "Back";
 	for (;;) {
@@ -66,28 +69,20 @@ export async function decisionModelPicker(
 		if (config === undefined) return;
 		const model = findModel(config, virtualId);
 		if (model === undefined) return;
-		const dmLabels = (config.decisionModels ?? []).map((d) => `${d.name} - ${d.provider}/${d.id}`);
+		const entries = Object.entries(config.decisionModels ?? {});
+		const labels = entries.map(([address, entry]) => describeEntry(address, entry));
 		const choice = await ctx.ui.select(
-			screenTitle(session.loaded, `decision model for ${virtualId}\ncurrently: ${describeJev(model.jev)}`),
-			[noneOption, ...dmLabels, inlineOption, newOption, backOption],
+			screenTitle(
+				session.loaded,
+				`decision model for ${virtualId}\ncurrently: ${describeDecisionModel(model.decisionModel)}`,
+			),
+			[noneOption, ...labels, newOption, backOption],
 		);
 		if (choice === undefined || choice === backOption) return;
 		if (choice === noneOption) {
 			setDecisionModel(session.loaded, virtualId, null);
 			if (await saveOrRevert(ctx, session)) {
-				ctx.ui.notify(`${virtualId}: classifier cleared (reports and cycles)`, "info");
-				return;
-			}
-			continue;
-		}
-		if (choice === inlineOption) {
-			const existing = model.jev !== undefined && !("decisionModel" in model.jev) ? model.jev : undefined;
-			const inline = await collectJevFields(ctx, session, existing, virtualId);
-			if (inline === undefined) continue;
-			setDecisionModel(session.loaded, virtualId, inline);
-			if (await saveOrRevert(ctx, session)) {
-				ctx.ui.notify(`${virtualId}: inline classifier set`, "info");
-				await offerClassifierTest(ctx, session, jevFromInput(inline));
+				ctx.ui.notify(`${virtualId}: decision model cleared (reports and cycles)`, "info");
 				return;
 			}
 			continue;
@@ -95,20 +90,21 @@ export async function decisionModelPicker(
 		if (choice === newOption) {
 			const created = await decisionModelWizard(ctx, session);
 			if (created === undefined) continue;
-			setDecisionModel(session.loaded, virtualId, { decisionModel: created.name });
+			setDecisionModel(session.loaded, virtualId, created.address);
 			if (await saveOrRevert(ctx, session)) {
-				ctx.ui.notify(`${virtualId}: decision model "${created.name}" created and set`, "info");
+				ctx.ui.notify(`${virtualId}: decision model ${created.address} created and set`, "info");
+				await offerClassifierTest(ctx, session, entryForInput(created), created.address);
 				return;
 			}
 			continue;
 		}
-		const name =
-			dmLabels.indexOf(choice) >= 0 ? (config.decisionModels ?? [])[dmLabels.indexOf(choice)]?.name : undefined;
-		const entry = name !== undefined ? (config.decisionModels ?? []).find((d) => d.name === name) : undefined;
-		if (entry === undefined) continue;
-		setDecisionModel(session.loaded, virtualId, { decisionModel: entry.name });
+		const index = labels.indexOf(choice);
+		const picked = index >= 0 ? entries[index] : undefined;
+		if (picked === undefined) continue;
+		setDecisionModel(session.loaded, virtualId, picked[0]);
 		if (await saveOrRevert(ctx, session)) {
-			ctx.ui.notify(`${virtualId}: decision model "${entry.name}" set`, "info");
+			ctx.ui.notify(`${virtualId}: decision model ${picked[0]} set`, "info");
+			await offerClassifierTest(ctx, session, picked[1], picked[0]);
 			return;
 		}
 	}
@@ -120,10 +116,10 @@ export async function decisionModelsMenu(ctx: DialogueContext, session: Dialogue
 	for (;;) {
 		const config = readConfigOrReport(ctx, session.loaded);
 		if (config === undefined) return;
-		const entries = config.decisionModels ?? [];
-		const labels = entries.map((d) => `${d.name} - ${d.provider}/${d.id}`);
+		const entries = Object.entries(config.decisionModels ?? {});
+		const labels = entries.map(([address, entry]) => describeEntry(address, entry));
 		const choice = await ctx.ui.select(
-			screenTitle(session.loaded, "decision models (reusable classifier configs)"),
+			screenTitle(session.loaded, "decision models (address-keyed classifier connection details)"),
 			[...labels, addOption, backOption],
 		);
 		if (choice === undefined || choice === backOption) return;
@@ -131,113 +127,107 @@ export async function decisionModelsMenu(ctx: DialogueContext, session: Dialogue
 			await decisionModelWizard(ctx, session);
 			continue;
 		}
-		const name = labels.indexOf(choice) >= 0 ? entries[labels.indexOf(choice)]?.name : undefined;
-		const entry = name !== undefined ? entries.find((d) => d.name === name) : undefined;
-		if (entry !== undefined) await decisionModelEntryMenu(ctx, session, entry);
+		const index = labels.indexOf(choice);
+		const picked = index >= 0 ? entries[index] : undefined;
+		if (picked !== undefined) await decisionModelEntryMenu(ctx, session, picked[0]);
 	}
 }
 
-async function decisionModelEntryMenu(
-	ctx: DialogueContext,
-	session: DialogueSession,
-	entry: DecisionModelEntry,
-): Promise<void> {
-	const renameOption = "Rename (updates references)";
-	const editOption = "Edit fields";
+async function decisionModelEntryMenu(ctx: DialogueContext, session: DialogueSession, address: string): Promise<void> {
+	const renameOption = "Rename address (updates references)";
+	const editOption = "Edit connection (baseUrl, apiKey)";
 	const testOption = "Test classifier (choice, score, noul)";
 	const deleteOption = "Delete";
 	const backOption = "Back";
 	for (;;) {
 		const config = readConfigOrReport(ctx, session.loaded);
 		if (config === undefined) return;
-		const current = (config.decisionModels ?? []).find((d) => d.name === entry.name);
+		const current = (config.decisionModels ?? {})[address];
 		if (current === undefined) return; // deleted elsewhere in this session
-		const choice = await ctx.ui.select(
-			screenTitle(session.loaded, `${current.name} - ${current.provider}/${current.id}`),
-			[
-				renameOption,
-				editOption,
-				...(ctx.probeClassifier !== undefined ? [testOption] : []),
-				deleteOption,
-				backOption,
-			],
-		);
+		const choice = await ctx.ui.select(screenTitle(session.loaded, describeEntry(address, current)), [
+			renameOption,
+			editOption,
+			...(ctx.probeClassifier !== undefined ? [testOption] : []),
+			deleteOption,
+			backOption,
+		]);
 		if (choice === undefined || choice === backOption) return;
 		if (choice === testOption) {
-			await runClassifierTest(ctx, session, {
-				provider: current.provider,
-				id: current.id,
-				...(current.baseUrl !== undefined ? { baseUrl: current.baseUrl } : {}),
-				...(current.api !== undefined ? { api: current.api } : {}),
-				...(current.apiKey !== undefined ? { apiKey: current.apiKey } : {}),
-			});
+			await runClassifierTest(ctx, session, current, address);
 			continue;
 		}
 		if (choice === renameOption) {
-			const newName = await promptRequired(
+			const newAddress = await promptRequired(
 				ctx,
-				screenTitle(session.loaded, `rename decision model "${current.name}"`),
-				current.name,
+				screenTitle(session.loaded, `rename decision model ${address} (provider/model-id)`),
+				address,
 			);
-			if (newName === undefined || newName === current.name) continue;
-			renameDecisionModel(session.loaded, current.name, newName);
+			if (newAddress === undefined || newAddress === address) continue;
+			if (!newAddress.includes("/")) {
+				ctx.ui.notify(`an address is "provider/model-id" - "${newAddress}" has no provider`, "warning");
+				continue;
+			}
+			if (Object.hasOwn(config.decisionModels ?? {}, newAddress)) {
+				ctx.ui.notify(`a decision model at "${newAddress}" already exists`, "warning");
+				continue;
+			}
+			renameDecisionModel(session.loaded, address, newAddress);
 			if (await saveOrRevert(ctx, session)) {
-				entry.name = newName;
-				ctx.ui.notify(`renamed to "${newName}"; references updated`, "info");
+				address = newAddress;
+				ctx.ui.notify(`renamed to ${newAddress}; references updated`, "info");
 			}
 			continue;
 		}
 		if (choice === editOption) {
-			const patch = await collectJevPatch(ctx, session, current);
+			const patch = await collectConnection(ctx, session, address, current);
 			if (patch === undefined) continue;
-			updateDecisionModel(session.loaded, current.name, patch);
+			updateDecisionModel(session.loaded, address, patch);
 			if (await saveOrRevert(ctx, session)) {
-				ctx.ui.notify(`decision model "${current.name}" updated`, "info");
+				ctx.ui.notify(`decision model ${address} updated`, "info");
 			}
 			continue;
 		}
 		if (choice === deleteOption) {
-			const refs = countDecisionModelReferences(session.loaded, current.name);
+			const refs = countDecisionModelReferences(session.loaded, address);
 			if (refs > 0) {
 				ctx.ui.notify(
-					`"${current.name}" is still referenced by ${refs} model(s) - set their decision model first`,
+					`${address} is still named by ${refs} model(s) - set their decision model first`,
 					"warning",
 				);
 				continue;
 			}
 			const confirmed = await ctx.ui.confirm(
-				screenTitle(session.loaded, `delete decision model "${current.name}"`),
-				`Delete "${current.name}" (${current.provider}/${current.id}) from ${session.loaded.path}?`,
+				screenTitle(session.loaded, `delete decision model ${address}`),
+				`Delete ${address} from ${session.loaded.path}? Chains that name it fall back to catalog resolution.`,
 			);
 			if (!confirmed) continue;
-			removeDecisionModel(session.loaded, current.name);
+			removeDecisionModel(session.loaded, address);
 			if (await saveOrRevert(ctx, session)) {
-				ctx.ui.notify(`deleted "${current.name}"`, "info");
+				ctx.ui.notify(`deleted ${address}`, "info");
 				return;
 			}
 		}
 	}
 }
 
-/** Collect a brand-new decision model entry. The order is provider → baseUrl →
- * model id → apiKey → name (last, prefilled). The user can Tab + Enter through
- * the whole flow when accepting the defaults; the only prompt that requires a
- * real decision is the apiKey action (new secret, keep existing, or none).
+/**
+ * Collect a brand-new decision model entry. The order is provider -> baseUrl ->
+ * model id -> apiKey -> address (last, prefilled). The address is the map key,
+ * so it is asked after the connection details it describes.
  */
 async function decisionModelWizard(
 	ctx: DialogueContext,
 	session: DialogueSession,
 ): Promise<DecisionModelInput | undefined> {
-	// Tolerant read: on a fresh layer there is no config yet and no name to clash with;
-	// addDecisionModel + the save gate still own the uniqueness rule.
+	// Tolerant read: on a fresh layer there is no config yet and no address to clash with.
 	const config = tryReadConfig(session.loaded);
-	const knownNames = (config?.decisionModels ?? []).map((d) => d.name);
+	const knownAddresses = Object.keys(config?.decisionModels ?? {});
 
 	// 1. Provider
 	const option = await chooseClassifierProvider(ctx, session, undefined);
 	if (option === undefined) return undefined;
 
-	// 2. baseUrl (always prefilled for both catalog and local; "-" clears it)
+	// 2. baseUrl ("-" keeps catalog resolution; a URL declares a direct endpoint)
 	const baseUrl = await chooseBaseUrl(ctx, session, option, undefined);
 	if (baseUrl === undefined) return undefined;
 
@@ -245,61 +235,31 @@ async function decisionModelWizard(
 	const id = await chooseClassifierModel(ctx, session, option, undefined, baseUrl ?? option.baseUrl);
 	if (id === undefined) return undefined;
 
-	// apiKey / api / baseUrl are loader-coupled: apiKey and api both require a
-	// baseUrl, so a cleared baseUrl means none of those fields apply. Skip the
-	// apiKey step entirely when the user typed "-".
-	let apiKeyResult: ApiKeyAction = { kind: "none" };
+	// 4. apiKey: only a direct endpoint carries one (the loader requires it there).
+	let pendingKey: ApiKeyAction = { kind: "local" };
 	if (baseUrl !== null) {
-		// 4. apiKey action: collect the user's choice (none / pick existing / new
-		//    secret value) but defer the secret-store write until we know the
-		//    final decision-model name - the store entry is derived from the
-		//    name so a single secret can be re-keyed under the new name.
-		apiKeyResult = await apiKeyAction(ctx, session, undefined, option.provider);
-		if (apiKeyResult.kind === "cancel") return undefined;
+		pendingKey = await apiKeyAction(ctx, session, undefined, `${option.provider}/${id}`);
+		if (pendingKey.kind === "cancel") return undefined;
 	}
 
-	// 5. Name (LAST, prefilled). Only the catalog providers need an apiKey at
-	//    all - a local Ollama / llama-server ignores it; a local server also
-	//    needs one as a non-empty transport requirement, but the wizard sets
-	//    it for them when the user picks "no api key" or skips the step.
-	const rest: Partial<DecisionModelInput> = {};
-	if (baseUrl !== null && baseUrl !== undefined) rest.baseUrl = baseUrl;
-	if (baseUrl !== null && baseUrl !== undefined) {
-		const api = option.api ?? LOCAL_CLASSIFIER_APIS[0];
-		if (api !== undefined) rest.api = api;
-	}
-	if (apiKeyResult.kind === "secret") {
-		// Defer the secret-store commit until the name is known so the store
-		// entry follows the decision-model name (`secret:<name>-key`); we pass
-		// apiKeyResult.value into the new logic further below.
-	}
-	// For local endpoints the transport defaults to a non-empty bearer token
-	// (`local-classifier.ts` falls back to the provider id), so an apiKey in
-	// the config is optional. For catalog providers the user must either
-	// supply a secret or accept "no api key" - the wizard does not write a
-	// literal token to disk in either path.
+	// 5. Address (LAST, prefilled). The secret-store entry is derived from the
+	//    address, so it is committed only after the address is known.
+	const address = await promptAddressLast(ctx, session.loaded, `${option.provider}/${id}`, knownAddresses);
+	if (address === undefined) return undefined;
 
-	const suggestedName = defaultDecisionModelName(option.provider, id);
-	const name = await promptNameLast(ctx, session.loaded, suggestedName, knownNames);
-	if (name === undefined) return undefined;
-
-	// Commit the apiKey value (if any) under the now-known name, then build the
-	// DecisionModelInput. Deferring the write keeps the secret name aligned with
-	// the decision-model name regardless of whether the user kept the suggested
-	// default or typed their own.
-	let finalRest: Partial<DecisionModelInput> = rest;
-	if (apiKeyResult.kind === "secret") {
-		const secretName = secretNameFor(name);
-		try {
-			session.secrets.set(secretName, apiKeyResult.value);
-		} catch (error) {
-			ctx.ui.notify(`secret store refused the value: ${errorMessage(error)}`, "error");
-			return undefined;
-		}
-		finalRest = { ...rest, apiKeySecretName: secretName };
+	let apiKeySecretName: string | undefined;
+	if (pendingKey.kind === "new") {
+		apiKeySecretName = commitSecret(ctx, session, address, pendingKey.value);
+		if (apiKeySecretName === undefined) return undefined;
+	} else if (pendingKey.kind === "existing") {
+		apiKeySecretName = pendingKey.name;
 	}
 
-	const input: DecisionModelInput = { name, provider: option.provider, id, ...finalRest };
+	const input: DecisionModelInput = {
+		address,
+		...(baseUrl !== null ? { baseUrl } : {}),
+		...(apiKeySecretName !== undefined ? { apiKeySecretName } : {}),
+	};
 	try {
 		addDecisionModel(session.loaded, input);
 	} catch (error) {
@@ -307,23 +267,47 @@ async function decisionModelWizard(
 		return undefined;
 	}
 	if (await saveOrRevert(ctx, session)) {
-		ctx.ui.notify(`decision model "${name}" added`, "info");
-		await offerClassifierTest(ctx, session, jevFromInput({ provider: option.provider, id, rest: finalRest }));
+		ctx.ui.notify(`decision model ${address} added`, "info");
+		await offerClassifierTest(ctx, session, entryForInput(input), address);
 		return input;
 	}
 	return undefined;
 }
 
-/** The inline classifier config a wizard result describes (used for the capability test). */
-function jevFromInput(fields: { provider: string; id: string; rest?: Partial<DecisionModelInput> }): JevConfig {
-	const rest = fields.rest ?? {};
-	return {
-		provider: fields.provider,
-		id: fields.id,
-		...(rest.baseUrl !== undefined ? { baseUrl: rest.baseUrl } : {}),
-		...(rest.api !== undefined ? { api: rest.api } : {}),
-		...(rest.apiKeySecretName !== undefined ? { apiKey: `secret:${rest.apiKeySecretName}` } : {}),
-	};
+/**
+ * Edit an existing entry's connection details. The address (provider/model id)
+ * is the map key and is changed through the rename action instead, so this only
+ * collects `baseUrl` and `apiKey`.
+ */
+async function collectConnection(
+	ctx: DialogueContext,
+	session: DialogueSession,
+	address: string,
+	current: DecisionModelEntry,
+): Promise<DecisionModelPatch | undefined> {
+	const baseUrl = await promptOptional(
+		ctx,
+		screenTitle(session.loaded, `baseUrl for ${address} - a direct SystemOne endpoint ("-" clears it, Esc keeps)`),
+		current.baseUrl,
+	);
+	if (baseUrl === undefined) return undefined;
+	const patch: DecisionModelPatch = {};
+	if (baseUrl === null) {
+		// updateDecisionModel clears apiKey with baseUrl (the loader rule: it requires baseUrl).
+		patch.baseUrl = null;
+		return patch;
+	}
+	if (baseUrl !== current.baseUrl) patch.baseUrl = baseUrl;
+	const key = await apiKeyAction(ctx, session, current.apiKey, address);
+	if (key.kind === "cancel") return undefined;
+	if (key.kind === "local") patch.apiKeySecretName = null;
+	else if (key.kind === "existing") patch.apiKeySecretName = key.name;
+	else if (key.kind === "new") {
+		const committedName = commitSecret(ctx, session, address, key.value);
+		if (committedName === undefined) return undefined;
+		patch.apiKeySecretName = committedName;
+	}
+	return patch;
 }
 
 /**
@@ -382,22 +366,13 @@ async function chooseClassifierProvider(
 
 /**
  * An endpoint the user names themselves: pi has no catalog entry for it, so
- * switchback registers the classifier from the config (`baseUrl` present). No
- * base URL or wire API is invented here - the wizard asks for both.
+ * switchback registers the classifier from the config (`baseUrl` present).
  */
 function declaredEndpoint(provider: string): ClassifierProviderOption {
 	return { provider, label: provider, displayName: provider, models: [], local: true, chatModels: 0 };
 }
 
-/** Choose the classifier model id from the provider's known classifiers, or type one.
- *
- * The picker offers what pi's catalog knows for this provider. When the catalog
- * knows nothing and the endpoint is reachable, the wizard asks the server
- * itself (Ollama's `/api/tags`, filtered by the `decision` capability) so a
- * freshly pointed endpoint does not have to wait for a routing failure to reveal
- * a wrong model id. Provider-agnostic on purpose: the trigger is "the catalog
- * cannot help here", not a hardcoded provider name.
- */
+/** Choose the classifier model id from the provider's known classifiers, or type one. */
 async function chooseClassifierModel(
 	ctx: DialogueContext,
 	session: DialogueSession,
@@ -492,64 +467,93 @@ async function chooseBaseUrl(
 /**
  * Send the capability prompt and report the verdict. See `packages/core/src/classifier-probe.ts`.
  */
-async function runClassifierTest(ctx: DialogueContext, session: DialogueSession, jev: JevConfig): Promise<void> {
+async function runClassifierTest(
+	ctx: DialogueContext,
+	session: DialogueSession,
+	entry: DecisionModelEntry,
+	address: string,
+): Promise<void> {
 	if (ctx.probeClassifier === undefined) return;
-	const label = `${jev.provider}/${jev.id}${jev.baseUrl !== undefined ? ` at ${jev.baseUrl}` : ""}`;
-	const result = await ctx.probeClassifier(resolveSecretRef(jev, session));
+	const resolved = probeConfig(address, entry, session);
+	if (resolved === undefined) {
+		ctx.ui.notify(`${address}: the address has no "/" - cannot probe it`, "warning");
+		return;
+	}
+	const label = `${resolved.provider}/${resolved.id}${
+		resolved.baseUrl !== undefined ? ` at ${resolved.baseUrl}` : ""
+	}`;
+	const result = await ctx.probeClassifier(resolved);
 	ctx.ui.notify(formatProbeReport({ label, result }), result.ok ? "info" : "warning");
 }
 
 /**
- * Offer the one-shot capability test after a classifier config was written.
+ * Offer the one-shot capability test after a decision model was written.
  *
  * Most SystemOne endpoints publish no model list, so the model id is guessed;
  * this is where a wrong guess (or a model without the `decision` capability)
  * surfaces, instead of at the first real routing failure.
  */
-async function offerClassifierTest(ctx: DialogueContext, session: DialogueSession, jev: JevConfig): Promise<void> {
+async function offerClassifierTest(
+	ctx: DialogueContext,
+	session: DialogueSession,
+	entry: DecisionModelEntry,
+	address: string,
+): Promise<void> {
 	if (ctx.probeClassifier === undefined) return;
 	const confirmed = await ctx.ui.confirm(
-		screenTitle(session.loaded, `test ${jev.provider}/${jev.id} now?`),
+		screenTitle(session.loaded, `test ${address} now?`),
 		"Sends one SystemOne prompt that exercises choice, score and noul, so a wrong model id or endpoint shows up immediately.",
 	);
 	if (!confirmed) return;
-	await runClassifierTest(ctx, session, jev);
+	await runClassifierTest(ctx, session, entry, address);
 }
 
-/** Classifier fields for a NEW inline config / decision model. Undefined = user backed out. */
-async function collectJevFields(
-	ctx: DialogueContext,
+function describeEntry(address: string, entry: DecisionModelEntry): string {
+	return entry.baseUrl === undefined
+		? `${address} - resolved from the classifier catalog`
+		: `${address} - direct: ${entry.baseUrl}`;
+}
+
+function splitAddress(address: string): { provider: string; id: string } | undefined {
+	const slash = address.indexOf("/");
+	if (slash <= 0 || slash === address.length - 1) return undefined;
+	return { provider: address.slice(0, slash), id: address.slice(slash + 1) };
+}
+
+/** The entry a wizard result describes, for the capability test. */
+function entryForInput(input: DecisionModelInput): DecisionModelEntry {
+	if (input.baseUrl === undefined) return {};
+	return {
+		baseUrl: input.baseUrl,
+		apiKey: input.apiKeySecretName === undefined ? "local" : `secret:${input.apiKeySecretName}`,
+	};
+}
+
+/** Resolve an entry into the probe's shape, pulling a `secret:` value from the store. */
+function probeConfig(
+	address: string,
+	entry: DecisionModelEntry,
 	session: DialogueSession,
-	existing: JevConfig | undefined,
-	hint?: string,
-): Promise<{ provider: string; id: string; rest?: Partial<DecisionModelInput> } | undefined> {
-	const option = await chooseClassifierProvider(ctx, session, existing?.provider);
-	if (option === undefined) return undefined;
-	const baseUrl = await chooseBaseUrl(ctx, session, option, existing?.baseUrl);
-	if (baseUrl === undefined) return undefined;
-	const id = await chooseClassifierModel(ctx, session, option, existing?.id, baseUrl ?? option.baseUrl);
-	if (id === undefined) return undefined;
-	if (baseUrl === null) return { provider: option.provider, id };
-	// `api` is aligned with the endpoint instead of asked: a direct endpoint speaks
-	// exactly one wire API (switchback's own SystemOne transport), so the old
-	// "(none)" choice offered an option that does not exist.
-	const api = option.api ?? LOCAL_CLASSIFIER_APIS[0];
-	const rest: Partial<DecisionModelInput> = { baseUrl, ...(api !== undefined ? { api } : {}) };
-	const key = await apiKeyAction(ctx, session, existing?.apiKey, hint ?? option.provider);
-	if (key.kind === "cancel") return undefined;
-	if (key.kind === "secret") {
-		const committedName = commitSecret(ctx, session, hint ?? option.provider, key.value);
-		if (committedName === undefined) return undefined;
-		rest.apiKeySecretName = committedName;
+): DecisionModelConfig | undefined {
+	const parts = splitAddress(address);
+	if (parts === undefined) return undefined;
+	let apiKey = entry.apiKey;
+	if (apiKey !== undefined && apiKey.startsWith("secret:")) {
+		const stored = session.secrets.get(apiKey.slice("secret:".length));
+		if (stored !== undefined) apiKey = stored;
 	}
-	return { provider: option.provider, id, rest };
+	return {
+		provider: parts.provider,
+		id: parts.id,
+		...(entry.baseUrl !== undefined ? { baseUrl: entry.baseUrl } : {}),
+		...(apiKey !== undefined ? { apiKey } : {}),
+	};
 }
 
 /**
- * Commit a secret value to the store under a name derived from `hint`. Returns
- * the chosen name on success, undefined on failure (the wizard treats undefined
- * as user cancellation). The hint should be the decision-model name when one
- * exists, or the provider id for inline jev.
+ * Commit a secret value to the store under a name derived from the address.
+ * Returns the chosen name on success, undefined on failure (the wizard treats
+ * undefined as user cancellation).
  */
 function commitSecret(ctx: DialogueContext, session: DialogueSession, hint: string, value: string): string | undefined {
 	const name = secretNameFor(hint);
@@ -562,64 +566,19 @@ function commitSecret(ctx: DialogueContext, session: DialogueSession, hint: stri
 	}
 }
 
-/** Patch fields for an EXISTING decision model. Undefined = user backed out. */
-async function collectJevPatch(
-	ctx: DialogueContext,
-	session: DialogueSession,
-	current: DecisionModelEntry,
-): Promise<DecisionModelPatch | undefined> {
-	const option = await chooseClassifierProvider(ctx, session, current.provider);
-	if (option === undefined) return undefined;
-	const patch: DecisionModelPatch = {};
-	if (option.provider !== current.provider) patch.provider = option.provider;
-	const baseUrl = await chooseBaseUrl(ctx, session, option, current.baseUrl);
-	if (baseUrl === undefined) return undefined;
-	const id = await chooseClassifierModel(ctx, session, option, current.id, baseUrl ?? option.baseUrl);
-	if (id === undefined) return undefined;
-	if (id !== current.id) patch.id = id;
-	if (baseUrl === null) {
-		// updateDecisionModel clears api/apiKey with baseUrl (loader rule: they require it).
-		patch.baseUrl = null;
-		return patch;
-	}
-	patch.baseUrl = baseUrl;
-	// Keep the entry's own api, or set the endpoint's for a newly added one.
-	if (current.api === undefined) {
-		const api = option.api ?? LOCAL_CLASSIFIER_APIS[0];
-		if (api !== undefined) patch.api = api;
-	}
-	const key = await apiKeyAction(ctx, session, current.apiKey, current.name);
-	if (key.kind === "cancel") return undefined;
-	if (key.kind === "none") patch.apiKeySecretName = null;
-	else if (key.kind === "secret") {
-		const committedName = commitSecret(ctx, session, current.name, key.value);
-		if (committedName === undefined) return undefined;
-		patch.apiKeySecretName = committedName;
-	}
-	return patch;
-}
-/** Resolve a `secret:<name>` reference for use (the probe needs the real token). */
-function resolveSecretRef(jev: JevConfig, session: DialogueSession): JevConfig {
-	const apiKey = jev.apiKey;
-	if (apiKey === undefined || !apiKey.startsWith("secret:")) return jev;
-	const stored = session.secrets.get(apiKey.slice("secret:".length));
-	return stored === undefined ? jev : { ...jev, apiKey: stored };
-}
-
 /**
  * What the user decided about the API key.
  *
- * `keep` leaves the field untouched (an existing key stays), `none` means "no
- * key" (a new entry gets none, an existing one loses it), `secret` names the
- * store entry to reference, and `cancel` abandons the whole step. Collapsing
- * these into one nullable string made "no key" indistinguishable from "back
- * out", which turned a valid choice into an aborted wizard.
+ * `keep` leaves the field untouched (an existing key stays), `local` means "no
+ * secret - a local endpoint ignores the bearer token", `new` carries a value to
+ * store under a derived name, `existing` names a stored secret to reference,
+ * and `cancel` abandons the whole step.
  */
 type ApiKeyAction =
 	| { kind: "keep" }
-	| { kind: "none" }
-	/** Value picked up; the wizard commits it under a name it derives later. */
-	| { kind: "secret"; value: string }
+	| { kind: "local" }
+	| { kind: "new"; value: string }
+	| { kind: "existing"; name: string }
 	| { kind: "cancel" };
 
 /**
@@ -635,20 +594,20 @@ async function apiKeyAction(
 	current: string | undefined,
 	hint: string,
 ): Promise<ApiKeyAction> {
-	const hasCurrent = current !== undefined;
+	const hasCurrent = current !== undefined && current !== "local";
 	const keepOption = hasCurrent
 		? `Keep current (${current.startsWith("secret:") ? current : "value set by hand"})`
-		: "(no API key)";
+		: "(no API key - local endpoint)";
 	const existingOption = "Use existing secret...";
 	const newOption = "New secret...";
-	const removeOption = "Remove API key";
+	const removeOption = "No secret (local endpoint)";
 	const choice = await ctx.ui.select(
 		screenTitle(session.loaded, "API key - stored encrypted; the config only carries secret:<name>"),
 		hasCurrent ? [keepOption, existingOption, newOption, removeOption] : [keepOption, existingOption, newOption],
 	);
 	if (choice === undefined) return { kind: "cancel" };
-	if (choice === keepOption) return hasCurrent ? { kind: "keep" } : { kind: "none" };
-	if (choice === removeOption) return { kind: "none" };
+	if (choice === keepOption) return hasCurrent ? { kind: "keep" } : { kind: "local" };
+	if (choice === removeOption) return { kind: "local" };
 	if (choice === existingOption) {
 		const names = session.secrets.list();
 		if (names.length === 0) {
@@ -656,7 +615,7 @@ async function apiKeyAction(
 			return { kind: "cancel" };
 		}
 		const name = await ctx.ui.select(screenTitle(session.loaded, "reference which stored secret?"), [...names]);
-		return name === undefined ? { kind: "cancel" } : { kind: "secret", value: name };
+		return name === undefined ? { kind: "cancel" } : { kind: "existing", name };
 	}
 	if (choice !== newOption) return { kind: "cancel" }; // an option this flow does not know: back out
 	const value = await promptRequired(
@@ -668,5 +627,5 @@ async function apiKeyAction(
 		"secret value",
 	);
 	if (value === undefined) return { kind: "cancel" };
-	return { kind: "secret", value };
+	return { kind: "new", value };
 }

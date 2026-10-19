@@ -4,7 +4,7 @@
  * `tsconfig.json` includes only the root `index.ts` graph (see
  * `packages/pi/AGENTS.md` -> Verification), so `packages/pi/src/index.ts` is not type-checked by
  * `npx tsc --noEmit` - and no other gate loads it either. That gap is not
- * theoretical: splitting `packages/pi/src/dialogue.ts` moved `describeJev` and the
+ * theoretical: splitting `packages/pi/src/dialogue.ts` moved `describeDecisionModel` and the
  * structural UI types to `packages/pi/src/dialogue-ui.ts`, the barrel kept re-exporting
  * them from `./dialogue.ts`, and `tsc --noEmit` stayed green while
  * `npx vitest run` stayed green, because nothing imports the barrel.
@@ -36,7 +36,7 @@ describe("packages/pi/src/index.ts barrel", () => {
 		// that forgets the barrel is caught here.
 		const expected = [
 			"runDialogue", // packages/pi/src/dialogue.ts
-			"describeJev", // packages/pi/src/dialogue-ui.ts (moved out of dialogue.ts)
+			"describeDecisionModel", // packages/pi/src/dialogue-ui.ts (moved out of dialogue.ts)
 			"layerOptionLabel", // packages/pi/src/dialogue.ts
 			"decide", // packages/core/src/routing.ts
 			"observeUnretriedFailure", // packages/core/src/failure.ts

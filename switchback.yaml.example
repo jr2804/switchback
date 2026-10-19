@@ -37,10 +37,13 @@
 # configured SystemOne classifier to pick the nearest supported level, or
 # clamps when the classifier is unavailable.
 #
-# Decision models: name once in `decisionModels:` and reference by name from
-# `models[].jev.decisionModel:`. Inline (`provider` + `id`, optionally
-# `baseUrl` + `api` + `apiKey`) is also supported. For local System One
-# endpoints (Ollama v0.35+) prefer the inline form with a baseUrl.
+# Decision models: a chain names its classifier by address, exactly like a
+# fallback - `decisionModel: provider/model-id`. The optional `decisionModels:`
+# map is keyed by the same address and carries connection details (`baseUrl`,
+# `apiKey`). An address with no entry resolves from pi's classifier catalog;
+# an entry with a `baseUrl` is a direct System One endpoint (Ollama v0.35+)
+# that switchback drives itself. Unknown or retired keys are reported as
+# warnings, never silently ignored.
 #
 # The `fallbacks` list below is the ordered preference. Each id was verified to
 # resolve in the catalog at the time of writing (2026-10-04) using a credentialed
@@ -68,29 +71,21 @@ models:
       - opencode-go/glm-5.3-flash # 1M context, opencode-go fallback
     # Return to the first entry above after a long idle gap (default: never).
     idleReset: 5h
-    # Classifier. Two forms:
+    # Decision model. Two resolutions, chosen by the address you name:
     #
-    # 1. A classifier from pi's catalog - provider + id only. pi supplies the
-    #    endpoint, the wire API and the credential (whatever /login configured),
-    #    so this block carries no URL and no key.
-    jev:
-      decisionModel: main
+    # 1. `provider/model-id` with no entry in `decisionModels:` below - pi
+    #    resolves it from its classifier catalog and supplies the endpoint, the
+    #    wire API and the credential (whatever /login configured).
+    decisionModel: typesafe/jev-latest
     #
-    # 2. A direct System One endpoint pi has no catalog entry for, registered by
-    #    switchback itself. `baseUrl` is the switch. Works with Ollama v0.35+
+    # 2. The same address WITH an entry carrying a `baseUrl` - a direct System
+    #    One endpoint switchback registers itself. Works with Ollama v0.35+
     #    decision models: `ollama show <model>` must list the "decision"
     #    capability (e.g. tev1:0.8b). A plain chat GGUF is rejected by Ollama.
     #    Pick an id pi does not already serve, or pi will replace that provider's
     #    chat models with the classifier alone.
     #
-    # jev:
-    #   provider: ollama
-    #   id: tev1:0.8b
-    #   baseUrl: http://localhost:11434/v1
-    #   api: typesafe-system-one
-    #   apiKey: ollama        # local servers ignore it; the transport needs a non-empty value
-    #                         # or "secret:<name>" referencing the encrypted store (see
-    #                         # `decisionModels:` below for the API key flow).
+    # decisionModel: ollama/tev1:0.8b
   - id: auto-flash                    # bare id: normalised to "switchback/auto-flash"
     name: Auto (Switchback) - Flash
     fallbacks:
@@ -99,18 +94,18 @@ models:
       - ollama-cloud/glm-5.3-flash
       - opencode-go/mimo-v2.6-flash
 
-decisionModels:
-  - name: main
-    provider: typesafe
-    id: jev-latest
-    # Optional baseUrl + api + apiKey for a local System One endpoint.
-    # baseUrl: http://localhost:11434/v1
-    # api: typesafe-system-one
-    # apiKey: ollama            # local; for a real key use secret:<name> below.
-  - name: remote-fallback
-    provider: typesafe
-    id: jev-1.13
-    # apiKey: secret:typesafe-fb   # stored encrypted under switchback/secrets.json
-    #                             #   (managed via the /switchback-config dialogue or
-    #                             #    the sb-3 secrets store directly).
+# Connection details for direct endpoints, keyed by the same address a chain
+# names in `decisionModel:`. Entries without `baseUrl` are unnecessary (the
+# catalog resolves the address) and warn "catalog only".
+#
+# decisionModels:
+#   "ollama/tev1:0.8b":
+#     baseUrl: http://localhost:11434/v1
+#     apiKey: local            # local servers ignore the token, but the
+#                              # transport refuses to send without one; use
+#                              # secret:<name> for a real key.
+#   typesafe/jev-1.13:
+#     apiKey: secret:typesafe-fb   # stored encrypted under switchback/secrets.json
+#                                  #   (managed via /switchback-config or the
+#                                  #    secrets store directly).
 </content>

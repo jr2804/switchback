@@ -75,7 +75,7 @@ nothing is hardcoded, so any deployment can be pointed at:
 | Variable | Required | Meaning |
 |---|---|---|
 | `SWITCHBACK_CLASSIFIER_API` | yes | transport id: `typesafe-system-one` or `llama-cpp-classify` |
-| `SWITCHBACK_CLASSIFIER_PROVIDER` | yes | provider label for the model handle; must match the `jev:` provider in `switchback.yaml` |
+| `SWITCHBACK_CLASSIFIER_PROVIDER` | yes | provider label for the model handle; must match the provider of the `decisionModel:` address in `switchback.yaml` |
 | `SWITCHBACK_CLASSIFIER_MODEL` | yes | classifier model id |
 | `SWITCHBACK_CLASSIFIER_BASE_URL` | yes | API base URL / llama-server root |
 | `SWITCHBACK_CLASSIFIER_API_KEY` | no | bearer token; required by hosted endpoints, omit for a keyless local server |
@@ -114,7 +114,7 @@ provider `vercel-ai-gateway`, model e.g. `typesafe-ai/jev`, base
 | Variable | Value |
 |---|---|
 | `SWITCHBACK_CLASSIFIER_API` | `llama-cpp-classify` |
-| `SWITCHBACK_CLASSIFIER_PROVIDER` | `llama.cpp` (any label; must match the `jev:` provider in `switchback.yaml`) |
+| `SWITCHBACK_CLASSIFIER_PROVIDER` | `llama.cpp` (any label; must match the provider of the `decisionModel:` address in `switchback.yaml`) |
 | `SWITCHBACK_CLASSIFIER_MODEL` | the model id `llama-server` reports (e.g. a GGUF filename) |
 | `SWITCHBACK_CLASSIFIER_BASE_URL` | `http://127.0.0.1:8080` |
 | `SWITCHBACK_CLASSIFIER_API_KEY` | only when `llama-server` runs with `--api-key` |
@@ -136,7 +136,7 @@ at Ollama's `/v1`:
 | Variable | Value |
 |---|---|
 | `SWITCHBACK_CLASSIFIER_API` | `typesafe-system-one` |
-| `SWITCHBACK_CLASSIFIER_PROVIDER` | `ollama` (any label; must match the `jev:` provider in `switchback.yaml`) |
+| `SWITCHBACK_CLASSIFIER_PROVIDER` | `ollama` (any label; must match the provider of the `decisionModel:` address in `switchback.yaml`) |
 | `SWITCHBACK_CLASSIFIER_MODEL` | an Ollama **decision** model: `nimble`, `tev1`, `clef` or `clef-flash` |
 | `SWITCHBACK_CLASSIFIER_BASE_URL` | `http://localhost:11434/v1` |
 | `SWITCHBACK_CLASSIFIER_API_KEY` | any non-empty dummy value, e.g. `ollama` (see below) |
@@ -147,10 +147,13 @@ Two gotchas:
   capability (`ollama pull nimble`). Check with `ollama show <model>` — if the
   `capabilities` list has no `decision`, the endpoint returns 400
   "does not support decision". A generic chat GGUF is not decision-capable.
-- Ollama's local requests need no key, but pi's `typesafe-system-one` transport
-  throws before sending unless a non-empty `apiKey` is present. Ollama ignores the
-  `Authorization` header, so set `SWITCHBACK_CLASSIFIER_API_KEY` to any dummy value
-  (e.g. `ollama`).
+- Ollama's local requests need no key, but switchback's System One transport
+  (pi's `typesafe-system-one` and the OpenCode adapter alike, both driven by
+  `@typesafe-ai/sdk`) throws before sending unless a non-empty `apiKey` is
+  present. Ollama ignores the `Authorization` header, so set
+  `SWITCHBACK_CLASSIFIER_API_KEY` to any dummy value (e.g. `ollama`; in
+  `switchback.yaml` a `decisionModels:` entry uses `apiKey: local` for the
+  same effect).
 
 To classify with a **generic chat GGUF** you already have (any small local model),
 serve it with `llama-server` instead and use `llama-cpp-classify`: that transport
@@ -159,10 +162,11 @@ reads the label next-token probabilities and needs no decision-trained model.
 ### When are PROVIDER / MODEL / BASE_URL necessary?
 
 Always, for this test: it builds the classifier model handle directly, bypassing pi's
-catalog, so none of the four has a default. In normal `switchback.yaml` use they are
-only the `jev:` entry (`provider` + `id`) and pi resolves the base URL from its catalog —
-the test's explicit `BASE_URL` exists only because it is not loading that catalog.
-`API_KEY` is the single optional value (keyless local servers omit it).
+catalog, so none of the four has a default. In normal `switchback.yaml` use the
+`decisionModel:` address (`provider/model-id`) is all there is, and pi resolves the base
+URL from its catalog — the test's explicit `BASE_URL` exists only because it is not
+loading that catalog. `API_KEY` is the single optional value (keyless local servers omit
+it).
 
 Each corpus scenario asserts the class the locked prompt should return. This run is the
 ground-truth validation the coverage matrix's `Jev ⏳` cells are waiting for; a red case
@@ -231,7 +235,7 @@ MiniMax capture are preserved verbatim and test-asserted, the rest of the raw
 corpus is not shipped. Jev validation
 status is `⏳` everywhere because TYPESAFE_API_KEY is not set. The router works
 today on a no-Jev install (blind cycle) and will work as documented when Jev is
-wired in (no code change required - just set `jev:` in `switchback.yaml` to a
+wired in (no code change required - just set `decisionModel:` in `switchback.yaml` to a
 registered classifier). A live Jev re-validation can then be run end-to-end
 against those fixtures.
 

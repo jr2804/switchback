@@ -1,24 +1,26 @@
 /**
- * Minimal System One classifier transport.
+ * System One classifier transport, delegated to the official SDK
+ * (`@typesafe-ai/sdk`): URL building, auth, retries, backoff, abort and body
+ * encoding are the package's; switchback only picks the endpoint, maps the
+ * question/answer types it already shares with pi-ai, and keeps its own
+ * fail-closed answer validation (the SDK types the reply but does not
+ * runtime-validate it).
  *
- * Why this exists instead of importing pi's own transport:
- * `@earendil-works/pi-ai/api/typesafe-system-one.lazy` resolves in this
- * repository (it has its own node_modules) but NOT in a package installed by
- * `pi install`. Pi supplies host packages to extensions by *bare specifier*
- * only, so `import ... from "@earendil-works/pi-ai"` works while any deep
- * subpath fails with "Cannot find module". The type-only imports below are
- * erased at load, so they are safe; a value import is not.
+ * Why not pi's own transport: `@earendil-works/pi-ai/api/typesafe-system-one.lazy`
+ * resolves in this repository but NOT in a package installed by `pi install` -
+ * pi supplies host packages to extensions by *bare specifier* only, so any deep
+ * subpath fails with "Cannot find module". The type-only pi-ai imports below
+ * are erased at load; the SDK is switchback-core's own real dependency and
+ * resolves everywhere.
  *
- * The wire protocol is small and stable (Ollama v0.35+ and TypeSafe both serve
- * it): POST `${baseUrl}/systemone` with `{ model, state, questions }`, read
- * `{ answers }`. `bool` questions travel as the wire-level `noul` type.
- *
- * This is switchback's own adapter for its own opt-in local-classifier
- * endpoint. It deliberately does not reimplement pi's retry/usage-costing
- * layers: a local server needs neither, and classifyError already applies its
- * own timeout and treats a transport error as "no classifier".
+ * URL conventions differ and are bridged in `toSdkBaseUrl`: switchback (and
+ * pi, and OpenAI-compatible servers) carry the version segment in `baseUrl`
+ * (`http://host:11434/v1` + `/systemone`), while the SDK takes an API root and
+ * appends `/v1/systemone` itself.
  */
 
+import { TypeSafeClient } from "@typesafe-ai/sdk";
+import type { EntryType, Fetch, Questions } from "@typesafe-ai/sdk";
 import type {
 	ClassifierAnswer,
 	ClassifierApi,
@@ -52,19 +54,11 @@ export function classifierState(text: string): ClassifierContext["state"] {
 	return text.slice(0, 16_000) as unknown as ClassifierContext["state"];
 }
 
-/** Default request timeout. classifyError wraps the call in its own race (see `CLASSIFIER_TIMEOUT_MS`). */
+/** Per-attempt timeout handed to the SDK; classifyError wraps the call in its own race (see `CLASSIFIER_TIMEOUT_MS`). */
 const REQUEST_TIMEOUT_MS = 30_000;
 
-/** The subset of `fetch` this transport uses, injectable for tests. */
-export type FetchLike = (
-	url: string,
-	init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal },
-) => Promise<{
-	ok: boolean;
-	status: number;
-	text(): Promise<string>;
-	json(): Promise<unknown>;
-}>;
+/** The fetch implementation the SDK uses; injectable for tests. Alias of the SDK's own `Fetch`. */
+export type FetchLike = Fetch;
 
 export interface SystemOneOptions {
 	/** Bearer token. Local servers ignore it, but the header is always sent. */
@@ -83,6 +77,17 @@ function wireQuestions(questions: Record<string, ClassifierQuestion>): Record<st
 			question.type === "bool" ? { ...question, type: "noul" } : question,
 		]),
 	);
+}
+
+/**
+ * Translate switchback's `baseUrl` (version segment included, pi/OpenAI
+ * compatible convention) into the SDK's API root (version segment appended by
+ * the SDK): `http://host:11434/v1` -> `http://host:11434`, so the SDK's
+ * `/v1/systemone` lands on the same URL the old transport built.
+ */
+function toSdkBaseUrl(baseUrl: string): string {
+	const trimmed = baseUrl.replace(/\/+$/, "");
+	return trimmed.endsWith("/v1") ? trimmed.slice(0, -"/v1".length) : trimmed;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -143,7 +148,6 @@ function parseAnswers(label: string, value: unknown, context: ClassifierContext)
  */
 export function systemOneClassifier(baseUrl: string, options: SystemOneOptions = {}): ProviderClassifier {
 	const label = options.label ?? "System One";
-	const url = `${baseUrl.replace(/\/+$/, "")}/systemone`;
 	return {
 		async classify(
 			model: ClassifierModel<ClassifierApi>,
@@ -161,24 +165,26 @@ export function systemOneClassifier(baseUrl: string, options: SystemOneOptions =
 			try {
 				const apiKey = classifierOptions?.apiKey ?? options.apiKey;
 				if (!apiKey) throw new Error(`No API key for provider: ${model.provider}`);
-				const doFetch = options.fetch ?? (globalThis.fetch as unknown as FetchLike);
-				const signal = classifierOptions?.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-				const response = await doFetch(url, {
-					method: "POST",
-					headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-					body: JSON.stringify({
-						model: model.id,
-						state: context.state,
-						questions: wireQuestions(context.questions),
-					}),
-					signal,
+				const client = new TypeSafeClient({
+					apiKey,
+					baseURL: toSdkBaseUrl(baseUrl),
+					// Local SystemOne servers (Ollama, sham gateways) do not accept
+					// `Content-Encoding: zstd`, which the SDK defaults to on Node >= 22.15.
+					compression: false,
+					...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
 				});
-				const bodyText = response.ok ? "" : await response.text();
-				if (!response.ok)
-					throw new Error(`${label} returned ${response.status}${bodyText ? `: ${bodyText}` : ""}`);
-				const body: unknown = await response.json();
-				if (!isRecord(body)) throw new Error(`${label} returned an unexpected response`);
-				result.answers = parseAnswers(label, body["answers"], context);
+				const reply = await client.systemOne(
+					{
+						model: model.id,
+						state: context.state as unknown as NonNullable<EntryType>,
+						questions: wireQuestions(context.questions) as unknown as Questions,
+					},
+					{
+						signal: classifierOptions?.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+						timeout: REQUEST_TIMEOUT_MS,
+					},
+				);
+				result.answers = parseAnswers(label, reply.answers, context);
 				return result;
 			} catch (error) {
 				result.stopReason = classifierOptions?.signal?.aborted ? "aborted" : "error";
@@ -198,7 +204,7 @@ export function systemOneClassifier(baseUrl: string, options: SystemOneOptions =
 export interface SystemOneClassifierPortOptions {
 	/** Base URL of the System One endpoint; `undefined` matches "not configured". */
 	baseUrl: string | undefined;
-	/** The provider/id pair `findOfType` resolves - pass the config's `jev` identity. */
+	/** The provider/id pair `findOfType` resolves - pass the config's `decisionModel` identity. */
 	identity: { provider: string; id: string };
 	/** Bearer token for the endpoint. */
 	apiKey?: string;

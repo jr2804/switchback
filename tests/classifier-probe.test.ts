@@ -138,7 +138,7 @@ describe("classifier-probe: local endpoint path", () => {
 	it("posts the three questions and reports the parsed answers", async () => {
 		const captured: { url: string; body: string }[] = [];
 		const fetch: FetchLike = async (url, init) => {
-			captured.push({ url, body: init.body });
+			captured.push({ url: String(url), body: String(init.body) });
 			// The wire shape: one typed answer object per question id, bool as `noul`.
 			const body = {
 				model: "tev1",
@@ -154,7 +154,10 @@ describe("classifier-probe: local endpoint path", () => {
 				},
 				usage: { input: 1, output: 1 },
 			};
-			return { ok: true, status: 200, text: async () => JSON.stringify(body), json: async () => body };
+			return new Response(JSON.stringify(body), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			}) as unknown as ReturnType<FetchLike>;
 		};
 		const probe = await probeLocalClassifier({
 			baseUrl: "http://localhost:11434/v1",
@@ -171,12 +174,11 @@ describe("classifier-probe: local endpoint path", () => {
 	});
 
 	it("reports a failing endpoint without throwing", async () => {
-		const fetch: FetchLike = async () => ({
-			ok: false,
-			status: 400,
-			text: async () => JSON.stringify({ error: "does not support decision" }),
-			json: async () => ({ error: "does not support decision" }),
-		});
+		const fetch: FetchLike = async () =>
+			new Response(JSON.stringify({ error: "does not support decision" }), {
+				status: 400,
+				headers: { "content-type": "application/json" },
+			}) as unknown as ReturnType<FetchLike>;
 		const probe = await probeLocalClassifier({
 			baseUrl: "http://localhost:11434/v1",
 			apiKey: "ollama",

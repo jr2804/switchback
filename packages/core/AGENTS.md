@@ -50,6 +50,13 @@ the `src/index.ts` barrel. The OpenCode adapter lives in `packages/opencode`.
   authored for a host loader. Do not add a build step, a `dist/` layout or a
   file outside `src/` to the published set without changing that contract on
   purpose (`docs/versioning.md` → Publishing).
+- **Runtime dependencies are decisions, not conveniences.** `switchback-core`
+  carries exactly two: `yaml` (the config format) and `@typesafe-ai/sdk` (the
+  SystemOne wire call — URL building, auth, retries, abort; adopted by the
+  user's directive (`switchback-v9z`), replacing the hand-rolled transport).
+  Switchback still owns answer validation (`src/systemone.ts` `parseAnswers`):
+  the SDK types the reply but does not runtime-validate it. A new runtime
+  dependency needs a recorded reason of that shape, not "handy".
 
 ## Work Guidance
 

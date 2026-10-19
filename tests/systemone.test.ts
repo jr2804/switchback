@@ -1,5 +1,6 @@
 /**
- * Unit tests for switchback's own System One transport (packages/core/src/systemone.ts).
+ * Unit tests for switchback's System One transport (packages/core/src/systemone.ts),
+ * which delegates the wire call to `@typesafe-ai/sdk`.
  *
  * Hermetic: fetch is injected, so these never touch the network. The live
  * end-to-end path is covered separately by tests/integration-classifier.test.ts
@@ -24,19 +25,20 @@ const MODEL: ClassifierModel<ClassifierApi> = {
 
 interface Captured {
 	url: string;
-	init: { method: string; headers: Record<string, string>; body: string };
+	init: { method: string; headers: Headers; body: string };
 }
 
 function stubFetch(body: unknown, status = 200): { fetch: FetchLike; captured: Captured[] } {
 	const captured: Captured[] = [];
 	const fetchImpl: FetchLike = async (url, init) => {
-		captured.push({ url, init });
-		return {
-			ok: status >= 200 && status < 300,
+		captured.push({
+			url: String(url),
+			init: { method: init?.method ?? "", headers: new Headers(init?.headers), body: String(init?.body ?? "") },
+		});
+		return new Response(JSON.stringify(body), {
 			status,
-			text: async () => JSON.stringify(body),
-			json: async () => body,
-		};
+			headers: { "content-type": "application/json" },
+		});
 	};
 	return { fetch: fetchImpl, captured };
 }
@@ -57,6 +59,8 @@ const CONTEXT = {
 describe("systemOneClassifier", () => {
 	it("posts to /systemone, maps bool to noul, and parses every answer type", async () => {
 		const { fetch, captured } = stubFetch({
+			model: "tev1:0.8b",
+			usage: { input_tokens: 12, output_tokens: 3 },
 			answers: {
 				class: { type: "choice", choice: "quota", probabilities: { quota: 0.9, auth: 0.1 }, confidence: 0.8 },
 				reset: { type: "score", score: 2.5, confidence: 0.7 },
@@ -69,9 +73,11 @@ describe("systemOneClassifier", () => {
 		);
 
 		expect(captured).toHaveLength(1);
+		// The SDK takes an API root and appends `/v1/systemone` itself; switchback's
+		// baseUrl convention carries the `/v1`, so the transport strips it first.
 		expect(captured[0]?.url).toBe("http://localhost:11434/v1/systemone");
 		expect(captured[0]?.init.method).toBe("POST");
-		expect(captured[0]?.init.headers["authorization"]).toBe("Bearer ollama");
+		expect(captured[0]?.init.headers.get("authorization")).toBe("Bearer ollama");
 		const payload = JSON.parse(captured[0]!.init.body) as {
 			model: string;
 			state: unknown;
@@ -94,11 +100,11 @@ describe("systemOneClassifier", () => {
 		expect(result.answers["more"]).toEqual({ type: "bool", probability: 0.25 });
 	});
 
-	it("trims a trailing slash instead of doubling it", async () => {
+	it("trims a trailing slash and the version segment instead of doubling it", async () => {
 		const { fetch, captured } = stubFetch({ answers: {} });
 		await systemOneClassifier("http://127.0.0.1:8080/v1/", { apiKey: "k", fetch }).classify(MODEL, {
 			state: {},
-			questions: {},
+			questions: { q: { type: "score" as const, instructions: "Pick.", criteria: ["a", "b"] } },
 		});
 		expect(captured[0]?.url).toBe("http://127.0.0.1:8080/v1/systemone");
 	});

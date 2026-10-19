@@ -57,6 +57,8 @@ pi --model switchback/auto -p "ping" --no-tools   # -> pong
 | `/switchback-crashes [n]` | List the most-recent N entries from the global crash store (default 10). Each row shows short-hash, provider/model, class-or-reason, count, last-seen, and an `[annot]` marker for user-annotated entries. |
 | `/switchback-annotate <hash> <quota\|auth\|transient\|overflow\|unknown> [note...]` | Write a user-confirmed class onto a stored crash. After annotation, the Tier 2b cache short-circuits the classifier call for the exact raw bytes. Hash must be a unique ≥4-char prefix; class must be one of the five listed; ambiguous or unknown prefix produces a clear error. |
 | `/switchback-next` | Cycle the session's virtual-model pin to the next fallback (including pin off). The pin is the user's "route here" override and wins for as long as the pinned model is usable; with `debug: true` each change prints a line naming what the classifier or clamp resolved to. |
+| `/switchback-disable <provider/model>` | Manually stop routing to a model in every chain (global, persists in `disabled.json` in the state dir, never auto-expires). Useful for a free model that resolves fine but has become poor or unreliable. See [Manually disabling a model](docs/configuration.md#manually-disabling-a-model). |
+| `/switchback-enable <provider/model\|all>` | Re-enable one manually disabled model, or `all` of them. |
 
 ## Configuration
 

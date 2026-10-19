@@ -29,6 +29,7 @@
 | Shared types | `packages/core/src/types.ts` |
 | Atomic store writes (per-write staging path, retried rename) | `packages/core/src/atomic-write.ts` |
 | Blocked-until store (atomic) | `packages/core/src/state.ts` |
+| Manual disable list (atomic, `disabled.json`) | `packages/core/src/state.ts` |
 | Crash store + Tier 2b annotation cache | `packages/core/src/crashes.ts` |
 | Encrypted API-key store (DPAPI at rest) | `packages/pi/src/secrets.ts` |
 | Simulate mode (fixtures + replay) | `packages/core/src/simulate.ts` |

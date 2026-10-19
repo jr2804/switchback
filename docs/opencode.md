@@ -66,7 +66,7 @@ The plugin reads the same [`switchback.yaml`](configuration.md) layers as pi:
 | agent overlay | `~/.pi/agent/switchback.yaml` |
 | project override | `<cwd>/.pi/switchback.yaml` |
 
-Runtime state (`blocks.json`, `crashes.json`) lives under
+Runtime state (`blocks.json`, `crashes.json`, `disabled.json`, `pin.json`) lives under
 `~/.pi/agent/switchback/` and is shared with pi; set `SWITCHBACK_DIR` to
 relocate it. A `decisionModel:` address with no `decisionModels:` entry is a
 catalog lookup, and OpenCode has no classifier catalog — the plugin notifies
@@ -85,10 +85,12 @@ a visible notice — the same failure mode as pi, against a different store.
 
 | Command | Effect |
 |---|---|
-| `/switchback` | List every configured chain with its current state (effective availability, blocked-until). |
+| `/switchback` | List every configured chain with its current state (effective availability, blocked-until, disabled-by-hand). |
 | `/switchback-unblock` | Same listing. |
 | `/switchback-unblock <ID>` | Clear the block on one model id (`provider/model`, case-insensitive). |
 | `/switchback-unblock ALL` | Clear the entire block map. |
+| `/switchback-disable <ID>` | Manually disable a model in every chain (writes `disabled.json`; see [Manually disabling a model](configuration.md#manually-disabling-a-model)). |
+| `/switchback-enable <ID\|ALL>` | Re-enable one manually disabled model, or `ALL` of them. |
 
 Slash commands are dispatched by the OpenCode clients (TUI, web). Non-interactive
 `opencode run "…"` sends its argument as a literal prompt, so use the clients to

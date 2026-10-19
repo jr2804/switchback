@@ -3,7 +3,8 @@
 ## Purpose
 
 The OpenCode V2 plugin, `opencode-switchback`. `setup()` registers the `retry`
-session hook plus the `/switchback` and `/switchback-unblock` commands. OpenCode
+session hook plus the `/switchback`, `/switchback-unblock`,
+`/switchback-disable` and `/switchback-enable` commands. OpenCode
 has no per-request virtual-model dispatch, so the fallback job moved to the turn
 boundary around the retry hook: classify the failure through the configured
 classifier, update the shared block state, `ctx.session.switchModel()` to the
@@ -58,9 +59,11 @@ the pi adapter unchanged (`switchback-core` config layers, default state dir,
   every sighting: a transient cycle pi would count in flight is one OpenCode's
   own retry policy already scheduled. Do not thread host attempt counts into
   core without reopening that seam.
-- **State goes through the core stores** (`blocks.json`, `crashes.json`) with
-  the account-scoped default directory + `SWITCHBACK_DIR` override; the core
-  owns format, migration and atomic writes.
+- **State goes through the core stores** (`blocks.json`, `crashes.json`,
+  `disabled.json`) with the account-scoped default directory + `SWITCHBACK_DIR`
+  override; the core owns format, migration and atomic writes. The manual
+  disable list is read once per hook call and threaded into the router through
+  `RouteInputs.disabled` — never re-read per candidate.
 - **`secret:` refs resolve from the environment.** OpenCode exposes no readable
   secret vault (its credential API activates stored profiles, never returning
   key material), so the adapter hands `loadConfig` an env-backed

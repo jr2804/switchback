@@ -36,7 +36,8 @@ Build steps 1–8 are complete (per the design doc):
 - [x] **Step 8** — Catalog validity & degraded lists: per-route availability resolution, single-model warning, `/switchback` status command.
 - [x] **OpenCode plugin** — `packages/opencode/` ships the same routing for
   [OpenCode V2](opencode.md) (`retry`-hook classification, `switchModel`
-  advancement at the turn boundary, `/switchback` + `/switchback-unblock`),
+  advancement at the turn boundary, `/switchback` + `/switchback-unblock` +
+  `/switchback-disable` + `/switchback-enable`),
   on the shared `switchback-core` package and shared block state. Pinned by
   `tests/opencode-adapter.test.ts`; live-instance exercise still open
   (`switchback-wix.10`).
@@ -57,7 +58,7 @@ their environment gates are set:
 
 | File | Tests | Covers |
 |---|---|---|
-| `tests/router.test.ts` | 96 | routing, blind cycle, classifier-mocked verdicts, session stickiness, pin override, idle reset, context-window fit and the classifier's candidate choice, forward failover walk, catalog validity, exhaustion, thinking-level resolution, state, buildRoute, and the unretried-failure fallback (`observeUnretriedFailure` blocks and the next turn walks forward) |
+| `tests/router.test.ts` | 100 | routing, blind cycle, classifier-mocked verdicts, session stickiness, pin override, idle reset, context-window fit and the classifier's candidate choice, forward failover walk, catalog validity, exhaustion, thinking-level resolution, state, buildRoute, manual disables (walk skip, session stickiness, pin, exhaustion), and the unretried-failure fallback (`observeUnretriedFailure` blocks and the next turn walks forward) |
 | `tests/config.test.ts` | 28 | `DEFAULT_CONFIG`, `findModelConfig`, layer aggregation, YAML-only, classifier-field validation, orphan `decisionModels` rejection, reserved-provider rejection, debug flag |
 | `tests/dialogue.test.ts` | 35 | config editor: comment-preserving round-trip, layers, decision models, secret references; dialogue flows incl. the layer chooser, the searchable picker and the classifier test offer (scripted UI, hermetic) |
 | `tests/secrets.test.ts` | 23 (1 opt-in) | encrypted DPAPI store: round-trip, corruption quarantine, version refuse; live DPAPI gated on `SWITCHBACK_SECRETS_LIVE` |
@@ -73,7 +74,8 @@ their environment gates are set:
 | `tests/state-migration.test.ts` | 5 | legacy `<cwd>/.pi/switchback.json` → new path migration |
 | `tests/systemone.test.ts` | 5 | switchback's own System One transport (hermetic; injected fetch) |
 | `tests/commands.test.ts` | 4 | the registered command surface and its snapshot |
-| `tests/opencode-adapter.test.ts` | 7 | the OpenCode plugin end to end (hermetic fake harness): quota block + advance, pre-blocked exhaustion, out-of-chain silence, no-classifier blind cycle, empty-message short-circuit, `/switchback` + `/switchback-unblock` |
+| `tests/opencode-adapter.test.ts` | 14 | the OpenCode plugin end to end (hermetic fake harness): quota block + advance, pre-blocked exhaustion, out-of-chain silence, no-classifier blind cycle, empty-message short-circuit, `secret:` resolution, `/switchback` + `/switchback-unblock`, and the manual disable list (`/switchback-disable`, refusal of an unlisted address, advance never onto a disabled model, `/switchback-enable ALL`, disabled marker) |
+| `tests/disabled.test.ts` | 7 | the manual disable store (`disabled.json`): missing file, idempotent disable with a stable stamp, no expiry, enable, clear-all count, hand-edited non-number rejection, atomic write |
 | `tests/thinking.test.ts` | 10 | reasoning-level categories, availability, and classifier resolution (hermetic) |
 | `tests/barrel.test.ts` | 2 | `packages/pi/src/index.ts` resolves and exposes the documented entry surface — nothing else loads it, so a bad re-export would otherwise ship |
 | `tests/imports.test.ts` | 2 | shipped code never value-imports a host-package subpath (install-safe) |

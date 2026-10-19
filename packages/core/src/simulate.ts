@@ -30,7 +30,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { Decision } from "./decision.ts";
 import type { NotifyPort, RouterRegistryPort, ThinkingSupportPort } from "./ports.ts";
 import { decide } from "./routing.ts";
-import type { BlockedMap, ModelId, ResolvedSwitchbackConfig } from "./types.ts";
+import type { BlockedMap, DisabledMap, ModelId, ResolvedSwitchbackConfig } from "./types.ts";
 
 export interface SimulateConfig {
 	scenarios: Record<string, string>;
@@ -112,10 +112,17 @@ export async function simulateRetry(
 	scenarioMessage: string,
 	modelConfig: ResolvedSwitchbackConfig,
 	registry: RouterRegistryPort,
-	inputs: { support: ThinkingSupportPort; now?: number; blocked?: BlockedMap; notify?: NotifyPort },
+	inputs: {
+		support: ThinkingSupportPort;
+		now?: number;
+		blocked?: BlockedMap;
+		disabled?: DisabledMap;
+		notify?: NotifyPort;
+	},
 ): Promise<SimulateResult> {
 	const now = inputs.now ?? Date.now();
 	const blocked = inputs.blocked ?? {};
+	const disabled = inputs.disabled ?? {};
 	const firstFallback = modelConfig.fallbacks[0];
 	if (firstFallback === undefined) throw new SimulateError("model config has no fallbacks");
 	const [provider, id] = firstFallback.split("/");
@@ -167,6 +174,7 @@ export async function simulateRetry(
 	const result = await decide("retry", fakeRequest, modelConfig, registry, {
 		now,
 		blocked,
+		disabled,
 		support: inputs.support,
 		simulateErrorMessage: scenarioMessage,
 		...(inputs.notify ? { notify: inputs.notify } : {}),

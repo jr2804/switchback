@@ -67,9 +67,10 @@ import type { NoClassifierReason } from "./classify.ts";
 import { chooseContextCandidate, fitsContext } from "./context-fit.ts";
 import { assessFailure, recordDecideCrash } from "./failure.ts";
 import { decideIdleReset } from "./idle.ts";
-import { getPinnedModel, isBlocked, unblockModel } from "./state.ts";
+import { getPinnedModel, isBlocked, isDisabled, unblockModel } from "./state.ts";
 import type {
 	BlockedMap,
+	DisabledMap,
 	DecisionModelConfig,
 	ModelId,
 	ResolvedSwitchbackConfig,
@@ -80,6 +81,12 @@ import type {
 export interface RouteInputs {
 	now: number;
 	blocked: BlockedMap;
+	/**
+	 * Models the user disabled by hand (`/switchback-disable`). Unlike `blocked`
+	 * these never expire; a disabled model is skipped in every chain and never
+	 * chosen as a pin or continuation target.
+	 */
+	disabled: DisabledMap;
 	/** The host's reasoning-level rules; see `packages/core/src/ports.ts`. */
 	support: ThinkingSupportPort;
 	/** Optional simulate-mode error message injected for `retry` requests. */
@@ -161,6 +168,7 @@ async function pickWithContextFit(opts: {
 	skip: ModelId | undefined;
 	excluded?: ReadonlySet<ModelId>;
 	blocked: BlockedMap;
+	disabled: DisabledMap;
 	now: number;
 	startAfter: ModelId | undefined;
 	registry: RouterRegistryPort;
@@ -172,7 +180,7 @@ async function pickWithContextFit(opts: {
 	const excluded = opts.excluded ?? new Set<ModelId>();
 	const usable = walkOrder(opts.resolved, opts.startAfter)
 		.filter((id) => id !== opts.skip && !excluded.has(id))
-		.filter((id) => !isBlocked(id, opts.now, opts.blocked));
+		.filter((id) => !isBlocked(id, opts.now, opts.blocked) && !isDisabled(id, opts.disabled));
 	let eligible = usable
 		.map((id) => ({ id, model: lookupModel(opts.registry, id) }))
 		.filter((entry): entry is { id: ModelId; model: HostModel } => entry.model !== undefined);
@@ -184,7 +192,15 @@ async function pickWithContextFit(opts: {
 		if (fitting.length > 0) eligible = fitting;
 	}
 	if (eligible.length === 0)
-		return pickNextEffective(opts.resolved, opts.skip, opts.blocked, opts.now, opts.startAfter, excluded);
+		return pickNextEffective(
+			opts.resolved,
+			opts.skip,
+			opts.blocked,
+			opts.now,
+			opts.startAfter,
+			excluded,
+			opts.disabled,
+		);
 	const failedProvider = opts.skip === undefined ? undefined : providerPart(opts.skip);
 	const ordered = orderByScope(
 		eligible.map((entry) => entry.id),
@@ -289,7 +305,8 @@ export async function decide(
 		if (
 			previousId &&
 			resolved.entries.some((e) => e.id === previousId && e.availability === "effective") &&
-			!isBlocked(previousId, now, blocked)
+			!isBlocked(previousId, now, blocked) &&
+			!isDisabled(previousId, inputs.disabled)
 		) {
 			return {
 				decision: { kind: "stick", modelId: previousId, reason: "continuation" },
@@ -309,7 +326,11 @@ export async function decide(
 	const pinned = getPinnedModel(modelConfig.id);
 	if (pinned !== undefined) {
 		const pin = resolved.entries.find((e) => e.id === pinned);
-		if (pin?.availability === "effective" && !isBlocked(pinned, now, blocked)) {
+		if (
+			pin?.availability === "effective" &&
+			!isBlocked(pinned, now, blocked) &&
+			!isDisabled(pinned, inputs.disabled)
+		) {
 			return resolveDispatchLevel(
 				{
 					decision:
@@ -352,6 +373,7 @@ export async function decide(
 			resolved,
 			skip: undefined,
 			blocked,
+			disabled: inputs.disabled,
 			now,
 			startAfter: undefined,
 			registry,
@@ -388,7 +410,11 @@ export async function decide(
 	// current model is left behind, and the walk continues FORWARD from it.
 	if (current !== undefined) {
 		const cur = resolved.entries.find((e) => e.id === current);
-		if (cur?.availability === "effective" && !isBlocked(current, now, blocked)) {
+		if (
+			cur?.availability === "effective" &&
+			!isBlocked(current, now, blocked) &&
+			!isDisabled(current, inputs.disabled)
+		) {
 			return {
 				decision: { kind: "stick", modelId: current, reason: "session-sticky" },
 				nextState: keepState(current, request.state, request.state?.transientRetries ?? 0),
@@ -403,6 +429,7 @@ export async function decide(
 		resolved,
 		skip: undefined,
 		blocked,
+		disabled: inputs.disabled,
 		now,
 		startAfter: current,
 		registry,
@@ -477,6 +504,7 @@ async function decideRetry(
 			resolved,
 			skip: undefined,
 			blocked,
+			disabled: inputs.disabled,
 			now,
 			startAfter: advanceFrom,
 			registry,
@@ -528,6 +556,7 @@ async function decideRetry(
 			excluded: retryExcluded,
 			failedScope: classified?.scope,
 			blocked,
+			disabled: inputs.disabled,
 			now,
 			startAfter: advanceFrom,
 			registry,
@@ -588,6 +617,7 @@ async function decideRetry(
 			excluded: retryExcluded,
 			failedScope: classified?.scope,
 			blocked,
+			disabled: inputs.disabled,
 			now,
 			startAfter: advanceFrom,
 			registry,
@@ -632,6 +662,7 @@ async function decideRetry(
 		excluded: retryExcluded,
 		failedScope: classified?.scope,
 		blocked,
+		disabled: inputs.disabled,
 		now,
 		startAfter: advanceFrom,
 		registry,

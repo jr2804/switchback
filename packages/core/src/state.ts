@@ -20,7 +20,8 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "./atomic-write.ts";
 import { switchbackStateDir } from "./config.ts";
-import type { BlockedMap, ModelId } from "./types.ts";
+import type { BlockedMap, DisabledMap, ModelId } from "./types.ts";
+export type { DisabledMap };
 
 /** Path to the blocked-until map. The new (account-scoped) location. */
 export function stateFilePath(): string {
@@ -120,6 +121,67 @@ export function unblockModel(modelId: ModelId, path: string = stateFilePath()): 
 	if (!(modelId in map)) return;
 	delete map[modelId];
 	writeRaw(path, map);
+}
+
+/**
+ * Manually disabled models, persisted to `<state dir>/disabled.json`.
+ *
+ * This is the user's explicit "never route here" list, set and cleared by the
+ * `/switchback-disable` and `/switchback-enable` commands. Unlike blocks it has
+ * no reset time: a disabled model stays out of every chain until it is enabled
+ * again. It lives in the state dir (not switchback.yaml) so regenerating the
+ * config - for example re-running the switchback-free skill - cannot silently
+ * re-enable a model the user turned off. Values are the epoch-ms disable time,
+ * kept so a status display can say since when.
+ */
+/** Path to the manually-disabled map. */
+export function disabledFilePath(): string {
+	return join(switchbackStateDir(), "disabled.json");
+}
+
+function readDisabledRaw(path: string): DisabledMap {
+	return readRaw(path);
+}
+
+function writeDisabledRaw(path: string, map: DisabledMap): void {
+	writeRaw(path, map);
+}
+
+/** Read the manually-disabled map. Entries never expire; only `enableModel` removes them. */
+export function readDisabledMap(path: string = disabledFilePath()): DisabledMap {
+	return readDisabledRaw(path);
+}
+
+/** Check whether a model was manually disabled. Takes the map: callers read it once per decision. */
+export function isDisabled(modelId: ModelId, map: DisabledMap): boolean {
+	return map[modelId] !== undefined;
+}
+
+/** Disable a model. Returns false when it was already disabled. */
+export function disableModel(modelId: ModelId, now: number = Date.now(), path: string = disabledFilePath()): boolean {
+	const map = readDisabledRaw(path);
+	if (map[modelId] !== undefined) return false;
+	map[modelId] = now;
+	writeDisabledRaw(path, map);
+	return true;
+}
+
+/** Enable a model again. Returns false when it was not disabled. */
+export function enableModel(modelId: ModelId, path: string = disabledFilePath()): boolean {
+	const map = readDisabledRaw(path);
+	if (!(modelId in map)) return false;
+	delete map[modelId];
+	writeDisabledRaw(path, map);
+	return true;
+}
+
+/** Clear the whole list (the `/switchback-enable all` path). Returns how many were removed. */
+export function clearDisabled(path: string = disabledFilePath()): number {
+	const map = readDisabledRaw(path);
+	const count = Object.keys(map).length;
+	if (count === 0) return 0;
+	writeDisabledRaw(path, {});
+	return count;
 }
 
 /**

@@ -49,7 +49,7 @@ import {
 import { simulateRetry, loadSimulate, getScenario, SimulateError } from "switchback-core/simulate.ts";
 import { findModelConfig, loadConfig } from "switchback-core/config.ts";
 import { callClassifier, classifyError, MAX_SCORE_LEVELS, type NoClassifierReason } from "switchback-core/classify.ts";
-import type { DecisionModelConfig, ResolvedSwitchbackConfig } from "switchback-core/types.ts";
+import type { DecisionModelConfig, DisabledMap, ResolvedSwitchbackConfig } from "switchback-core/types.ts";
 
 interface FakeEntry {
 	provider: string;
@@ -121,16 +121,21 @@ type DecideArgs = Parameters<typeof decide>;
 
 /**
  * `decide()` with the host's reasoning-level rules bound to the registry under
- * test, so each case reads like production without restating the port.
+ * test, so each case reads like production without restating the port. Routes
+ * with nothing disabled unless a case says otherwise.
  */
 function decideWith(
 	reason: DecideArgs[0],
 	request: DecideArgs[1],
 	modelConfig: DecideArgs[2],
 	registry: DecideArgs[3],
-	inputs: Omit<DecideArgs[4], "support"> = { now: Date.now(), blocked: {} },
+	inputs: Omit<DecideArgs[4], "support" | "disabled"> & { disabled?: DisabledMap } = { now: Date.now(), blocked: {} },
 ): ReturnType<typeof decide> {
-	return decide(reason, request, modelConfig, registry, { support: supportFor(registry), ...inputs });
+	return decide(reason, request, modelConfig, registry, {
+		support: supportFor(registry),
+		disabled: {},
+		...inputs,
+	});
 }
 
 function makeFakeRegistry(
@@ -2276,5 +2281,89 @@ describe("router — cascaded failover: chain memory, single candidate, final ab
 			contextTokens: 50_000,
 		});
 		expect(result.nextState?.chainFailed ?? []).toEqual([]);
+	});
+});
+
+describe("router - models disabled by hand", () => {
+	it("a disabled fallback is skipped when advancing after a failure", async () => {
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+				{ provider: "minimax", id: "plus" },
+			],
+			answer: { class: "quota", scope: "account", resetScore: 4 },
+		});
+		const request = buildFakeRequest({
+			reason: "retry",
+			failed: { provider: "zai", id: "glm-4.7", errorMessage: MINIMAX_TOKEN_PLAN_MESSAGE },
+		});
+		const result = await decideWith("retry", request, FALLBACKS, registry, {
+			now: Date.now(),
+			blocked: {},
+			disabled: { "ollama-cloud/pro": Date.now() },
+		});
+		expect(result.decision.kind).toBe("switch");
+		if (result.decision.kind === "switch") expect(result.decision.modelId).toBe("minimax/plus");
+	});
+
+	it("a disabled current model is not continued", async () => {
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			],
+		});
+		const result = await decideWith(
+			"continuation",
+			buildFakeRequest({
+				reason: "continuation",
+				stateCurrent: "ollama-cloud/pro",
+				previous: { provider: "ollama-cloud", id: "pro" },
+			}),
+			FALLBACKS,
+			registry,
+			{ now: Date.now(), blocked: {}, disabled: { "ollama-cloud/pro": Date.now() } },
+		);
+		expect(result.decision.kind).toBe("switch");
+		if (result.decision.kind === "switch") expect(result.decision.modelId).toBe("zai/glm-4.7");
+	});
+
+	it("a disabled pin is ignored (the model is not routed to)", async () => {
+		setPinnedModel("switchback/auto", "ollama-cloud/pro");
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			],
+		});
+		const result = await decideWith("user", buildFakeRequest({ reason: "user" }), FALLBACKS, registry, {
+			now: 1_000_000,
+			blocked: {},
+			disabled: { "ollama-cloud/pro": 1_000_000 },
+		});
+		expect(result.decision.kind).toBe("stick");
+		if (result.decision.kind === "stick") expect(result.decision.modelId).toBe("zai/glm-4.7");
+	});
+
+	it("disabling every fallback surfaces exhaustion instead of a silent retry", async () => {
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			],
+			answer: { class: "quota", scope: "account", resetScore: 4 },
+		});
+		const request = buildFakeRequest({
+			reason: "retry",
+			failed: { provider: "zai", id: "glm-4.7", errorMessage: MINIMAX_TOKEN_PLAN_MESSAGE },
+		});
+		const allDisabled = Object.fromEntries(FALLBACKS.fallbacks.map((id) => [id, Date.now()]));
+		const result = await decideWith("retry", request, FALLBACKS, registry, {
+			now: Date.now(),
+			blocked: {},
+			disabled: allDisabled,
+		});
+		expect(result.decision.kind).toBe("exhausted");
 	});
 });

@@ -19,7 +19,7 @@
  */
 
 import type { AvailabilityPort, HostModel } from "./ports.ts";
-import type { Availability, BlockedMap, ModelId, ResolvedEntry, ResolvedFallbacks } from "./types.ts";
+import type { Availability, BlockedMap, DisabledMap, ModelId, ResolvedEntry, ResolvedFallbacks } from "./types.ts";
 
 function splitModelId(modelId: ModelId): { provider: string; id: string } | undefined {
 	const slash = modelId.indexOf("/");
@@ -124,6 +124,7 @@ export function pickNextEffective(
 	now: number,
 	startAfter?: ModelId,
 	excluded?: ReadonlySet<ModelId>,
+	disabled?: DisabledMap,
 ): { modelId: ModelId; degraded: boolean } | undefined {
 	const effective = effectiveIds(resolved);
 	if (effective.length === 0) return undefined;
@@ -132,14 +133,14 @@ export function pickNextEffective(
 	for (let i = 0; i < count; i++) {
 		const candidate = effective[(start + i) % count]!;
 		if (candidate === skip || excluded?.has(candidate) === true) continue;
+		if (disabled?.[candidate] !== undefined) continue;
 		const blockedUntil = blocked[candidate];
 		if (blockedUntil !== undefined && blockedUntil > now) continue;
 		return { modelId: candidate, degraded: false };
 	}
 	// Degraded mode: only when exactly one effective entry exists. Edge case #4.
-	// An excluded model (one that already failed in this cascade) is never offered,
-	// not even degraded.
-	if (count === 1 && excluded?.has(effective[0]!) !== true) {
+	// An excluded or manually disabled model is never offered, not even degraded.
+	if (count === 1 && excluded?.has(effective[0]!) !== true && disabled?.[effective[0]!] === undefined) {
 		return { modelId: effective[0]!, degraded: true };
 	}
 	// Multiple effective entries all blocked: return undefined so the router

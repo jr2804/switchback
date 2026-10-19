@@ -29,9 +29,15 @@
 import { Plugin } from "@opencode/plugin";
 import {
 	assessFailure,
+	clearDisabled,
+	disableModel,
+	disabledFilePath,
+	enableModel,
+	isDisabled,
 	loadConfig,
 	pickNextEffective,
 	readBlockedMap,
+	readDisabledMap,
 	recordDecideCrash,
 	resolveFallbacks,
 	unblockModel,
@@ -39,6 +45,7 @@ import {
 } from "switchback-core";
 import type {
 	CrashAction,
+	DisabledMap,
 	HostModel,
 	ModelId,
 	ResolvedSwitchbackFileConfig,
@@ -67,6 +74,22 @@ export default Plugin.define({
 				description: "Clear switchback blocks: ALL, or a model address shown by /switchback",
 				execute: async ({ sessionID, prompt }) => {
 					await runUnblock(ctx, sessionID, prompt.text);
+				},
+			});
+		});
+		await ctx.command.transform((editor) => {
+			editor.add({
+				name: "switchback-disable",
+				description: "Keep a model out of every chain until re-enabled: <provider/model>",
+				execute: async ({ sessionID, prompt }) => {
+					await runDisable(ctx, sessionID, prompt.text);
+				},
+			});
+			editor.add({
+				name: "switchback-enable",
+				description: "Re-enable a manually disabled model: <provider/model>, or ALL",
+				execute: async ({ sessionID, prompt }) => {
+					await runEnable(ctx, sessionID, prompt.text);
 				},
 			});
 		});
@@ -162,17 +185,20 @@ async function handleRetry(ctx: Plugin.Context, input: RetryPayload): Promise<vo
 	recordDecideCrash(assessed.failedId, registry, rawMessage, now, classified, undefined, action);
 	if (!assessed.touchedBlocks) return; // Transient within OpenCode's own budget: leave its policy standing.
 
+	const disabled = readDisabledMap();
 	const resolved = resolveFallbacks(chain.fallbacks, availability);
-	const next = pickNextEffective(resolved, failing, readBlockedMap(now), now, failing);
+	const next = pickNextEffective(resolved, failing, readBlockedMap(now), now, failing, undefined, disabled);
 	const until = classified.resetAtMs === undefined ? "" : ` until ${new Date(classified.resetAtMs).toISOString()}`;
 	if (next === undefined || next.degraded) {
 		// Nothing effective left (or only the failing model itself): surface the
 		// failure instead of scheduling another attempt into a blocked model -
 		// pi's stuck behavior when the advance finds nothing left.
+		const disabledInChain = chain.fallbacks.filter((id) => isDisabled(id, disabled)).length;
+		const disabledNote = disabledInChain === 0 ? "" : `; ${disabledInChain} disabled by hand`;
 		notify(
 			ctx,
 			input.sessionID,
-			`switchback: ${failing} blocked${until}; every further fallback in ${chain.id} is unavailable - surfacing the failure`,
+			`switchback: ${failing} blocked${until}; every further fallback in ${chain.id} is unavailable${disabledNote} - surfacing the failure`,
 		);
 		input.decision = { retry: false };
 		return;
@@ -245,12 +271,14 @@ async function describeStatus(ctx: Plugin.Context, sessionID: string): Promise<v
 	const catalog = (await ctx.model.list()).data;
 	const availability = catalogPort(catalog);
 	const blocked = readBlockedMap(Date.now());
+	const disabled = readDisabledMap();
 	const sections = config.models.map((model) => {
 		const resolved = resolveFallbacks(model.fallbacks, availability);
 		const rows = resolved.entries.map((entry) => {
 			const until = blocked[entry.id];
-			const state =
-				entry.availability === "effective"
+			const state = isDisabled(entry.id, disabled)
+				? "disabled by hand (enable with /switchback-enable)"
+				: entry.availability === "effective"
 					? until !== undefined
 						? `blocked until ${new Date(until).toISOString()}`
 						: "available"
@@ -259,10 +287,117 @@ async function describeStatus(ctx: Plugin.Context, sessionID: string): Promise<v
 		});
 		return `${model.id} (${model.name}): \n${rows.join("\n")}`;
 	});
+	const disabledLine = describeDisabled(disabled);
 	await ctx.session
 		.synthetic({
 			sessionID,
-			text: `switchback: ${config.models.length} configured chain(s)\n\n${sections.join("\n\n")}`,
+			text: `switchback: ${config.models.length} configured chain(s)\n\n${sections.join("\n\n")}${disabledLine}`,
+		})
+		.catch(() => {
+			// Same best-effort rule as notify.
+		});
+}
+
+/**
+ * Every fallback address the config lists, in chain order and deduplicated.
+ * The disable/enable commands accept exactly these addresses.
+ */
+function configuredAddresses(config: ResolvedSwitchbackFileConfig): ModelId[] {
+	const seen = new Set<ModelId>();
+	for (const model of config.models) for (const id of model.fallbacks) seen.add(id);
+	return [...seen];
+}
+
+/** Match an argument to a configured address, case-insensitively. */
+function resolveAddress(config: ResolvedSwitchbackFileConfig, argument: string): ModelId | undefined {
+	const upper = argument.toUpperCase();
+	return configuredAddresses(config).find((id) => id.toUpperCase() === upper);
+}
+
+/** The trailing "disabled by hand" block of `/switchback`; empty when nothing is disabled. */
+function describeDisabled(disabled: DisabledMap): string {
+	const ids = Object.keys(disabled).sort();
+	return ids.length === 0 ? "" : `\n\ndisabled by hand (${ids.length}): ${ids.join(", ")}`;
+}
+
+/**
+ * `/switchback-disable <provider/model>`: keep a configured fallback out of
+ * every chain until the user enables it again. Written to the state dir rather
+ * than switchback.yaml so a regenerated config cannot silently undo it.
+ */
+async function runDisable(ctx: Plugin.Context, sessionID: string, argument: string | undefined): Promise<void> {
+	const target = argument?.trim() ?? "";
+	const config = readConfig(ctx, sessionID);
+	if (config === undefined) return;
+	if (target.length === 0) {
+		await describeStatus(ctx, sessionID);
+		return;
+	}
+	const address = resolveAddress(config, target);
+	if (address === undefined) {
+		const known = configuredAddresses(config);
+		notify(
+			ctx,
+			sessionID,
+			`switchback: ${JSON.stringify(target)} is not a configured fallback; known addresses: ${
+				known.length === 0 ? "(none)" : known.join(", ")
+			}`,
+		);
+		return;
+	}
+	const changed = disableModel(address);
+	await ctx.session
+		.synthetic({
+			sessionID,
+			text: changed
+				? `switchback: disabled ${address} (${disabledFilePath()}) - it stays out of every chain until /switchback-enable ${address}`
+				: `switchback: ${address} was already disabled`,
+		})
+		.catch(() => {
+			// Same best-effort rule as notify.
+		});
+}
+
+/** `/switchback-enable <provider/model|ALL>`: undo a manual disable. */
+async function runEnable(ctx: Plugin.Context, sessionID: string, argument: string | undefined): Promise<void> {
+	const target = argument?.trim() ?? "";
+	const config = readConfig(ctx, sessionID);
+	if (config === undefined) return;
+	if (target.length === 0) {
+		await describeStatus(ctx, sessionID);
+		return;
+	}
+	if (target.toUpperCase() === "ALL") {
+		const count = clearDisabled();
+		await ctx.session
+			.synthetic({
+				sessionID,
+				text:
+					count === 0
+						? "switchback: no models were disabled"
+						: `switchback: re-enabled ${count} disabled model(s)`,
+			})
+			.catch(() => {
+				// Same best-effort rule as notify.
+			});
+		return;
+	}
+	const upper = target.toUpperCase();
+	const address =
+		resolveAddress(config, target) ?? Object.keys(readDisabledMap()).find((id) => id.toUpperCase() === upper);
+	if (address === undefined) {
+		notify(
+			ctx,
+			sessionID,
+			`switchback: ${JSON.stringify(target)} is not a configured fallback and was not disabled`,
+		);
+		return;
+	}
+	const changed = enableModel(address);
+	await ctx.session
+		.synthetic({
+			sessionID,
+			text: changed ? `switchback: re-enabled ${address}` : `switchback: ${address} was not disabled`,
 		})
 		.catch(() => {
 			// Same best-effort rule as notify.

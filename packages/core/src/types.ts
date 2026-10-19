@@ -168,5 +168,11 @@ export interface SwitchbackState {
 /** Cross-session blocked-until map. Keyed by "provider/id", value is epoch ms. */
 export type BlockedMap = Record<ModelId, number>;
 
+/**
+ * Manually disabled models. Keyed by "provider/id", value is the epoch ms of the
+ * disable. Never expires; only an explicit enable removes an entry.
+ */
+export type DisabledMap = Record<ModelId, number>;
+
 /** Reason for a route() decision. */
 export type RouteReason = "user" | "continuation" | "retry" | "direct";

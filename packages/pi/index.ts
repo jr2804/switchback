@@ -44,7 +44,19 @@ import { createModelPicker } from "./src/model-picker.ts";
 import { groupLocalEndpoints, registerLocalClassifier } from "./src/local-classifier.ts";
 import { piThinkingSupport } from "./src/thinking-support.ts";
 import { SWITCHBACK_THINKING_LEVELS } from "switchback-core/thinking.ts";
-import { getPinnedModel, isBlocked, readBlockedMap, readPinMap, setPinnedModel } from "switchback-core/state.ts";
+import {
+	clearDisabled,
+	disableModel,
+	disabledFilePath,
+	enableModel,
+	getPinnedModel,
+	isBlocked,
+	isDisabled,
+	readBlockedMap,
+	readDisabledMap,
+	readPinMap,
+	setPinnedModel,
+} from "switchback-core/state.ts";
 import { annotateCrash, hashSample, isValidAnnotationClass, readCrashMap, shortHash } from "switchback-core/crashes.ts";
 import type {
 	ErrorClass,
@@ -129,6 +141,7 @@ export default function (pi: ExtensionAPI) {
 				const result = await decide(request.reason, request, modelConfig, ctx.modelRegistry, {
 					now,
 					blocked,
+					disabled: readDisabledMap(),
 					support: piThinkingSupport(ctx.modelRegistry),
 					notify,
 					debug,
@@ -201,14 +214,16 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	// `/switchback` — single overview: config source, debug, per-model pin +
-	// fallbacks (effective / greyed + blocks + reset), active blocks.
+	// fallbacks (effective / greyed + blocks + manual disables + reset), active
+	// blocks, and the models the user disabled by hand.
 	pi.registerCommand("switchback", {
-		description: "Show switchback config: source, debug, per-model pin, fallbacks (effective/greyed/blocks)",
+		description: "Show switchback config: source, debug, pin, fallbacks (effective/greyed/blocks/disabled)",
 		handler: async (_args, ctx) => {
 			const now = Date.now();
 			const reloaded = safeLoadForCommand(pi, secrets);
 			const config = reloaded.config;
 			const blocked = readBlockedMap(now);
+			const disabled = readDisabledMap();
 			const pinMap = readPinMap();
 			const lines: string[] = [];
 			lines.push(`switchback config: ${reloaded.source}${debug ? "  [debug on]" : ""}`);
@@ -225,10 +240,14 @@ export default function (pi: ExtensionAPI) {
 				for (const entry of resolved.entries) {
 					if (entry.availability === "effective") {
 						const isBlockedNow = isBlocked(entry.id, now, blocked);
-						const blockNote = isBlockedNow
-							? `  [blocked, resets in ${Math.ceil((blocked[entry.id]! - now) / 60_000)} min]`
-							: "";
-						lines.push(`  ✓ ${entry.id}${blockNote}`);
+						const isDisabledNow = isDisabled(entry.id, disabled);
+						const notes: string[] = [];
+						if (isDisabledNow) notes.push("disabled by hand");
+						if (isBlockedNow)
+							notes.push(`blocked, resets in ${Math.ceil((blocked[entry.id]! - now) / 60_000)} min`);
+						lines.push(
+							`  ${isDisabledNow ? "⊘" : "✓"} ${entry.id}${notes.length === 0 ? "" : `  [${notes.join("; ")}]`}`,
+						);
 					} else {
 						lines.push(`  ✗ ${entry.id}  [${entry.availability}: ${entry.reason ?? ""}]`);
 					}
@@ -243,7 +262,114 @@ export default function (pi: ExtensionAPI) {
 			} else {
 				lines.push("active blocks: (none)");
 			}
+			const disabledIds = Object.keys(disabled).sort();
+			if (disabledIds.length > 0) {
+				lines.push(`disabled by hand (${disabledIds.length}) - ${disabledFilePath()}:`);
+				for (const id of disabledIds) lines.push(`  ${id}`);
+				lines.push("  (/switchback-enable <provider/model|all> restores)");
+			} else {
+				lines.push("disabled by hand: (none)");
+			}
 			await ctx.ui.notify(lines.join("\n"), "info");
+		},
+	});
+
+	// `/switchback-disable` - keep a configured fallback out of every chain until
+	// it is enabled again. The list lives in the state dir (`disabled.json`), not
+	// in switchback.yaml, so regenerating the config cannot silently re-enable a
+	// model the user turned off.
+	pi.registerCommand("switchback-disable", {
+		description: "Keep a model out of every chain until re-enabled: /switchback-disable <provider/model>",
+		getArgumentCompletions: (argumentPrefix) => {
+			const known = configuredFallbacks(safeLoadForCommand(pi, secrets).config);
+			return known
+				.filter((id) => id.toLowerCase().startsWith(argumentPrefix.toLowerCase()))
+				.map((id) => ({ value: id, label: id, description: "configured fallback" }));
+		},
+		handler: async (args, ctx) => {
+			const target = args.trim();
+			const addresses = configuredFallbacks(safeLoadForCommand(pi, secrets).config);
+			if (target.length === 0) {
+				await ctx.ui.notify(
+					`switchback-disable: name a model address\nconfigured fallbacks:\n${
+						addresses.length === 0 ? "  (none)" : addresses.map((id) => `  ${id}`).join("\n")
+					}`,
+					"info",
+				);
+				return;
+			}
+			const address = matchAddress(addresses, target);
+			if (address === undefined) {
+				await ctx.ui.notify(
+					`switchback: ${JSON.stringify(target)} is not a configured fallback; known addresses: ${
+						addresses.length === 0 ? "(none)" : addresses.join(", ")
+					}`,
+					"warning",
+				);
+				return;
+			}
+			const changed = disableModel(address);
+			await ctx.ui.notify(
+				changed
+					? `switchback: disabled ${address} (${disabledFilePath()}) - /switchback-enable ${address} restores it`
+					: `switchback: ${address} was already disabled`,
+				"info",
+			);
+		},
+	});
+
+	// `/switchback-enable` - undo a manual disable, one model or all of them.
+	pi.registerCommand("switchback-enable", {
+		description: "Re-enable a manually disabled model: /switchback-enable <provider/model|all>",
+		getArgumentCompletions: (argumentPrefix) => {
+			const prefix = argumentPrefix.toLowerCase();
+			const disabledIds = Object.keys(readDisabledMap()).sort();
+			return ["all", ...disabledIds]
+				.filter((id) => id.toLowerCase().startsWith(prefix))
+				.map((id) => ({
+					value: id,
+					label: id,
+					description: id === "all" ? "re-enable every disabled model" : "disabled by hand",
+				}));
+		},
+		handler: async (args, ctx) => {
+			const target = args.trim();
+			const disabled = readDisabledMap();
+			const disabledIds = Object.keys(disabled).sort();
+			if (target.length === 0) {
+				await ctx.ui.notify(
+					`switchback-enable: name a model address or "all"\ndisabled by hand:\n${
+						disabledIds.length === 0 ? "  (none)" : disabledIds.map((id) => `  ${id}`).join("\n")
+					}`,
+					"info",
+				);
+				return;
+			}
+			if (target.toLowerCase() === "all") {
+				const count = clearDisabled();
+				await ctx.ui.notify(
+					count === 0
+						? "switchback: no models were disabled"
+						: `switchback: re-enabled ${count} disabled model(s)`,
+					"info",
+				);
+				return;
+			}
+			const address =
+				matchAddress(disabledIds, target) ??
+				matchAddress(configuredFallbacks(safeLoadForCommand(pi, secrets).config), target);
+			if (address === undefined) {
+				await ctx.ui.notify(
+					`switchback: ${JSON.stringify(target)} is not a configured fallback and was not disabled`,
+					"warning",
+				);
+				return;
+			}
+			const changed = enableModel(address);
+			await ctx.ui.notify(
+				changed ? `switchback: re-enabled ${address}` : `switchback: ${address} was not disabled`,
+				"info",
+			);
 		},
 	});
 
@@ -612,6 +738,22 @@ function parseCount(args: string, fallback: number): number | undefined {
 	const n = Number(trimmed);
 	if (!Number.isInteger(n) || n < 1) return undefined;
 	return n;
+}
+
+// Every configured fallback address across a config file, first-seen order and
+// deduplicated: the vocabulary the disable/enable commands accept.
+function configuredFallbacks(config: ResolvedSwitchbackFileConfig): ModelId[] {
+	const seen = new Set<ModelId>();
+	for (const model of config.models) for (const id of model.fallbacks) seen.add(id);
+	return [...seen];
+}
+
+// Commands are typed by hand, so address matching ignores case (the unblock
+// command works the same way). Returns the canonical configured spelling.
+function matchAddress(addresses: readonly ModelId[], argument: string): ModelId | undefined {
+	const wanted = argument.trim().toUpperCase();
+	if (wanted.length === 0) return undefined;
+	return addresses.find((id) => id.toUpperCase() === wanted);
 }
 
 interface ParsedAnnotateArgs {

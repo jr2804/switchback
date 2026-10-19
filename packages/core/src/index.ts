@@ -47,7 +47,19 @@ export {
 	CONTEXT_CANDIDATE_PROMPT_VERSION,
 } from "./context-fit.ts";
 export type { CandidateWindow, ContextCandidateChoice, ContextCandidateInput } from "./context-fit.ts";
-export { blockModel, isBlocked, readBlockedMap, unblockModel, stateFilePath } from "./state.ts";
+export {
+	blockModel,
+	clearDisabled,
+	disableModel,
+	disabledFilePath,
+	enableModel,
+	isBlocked,
+	isDisabled,
+	readBlockedMap,
+	readDisabledMap,
+	unblockModel,
+	stateFilePath,
+} from "./state.ts";
 export {
 	readCrashMap,
 	recordCrash,
@@ -137,6 +149,7 @@ export type { AvailabilityPort } from "./ports.ts";
 export type {
 	Availability,
 	BlockedMap,
+	DisabledMap,
 	ClassifiedError,
 	ErrorClass,
 	ErrorScope,

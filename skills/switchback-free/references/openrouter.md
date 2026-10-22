@@ -3,19 +3,20 @@
 ## Check active
 
 ```bash
-# Check if openrouter is a configured provider in opencode
-opencode models --provider openrouter
+# List every configured provider's models (the CLI takes no provider flag)
+opencode models | grep '^openrouter/'
 ```
 
-If this returns a list of models, the provider is active. If it errors or
-returns empty, skip this provider.
+If this returns lines, openrouter is active. If it errors or returns nothing,
+skip this provider.
 
 ## Query model list
 
 ```bash
-# List all models from OpenRouter
-opencode models --provider openrouter --limit 500
+opencode models | grep '^openrouter/'
 ```
+
+(As of opencode CLI v2.1.3 there is no `--provider` or `--limit` flag.)
 
 Or via the REST endpoint (requires `OPENROUTER_API_KEY`):
 
@@ -37,9 +38,8 @@ OpenRouter free models follow the `:free` suffix convention:
 
 ### Special cases (no suffix, always free)
 
-| Model ID              | Notes                          |
-| --------------------- | ------------------------------ |
-| `big-pickle`          | Experimental, no `:free` suffix |
+None today. (`big-pickle` used to be listed here; as of 2026-10-23 it appears
+under the `opencode` provider — see `references/opencode-ai.md`.)
 
 ## Verification
 

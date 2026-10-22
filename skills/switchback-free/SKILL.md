@@ -26,7 +26,7 @@ list contains only verified free models.
    - Its name ends with `:free` or `-free` (e.g. `meta-llama/llama-3.1-8b-instruct:free`,
      `google/gemini-2.0-flash-exp:free`), **or**
    - It appears in the provider's known-free-names list (e.g. `big-pickle` on
-     OpenRouter — no suffix but always free).
+     opencode.ai, `opencode/big-pickle` — no suffix but always free).
 
    Always prefer live model-list data over hardcoded names. The hardcoded lists
    in the reference files are fallbacks for special cases that don't follow the
@@ -83,8 +83,7 @@ list contains only verified free models.
 | Provider                    | Reference file                          |
 | --------------------------- | --------------------------------------- |
 | openrouter.ai               | `references/openrouter.md`              |
-| opencode.ai (opencode-go)   | `references/opencode-ai.md`             |
-| opencode.ai (opencode-zen)  | `references/opencode-ai.md`             |
+| opencode.ai (opencode, opencode-go) | `references/opencode-ai.md`     |
 | nousresearch.com            | `references/nousresearch.md`            |
 
 ## Verification approach — why model-list only

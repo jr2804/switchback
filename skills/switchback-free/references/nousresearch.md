@@ -3,19 +3,20 @@
 ## Check active
 
 ```bash
-# Check if nousresearch is a configured provider in opencode
-opencode models --provider nousresearch
+# List every configured provider's models (the CLI takes no provider flag)
+opencode models | grep '^nousresearch/'
 ```
 
-If this returns a list of models, the provider is active. If it errors or
-returns empty, skip this provider.
+If this returns lines, nousresearch is active. If it errors or returns
+nothing, skip this provider.
 
 ## Query model list
 
 ```bash
-# List all models from Nous Research
-opencode models --provider nousresearch --limit 500
+opencode models | grep '^nousresearch/'
 ```
+
+(As of opencode CLI v2.1.3 there is no `--provider` or `--limit` flag.)
 
 Or via the REST endpoint (requires `NOUS_API_KEY`):
 

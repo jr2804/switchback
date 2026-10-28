@@ -1,14 +1,14 @@
 /**
- * The guided config editor for the TUI: layer 2a.
+ * The guided config editor for the TUI.
  *
- * Layer 1 gave `/switchback-config` a complete argument grammar, and that
+ * `/switchback-config` already had a complete argument grammar, and that
  * grammar is the *only* writer of `switchback.yaml` in this package. Typing
  * `chain-move auto 2 1` is fine when you know the chain, but pi's dialogue is a
  * menu - pick the chain, pick the fallback, pick the model from a searchable
  * catalog - and that is what this module reproduces.
  *
  * It is deliberately not a second editor. Every action it offers is expressed
- * as the layer-1 verb that would do the same thing, and dispatched through the
+ * as the typed verb that would do the same thing, and dispatched through the
  * same `execute()` call the command uses, so the two surfaces cannot drift:
  *
  *     pick "raise fallback"  ->  `chain-move <id> <n> <n-1>`
@@ -74,7 +74,7 @@ export interface GuideOption<Value> {
 	readonly description?: string;
 }
 
-/** The result of one dispatched layer-1 verb. */
+/** The result of one dispatched command verb. */
 export interface GuideEdit {
 	readonly ok: boolean;
 	readonly text: string;
@@ -87,7 +87,7 @@ export interface GuidePorts {
 	readonly chains: () => readonly GuideChain[];
 	/** The models the catalog offers, in catalog order. */
 	readonly models: () => readonly GuideModel[];
-	/** Run one layer-1 verb, e.g. `chain-add auto zai/glm-5.3-flash`. */
+	/** Run one command verb, e.g. `chain-add auto zai/glm-5.3-flash`. */
 	readonly run: (verbText: string) => Promise<GuideEdit>;
 	/** Ask the server to republish providers after a successful edit. */
 	readonly reload: () => Promise<void>;

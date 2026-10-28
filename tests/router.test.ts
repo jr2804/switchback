@@ -282,6 +282,9 @@ beforeEach(() => {
 	// the crash store under <piConfigDir>/switchback. Without this, router tests
 	// would pollute the real ~/.pi/agent store (switchback-5tb).
 	process.env["PI_CODING_AGENT_DIR"] = tmpDir;
+	// The shared global layer (~/.config/switchback) is a real user file on some
+	// machines; pin it into the temp dir so the suite is hermetic.
+	process.env["SWITCHBACK_CONFIG_DIR"] = tmpDir;
 	process.chdir(tmpDir);
 });
 
@@ -289,6 +292,7 @@ afterEach(() => {
 	process.chdir(originalCwd);
 	if (originalAgentDir === undefined) delete process.env["PI_CODING_AGENT_DIR"];
 	else process.env["PI_CODING_AGENT_DIR"] = originalAgentDir;
+	delete process.env["SWITCHBACK_CONFIG_DIR"];
 	if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -1358,11 +1362,10 @@ describe("state persistence", () => {
 
 describe("config loader", () => {
 	it("finds a config entry for switchback/auto", () => {
-		// Write an explicit config so the test does not depend on a machine-local
-		// config that happens to exist (isolated by PI_CODING_AGENT_DIR now).
-		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+		// Write an explicit config in the shared file so the test does not depend on
+		// a machine-local config (SWITCHBACK_CONFIG_DIR isolates it now).
 		writeFileSync(
-			join(tmpDir, ".pi", "switchback.yaml"),
+			join(tmpDir, "switchback.yaml"),
 			"models:\n  - id: switchback/auto\n    name: Auto (Switchback)\n    fallbacks:\n      - zai/glm-4.7\n",
 		);
 		const { config } = loadConfig();

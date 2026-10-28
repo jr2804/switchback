@@ -1,5 +1,5 @@
 /**
- * Comment-preserving read-modify-write editor for a switchback.yaml layer.
+ * Comment-preserving read-modify-write editor for switchback.yaml.
  *
  * Design: `src/config.ts` parses user config with `yaml.parse()`, which
  * keeps values but discards comments - fine for loading, lossy for editing.
@@ -9,7 +9,7 @@
  * their comments survive, and only newly created content is synthesized.
  *
  * Validation lives in exactly one place. Every mutation is structural only
- * (locate a node, set/splice/delete); `saveLayer()` re-validates the whole
+ * (locate a node, set/splice/delete); `saveConfigFile()` re-validates the whole
  * document through the exported `validateFileConfig()` - the same gate the
  * loader applies. The editor therefore carries no rule set of its own: a save
  * either produces exactly what `loadConfig()` would accept, or throws the
@@ -21,92 +21,53 @@
  * job via the encrypted store (`packages/pi/src/secrets.ts`). The type shape makes a
  * literal key unrepresentable at this boundary.
  *
- * Layers: "project" is `<cwd>/.pi/switchback.yaml`, "global" is
- * `<piConfigDir>/switchback.yaml` (the loader's aggregation order). The
- * dialogue edits one layer file at a time; `defaultLayer()` picks project
- * when a project `.pi/` directory exists, else global.
+ * One file: `configFilePath()` (`~/.config/switchback/switchback.yaml`), the same
+ * config both hosts read. There are no host-specific or per-project layers to
+ * choose between (`switchback-wix.12`).
  *
  * Writes are atomic - tmp file + rename, the `state.ts` pattern - and the
- * parent directory is created on demand, so a first save into a fresh
- * project layer works without ceremony.
+ * parent directory is created on demand, so a first save into a fresh install
+ * works without ceremony.
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { writeFileAtomic } from "./atomic-write.ts";
 import { isMap, isSeq, parseDocument, type Document, type YAMLMap, type YAMLSeq } from "yaml";
-import { ConfigError, piConfigDir, validateFileConfig } from "./config.ts";
+import { ConfigError, configFilePath, validateFileConfig } from "./config.ts";
 import type { IdleResetConfig, ModelId, SwitchbackFileConfig } from "./types.ts";
 
-/** Which switchback.yaml layer the editor has open. */
-export type ConfigLayer = "global" | "project";
-
-/** A layer loaded for editing: the parsed Document plus where it lives. */
-export interface LoadedLayer {
-	layer: ConfigLayer;
-	/** Absolute path of the layer file; shown in every dialogue screen title. */
+/**
+ * A config file loaded for editing: the parsed Document plus where it lives.
+ *
+ * There is one file, `configFilePath()`, and therefore nothing to choose between.
+ */
+export interface LoadedConfig {
+	/** Absolute path of the config file; shown in every dialogue screen title. */
 	path: string;
 	/** False when the file does not exist yet and the editor started fresh. */
 	existed: boolean;
 	doc: Document;
 }
 
-/** Header comment written when the editor creates a layer file from scratch. */
+/** Header comment written when the editor creates the config file from scratch. */
 const NEW_FILE_HEADER = [
 	"switchback configuration - see docs/configuration.md",
-	"Layers: <cwd>/.pi/switchback.yaml overrides ~/.config/switchback/switchback.yaml per model id.",
+	"Read by every switchback host (pi and OpenCode) from this one file.",
 	"API keys are secret-store references (`secret:<name>`), never literal values.",
 ].join("\n");
 
-/** The project layer's file path (`<cwd>/.pi/switchback.yaml`). */
-export function projectConfigPath(): string {
-	return join(process.cwd(), ".pi", "switchback.yaml");
-}
-
-/** The global layer's file path (`<piConfigDir>/switchback.yaml`). */
-export function globalConfigPath(): string {
-	return join(piConfigDir(), "switchback.yaml");
-}
-
 /**
- * The layer a dialogue offers first.
- *
- * Deliberately boring: the GLOBAL config is the base every project inherits, so
- * it is the natural default - unless the global file does not exist while a
- * project one does, in which case that project file is plainly what the user
- * works with. An earlier rule ("project when `<cwd>/.pi` exists") silently wrote
- * project overrides for users who only ever meant to edit their global config.
- *
- * This only orders the chooser; the dialogue asks explicitly and shows both
- * layers, so nothing is decided invisibly.
- */
-export function defaultLayer(): ConfigLayer {
-	if (existsSync(globalConfigPath())) return "global";
-	return existsSync(projectConfigPath()) ? "project" : "global";
-}
-
-/** File path for a layer. */
-export function layerPath(layer: ConfigLayer): string {
-	return layer === "project" ? projectConfigPath() : globalConfigPath();
-}
-
-/** Whether a layer file exists on disk. */
-export function layerExists(layer: ConfigLayer): boolean {
-	return existsSync(layerPath(layer));
-}
-
-/**
- * Parse a layer for editing. A missing file yields an empty Document that
- * carries the header comment; the first save creates it. A file that is not
+ * Parse the config file for editing. A missing file yields an empty Document
+ * that carries the header comment; the first save creates it. A file that is not
  * valid YAML throws ConfigError - the editor opens valid config only, and a
  * broken file is surfaced for a hand fix rather than silently rewritten.
  */
-export function loadLayer(layer: ConfigLayer): LoadedLayer {
-	const path = layerPath(layer);
+export function loadConfigFile(): LoadedConfig {
+	const path = configFilePath();
 	if (!existsSync(path)) {
 		const doc = parseDocument("");
 		doc.commentBefore = NEW_FILE_HEADER;
-		return { layer, path, existed: false, doc };
+		return { path, existed: false, doc };
 	}
 	let text: string;
 	try {
@@ -119,16 +80,16 @@ export function loadLayer(layer: ConfigLayer): LoadedLayer {
 	if (firstError !== undefined) {
 		throw new ConfigError(`switchback config is not valid YAML: ${String(firstError.message)}`, path);
 	}
-	return { layer, path, existed: true, doc };
+	return { path, existed: true, doc };
 }
 
 /**
- * The layer's current config, validated by the loader's own gate. Throws
+ * The file's current config, validated by the loader's own gate. Throws
  * ConfigError when the on-disk document does not satisfy the config rules;
  * the dialogue surfaces that and declines to edit rather than round-tripping
  * an invalid state.
  */
-export function readLayerConfig(loaded: LoadedLayer): SwitchbackFileConfig {
+export function readConfigFile(loaded: LoadedConfig): SwitchbackFileConfig {
 	return validateFileConfig(loaded.doc.toJSON(), loaded.path).config;
 }
 
@@ -136,11 +97,11 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-/** The `models:` sequence of a loaded layer; created on demand for a fresh layer file. */
-function requireModelsSeq(loaded: LoadedLayer): YAMLSeq {
+/** The `models:` sequence; created on demand for a fresh config file. */
+function requireModelsSeq(loaded: LoadedConfig): YAMLSeq {
 	const models = loaded.doc.get("models");
 	if (models === undefined || models === null) {
-		// A fresh layer has no models key yet; the dialogue starts by adding one.
+		// A fresh file has no models key yet; the dialogue starts by adding one.
 		const created = loaded.doc.createNode([]) as YAMLSeq;
 		loaded.doc.set("models", created);
 		return created;
@@ -150,7 +111,7 @@ function requireModelsSeq(loaded: LoadedLayer): YAMLSeq {
 }
 
 /** Find a model entry node by virtual-model id; both sides are normalized, so a file storing a bare `auto` is found by `switchback/auto` and vice versa. */
-function findModelNode(loaded: LoadedLayer, virtualId: string): { seq: YAMLSeq; index: number; node: YAMLMap } {
+function findModelNode(loaded: LoadedConfig, virtualId: string): { seq: YAMLSeq; index: number; node: YAMLMap } {
 	const seq = requireModelsSeq(loaded);
 	const wanted = normalizeVirtualId(virtualId);
 	for (const [index, item] of seq.items.entries()) {
@@ -169,7 +130,7 @@ function normalizeVirtualId(virtualId: string): string {
 }
 
 /** Structural duplicate check (normalized both sides) so the dialogue errors at the offending action, not only at save. */
-function assertModelIdAvailable(loaded: LoadedLayer, fullId: string): void {
+function assertModelIdAvailable(loaded: LoadedConfig, fullId: string): void {
 	const seq = requireModelsSeq(loaded);
 	for (const item of seq.items) {
 		if (item === null || !isMap(item)) continue;
@@ -186,7 +147,7 @@ function assertModelIdAvailable(loaded: LoadedLayer, fullId: string): void {
  * by `validateFileConfig`, so the user sees the loader's own message if a
  * fallback misses its `provider/id` form.
  */
-export function addVirtualModel(loaded: LoadedLayer, input: { id: string; name: string; fallbacks: ModelId[] }): void {
+export function addVirtualModel(loaded: LoadedConfig, input: { id: string; name: string; fallbacks: ModelId[] }): void {
 	const fullId = normalizeVirtualId(input.id);
 	assertModelIdAvailable(loaded, fullId);
 	const seq = requireModelsSeq(loaded);
@@ -194,13 +155,13 @@ export function addVirtualModel(loaded: LoadedLayer, input: { id: string; name: 
 }
 
 /** Remove a virtual model entry by id (bare ids normalized). Confirm-gated by the dialogue. */
-export function removeVirtualModel(loaded: LoadedLayer, virtualId: string): void {
+export function removeVirtualModel(loaded: LoadedConfig, virtualId: string): void {
 	const { seq, index } = findModelNode(loaded, virtualId);
 	seq.items.splice(index, 1);
 }
 
 /** Change a virtual model's id. The running pi keeps the old registration until restart. */
-export function renameVirtualModel(loaded: LoadedLayer, oldId: string, newId: string): void {
+export function renameVirtualModel(loaded: LoadedConfig, oldId: string, newId: string): void {
 	const fullNewId = normalizeVirtualId(newId);
 	const old = normalizeVirtualId(oldId);
 	if (fullNewId !== old) assertModelIdAvailable(loaded, fullNewId);
@@ -209,19 +170,19 @@ export function renameVirtualModel(loaded: LoadedLayer, oldId: string, newId: st
 }
 
 /** Change a virtual model's display name. */
-export function setVirtualModelName(loaded: LoadedLayer, virtualId: string, name: string): void {
+export function setVirtualModelName(loaded: LoadedConfig, virtualId: string, name: string): void {
 	const { node } = findModelNode(loaded, virtualId);
 	node.set("name", name);
 }
 
 /** Replace a model's whole fallback list (ordered; first entry is preferred). */
-export function setFallbacks(loaded: LoadedLayer, virtualId: string, fallbacks: ModelId[]): void {
+export function setFallbacks(loaded: LoadedConfig, virtualId: string, fallbacks: ModelId[]): void {
 	const { node } = findModelNode(loaded, virtualId);
 	node.set("fallbacks", loaded.doc.createNode([...fallbacks]));
 }
 
 /** Append one fallback at the end of the model's preference list. */
-export function addFallback(loaded: LoadedLayer, virtualId: string, fallback: ModelId): void {
+export function addFallback(loaded: LoadedConfig, virtualId: string, fallback: ModelId): void {
 	const { node } = findModelNode(loaded, virtualId);
 	const seq = node.get("fallbacks");
 	if (seq === undefined || seq === null || !isSeq(seq)) {
@@ -231,7 +192,7 @@ export function addFallback(loaded: LoadedLayer, virtualId: string, fallback: Mo
 }
 
 /** Remove the fallback at `index` (bounds-checked; the dialogue passes the picked position). */
-export function removeFallback(loaded: LoadedLayer, virtualId: string, index: number): void {
+export function removeFallback(loaded: LoadedConfig, virtualId: string, index: number): void {
 	const { node } = findModelNode(loaded, virtualId);
 	const seq = node.get("fallbacks");
 	if (seq === undefined || seq === null || !isSeq(seq) || index < 0 || index >= seq.items.length) {
@@ -241,7 +202,7 @@ export function removeFallback(loaded: LoadedLayer, virtualId: string, index: nu
 }
 
 /** Move a fallback from one position to another (the dialogue's up/down reordering). */
-export function moveFallback(loaded: LoadedLayer, virtualId: string, from: number, to: number): void {
+export function moveFallback(loaded: LoadedConfig, virtualId: string, from: number, to: number): void {
 	const { node } = findModelNode(loaded, virtualId);
 	const seq = node.get("fallbacks");
 	if (
@@ -267,7 +228,7 @@ export function moveFallback(loaded: LoadedLayer, virtualId: string, from: numbe
  * direct endpoint, live in the top-level `decisionModels:` map under the same
  * address.
  */
-export function setDecisionModel(loaded: LoadedLayer, virtualId: string, address: string | null): void {
+export function setDecisionModel(loaded: LoadedConfig, virtualId: string, address: string | null): void {
 	const { node } = findModelNode(loaded, virtualId);
 	if (address === null) {
 		node.delete("decisionModel");
@@ -313,7 +274,7 @@ function decisionModelToNode(doc: Document, input: DecisionModelInput): YAMLMap 
 	return doc.createNode(entry) as YAMLMap;
 }
 
-function requireDecisionModelsMap(loaded: LoadedLayer): YAMLMap {
+function requireDecisionModelsMap(loaded: LoadedConfig): YAMLMap {
 	const map = loaded.doc.get("decisionModels");
 	if (map === undefined || map === null) {
 		const created = loaded.doc.createNode({}) as YAMLMap;
@@ -327,7 +288,7 @@ function requireDecisionModelsMap(loaded: LoadedLayer): YAMLMap {
 }
 
 /** Find a decisionModels entry node by its address (the map key). */
-function findDecisionModelNode(loaded: LoadedLayer, address: string): { map: YAMLMap; node: YAMLMap } {
+function findDecisionModelNode(loaded: LoadedConfig, address: string): { map: YAMLMap; node: YAMLMap } {
 	const map = requireDecisionModelsMap(loaded);
 	const node = map.get(address, true);
 	if (node === undefined || node === null || !isMap(node)) {
@@ -337,7 +298,7 @@ function findDecisionModelNode(loaded: LoadedLayer, address: string): { map: YAM
 }
 
 /** Add a decision-model entry (duplicate addresses fail the save via `validateFileConfig`). */
-export function addDecisionModel(loaded: LoadedLayer, input: DecisionModelInput): void {
+export function addDecisionModel(loaded: LoadedConfig, input: DecisionModelInput): void {
 	const map = requireDecisionModelsMap(loaded);
 	if (map.has(input.address)) {
 		throw new ConfigError(`decisionModels already contains "${input.address}"`, loaded.path);
@@ -346,7 +307,7 @@ export function addDecisionModel(loaded: LoadedLayer, input: DecisionModelInput)
 }
 
 /** Patch one decision model's connection details. */
-export function updateDecisionModel(loaded: LoadedLayer, address: string, patch: DecisionModelPatch): void {
+export function updateDecisionModel(loaded: LoadedConfig, address: string, patch: DecisionModelPatch): void {
 	const { node } = findDecisionModelNode(loaded, address);
 	if (patch.baseUrl !== undefined) {
 		if (patch.baseUrl === null) {
@@ -367,7 +328,7 @@ export function updateDecisionModel(loaded: LoadedLayer, address: string, patch:
  * Rename a decision-model address and rewrite every `models[].decisionModel`
  * that names it in the same transaction, so a rename cannot dangle references.
  */
-export function renameDecisionModel(loaded: LoadedLayer, oldAddress: string, newAddress: string): void {
+export function renameDecisionModel(loaded: LoadedConfig, oldAddress: string, newAddress: string): void {
 	if (oldAddress !== newAddress) {
 		const { map, node } = findDecisionModelNode(loaded, oldAddress);
 		if (map.has(newAddress)) {
@@ -388,7 +349,7 @@ export function renameDecisionModel(loaded: LoadedLayer, oldAddress: string, new
  * and OpenCode cannot - the user decides what happens to the referencing model
  * instead of the editor silently clearing it.
  */
-export function removeDecisionModel(loaded: LoadedLayer, address: string): void {
+export function removeDecisionModel(loaded: LoadedConfig, address: string): void {
 	const { map } = findDecisionModelNode(loaded, address);
 	map.delete(address);
 	// An empty map is litter: drop the key so the file reads as if no entry was ever made.
@@ -396,7 +357,7 @@ export function removeDecisionModel(loaded: LoadedLayer, address: string): void 
 }
 
 /** How many configured models name a decision model (the dialogue's confirm/warning text). */
-export function countDecisionModelReferences(loaded: LoadedLayer, address: string): number {
+export function countDecisionModelReferences(loaded: LoadedConfig, address: string): number {
 	let count = 0;
 	for (const item of requireModelsSeq(loaded).items) {
 		if (item === null || !isMap(item)) continue;
@@ -412,7 +373,7 @@ export function countDecisionModelReferences(loaded: LoadedLayer, address: strin
  * loader's default (`never`). Validation of the value itself is the loader's
  * job at save time, so an unknown value surfaces with the loader's message.
  */
-export function setIdleReset(loaded: LoadedLayer, virtualId: string, option: IdleResetConfig | null): void {
+export function setIdleReset(loaded: LoadedConfig, virtualId: string, option: IdleResetConfig | null): void {
 	const { node } = findModelNode(loaded, virtualId);
 	if (option === null) {
 		node.delete("idleReset");
@@ -422,7 +383,7 @@ export function setIdleReset(loaded: LoadedLayer, virtualId: string, option: Idl
 }
 
 /** Set the top-level `debug:` flag (per-switch diagnostics notifications). */
-export function setDebug(loaded: LoadedLayer, enabled: boolean): void {
+export function setDebug(loaded: LoadedConfig, enabled: boolean): void {
 	loaded.doc.set("debug", enabled);
 }
 
@@ -432,7 +393,7 @@ export function setDebug(loaded: LoadedLayer, enabled: boolean): void {
  * state is not a config `loadConfig()` would accept. On a throw the in-memory
  * document keeps the edit so the dialogue can re-enter the same editor for a fix.
  */
-export function saveLayer(loaded: LoadedLayer): void {
+export function saveConfigFile(loaded: LoadedConfig): void {
 	if (loaded.doc.contents === undefined || loaded.doc.contents === null) {
 		loaded.doc.contents = loaded.doc.createNode({});
 	}

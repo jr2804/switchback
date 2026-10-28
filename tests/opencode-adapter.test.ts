@@ -73,10 +73,16 @@ const CATALOG = [
 	},
 ];
 
-/** config in the agent-overlay layer (<agentDir>/switchback.yaml). */
+/**
+ * Config in the SHARED global layer (`<SWITCHBACK_CONFIG_DIR>/switchback.yaml`).
+ *
+ * Deliberately not the agent-overlay layer: OpenCode passes no layer dirs and so
+ * must never read `~/.pi/agent/switchback.yaml` (beads `switchback-wix.12`).
+ * Writing here is what proves the adapter honours the shared file.
+ */
 function writeConfig(extra = ""): void {
 	writeFileSync(
-		join(agentDir, "switchback.yaml"),
+		join(process.env["SWITCHBACK_CONFIG_DIR"] ?? tmp, "switchback.yaml"),
 		`models:
   - id: switchback/auto
     name: Auto (Switchback)
@@ -324,6 +330,43 @@ describe("bridge routing", () => {
 	});
 });
 
+describe("config file (one shared file, never pi's)", () => {
+	it("reads the shared ~/.config/switchback file, not pi's agent dir", async () => {
+		// A pi-only copy in the agent dir must be invisible to OpenCode. It names a
+		// model the catalog does not contain, so honouring it would make the chain
+		// unresolvable rather than merely different.
+		writeFileSync(
+			join(agentDir, "switchback.yaml"),
+			'# pi-specific copy\nmodels:\n  - id: switchback/auto\n    name: pi only\n    fallbacks: ["ghost-corp/ghost-model"]\n',
+		);
+		const synthetic = vi.fn();
+		const { editors } = await setup(CATALOG, synthetic);
+		// `setup()` writes the shared file; the published chain came from it.
+		const record = editors[0]!.add.mock.calls[0]![0] as { models: { name: string }[] };
+		expect(record.models[0]?.name).toBe("Auto (Switchback)");
+		const bridge = readBridge()!;
+		const answer = await bridge.route({ chainId: "switchback/auto", sessionKey: "ses-shared", reason: "user" });
+		expect(answer).toMatchObject({ status: "ok", current: "alpha-corp/alpha-model" });
+	});
+
+	it("does not fall back to pi's agent dir when no shared file exists", async () => {
+		// The regression: this file used to BE the config. Now it is inert, so a
+		// machine with no shared file gets DEFAULT_CONFIG (no fallbacks) instead of
+		// silently running pi's chains.
+		writeFileSync(
+			join(agentDir, "switchback.yaml"),
+			'# pi-specific copy\nmodels:\n  - id: switchback/auto\n    name: pi only\n    fallbacks: ["alpha-corp/alpha-model"]\n',
+		);
+		const synthetic = vi.fn();
+		// Same as `setup()` but WITHOUT writeConfig(): no shared file exists.
+		const built = fakeCtx(CATALOG, synthetic);
+		await plugin.setup(built.ctx as unknown as never);
+		const record = built.editors[0]!.add.mock.calls[0]![0] as { models: { name: string }[] };
+		expect(record.models[0]?.name).toBe("Auto (Switchback)");
+		expect(record.models[0]?.name).not.toBe("pi only");
+	});
+});
+
 describe("commands", () => {
 	it("lists every fallback with its resolved state", async () => {
 		const synthetic = vi.fn();
@@ -436,8 +479,8 @@ describe("conversation-derived routing inputs", () => {
 		// `setup()` writes the base config, so the idle policy is added after it (the
 		// router re-reads the config on every call).
 		writeFileSync(
-			join(agentDir, "switchback.yaml"),
-			readFileSync(join(agentDir, "switchback.yaml"), "utf8").replace(
+			join(process.env["SWITCHBACK_CONFIG_DIR"] ?? tmp, "switchback.yaml"),
+			readFileSync(join(process.env["SWITCHBACK_CONFIG_DIR"] ?? tmp, "switchback.yaml"), "utf8").replace(
 				"    decisionModel: fixture/jev",
 				"    decisionModel: fixture/jev\n    idleReset: 30m",
 			),

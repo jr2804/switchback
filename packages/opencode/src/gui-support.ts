@@ -173,7 +173,7 @@ export async function refreshGuide(deps: GuiGuideDeps, cache: GuideCache): Promi
 
 /**
  * Open the config guide: read the server state, then run the shared guide over
- * the app's dialogs. Every edit is sent to the server as layer-1 verb text, so
+ * the app's dialogs. Every edit is sent to the server as command-verb text, so
  * the GUI and the typed command go through the same writer.
  */
 export async function openGuide(deps: GuiGuideDeps, cache: GuideCache = { chains: [], models: [] }): Promise<void> {

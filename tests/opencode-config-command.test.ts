@@ -19,17 +19,10 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import {
-	clearConfigSessions,
-	execute,
-	layerForSession,
-	parseConfigCommand,
-	runConfigCommand,
-	setLayerForSession,
-} from "../packages/opencode/src/config-command.ts";
-import { globalConfigPath, loadConfig, projectConfigPath, validateFileConfig } from "switchback-core";
+import { execute, parseConfigCommand, runConfigCommand } from "../packages/opencode/src/config-command.ts";
+import { configFilePath, loadConfig, validateFileConfig } from "switchback-core";
 import { parseDocument } from "yaml";
 
 let tmpDir: string;
@@ -48,7 +41,6 @@ beforeEach(() => {
 	mkdirSync(join(tmpDir, "agent"), { recursive: true });
 	mkdirSync(join(tmpDir, "home"), { recursive: true });
 	process.chdir(tmpDir);
-	clearConfigSessions();
 });
 
 afterEach(() => {
@@ -57,7 +49,6 @@ afterEach(() => {
 	else process.env["PI_CODING_AGENT_DIR"] = originalAgentDir;
 	if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
 	else process.env["USERPROFILE"] = originalUserProfile;
-	clearConfigSessions();
 	rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -69,15 +60,16 @@ function run(argument: string): string {
 }
 
 /** The layer file's parsed YAML, for assertions about what actually landed on disk. */
-function layerYaml(layer: "global" | "project" = "global"): Record<string, unknown> {
-	const path = layer === "global" ? globalConfigPath() : projectConfigPath();
+function configYaml(): Record<string, unknown> {
+	const path = configFilePath();
 	return parseDocument(readFileSync(path, "utf8")).toJSON() as Record<string, unknown>;
 }
 
 /** Seed the global layer with one valid model. */
-function seedGlobal(): void {
+function seedConfig(): void {
+	mkdirSync(dirname(configFilePath()), { recursive: true });
 	writeFileSync(
-		globalConfigPath(),
+		configFilePath(),
 		[
 			"models:",
 			"  - id: switchback/auto",
@@ -89,7 +81,6 @@ function seedGlobal(): void {
 		].join("\n"),
 		"utf8",
 	);
-	mkdirSync(join(process.env["PI_CODING_AGENT_DIR"] ?? "", ".."), { recursive: true });
 }
 
 describe("parseConfigCommand", () => {
@@ -127,24 +118,14 @@ describe("parseConfigCommand", () => {
 });
 
 describe("/switchback-config: reporting", () => {
-	it("reports an empty config with the layer it would edit", () => {
+	it("reports an empty config with the file it would create", () => {
 		const text = run("");
 		expect(text).toContain("no configuration yet");
-		expect(text).toContain(globalConfigPath());
-	});
-
-	it("reports each layer file, marking the one being edited", () => {
-		seedGlobal();
-		setLayerForSession(session, "global");
-		const text = run("layers");
-		expect(text).toContain(`global (editing): ${globalConfigPath()}`);
-		expect(text).toContain("1 model");
-		expect(text).toContain("project:");
-		expect(text).toContain("not present");
+		expect(text).toContain(configFilePath());
 	});
 
 	it("shows the ordered fallbacks and per-model options", () => {
-		seedGlobal();
+		seedConfig();
 		const text = run("show");
 		expect(text).toContain("switchback/auto - Auto");
 		expect(text).toContain("1. zai/glm-5.3-flash");
@@ -153,29 +134,10 @@ describe("/switchback-config: reporting", () => {
 	});
 
 	it("filters the report by id substring, case-insensitively", () => {
-		seedGlobal();
+		seedConfig();
 		expect(run("auto")).toContain("switchback/auto");
 		expect(run("AUTO")).toContain("switchback/auto");
 		expect(run("nosuchmodel")).toContain('no configured model matches "nosuchmodel"');
-	});
-});
-
-describe("/switchback-config: layers", () => {
-	it("defaults to the global layer when no layer file exists", () => {
-		expect(layerForSession(session)).toBe("global");
-	});
-
-	it("pins the edited layer per session", () => {
-		expect(run("layer project")).toContain("editing the project layer");
-		expect(layerForSession(session)).toBe("project");
-		// A different session keeps its own choice.
-		expect(layerForSession("ses_other")).toBe("global");
-	});
-
-	it("rejects an unknown layer name", () => {
-		const text = run("layer sideways");
-		expect(text).toContain("usage: /switchback-config layer <global|project>");
-		expect(layerForSession(session)).toBe("global");
 	});
 });
 
@@ -183,7 +145,7 @@ describe("/switchback-config: model lifecycle", () => {
 	it("adds a model with a fallback list and saves it", () => {
 		const text = run("add auto Auto zai/glm-5.3-flash,openrouter/qwen3.8-max");
 		expect(text).toContain("added auto");
-		const config = validateFileConfig(layerYaml(), globalConfigPath()).config;
+		const config = validateFileConfig(configYaml(), configFilePath()).config;
 		expect(config.models).toHaveLength(1);
 		expect(config.models[0]?.id).toBe("switchback/auto");
 		expect(config.models[0]?.name).toBe("Auto");
@@ -192,14 +154,14 @@ describe("/switchback-config: model lifecycle", () => {
 
 	it("accepts a space-separated fallback list too", () => {
 		run("add auto Auto zai/glm-5.3-flash openrouter/qwen3.8-max");
-		const config = validateFileConfig(layerYaml(), globalConfigPath()).config;
+		const config = validateFileConfig(configYaml(), configFilePath()).config;
 		expect(config.models[0]?.fallbacks).toEqual(["zai/glm-5.3-flash", "openrouter/qwen3.8-max"]);
 	});
 
 	it("rejects a malformed fallback address and writes nothing", () => {
 		const text = run("add auto Auto not-an-address");
 		expect(text).toContain('"not-an-address" is not a "provider/model" address');
-		expect(existsSync(globalConfigPath())).toBe(false);
+		expect(existsSync(configFilePath())).toBe(false);
 	});
 
 	it("reports usage when arguments are missing", () => {
@@ -208,42 +170,42 @@ describe("/switchback-config: model lifecycle", () => {
 	});
 
 	it("renames a model and changes its display name", () => {
-		seedGlobal();
+		seedConfig();
 		expect(run("rename auto auto-fast")).toContain("renamed auto to auto-fast");
 		expect(run("name auto-fast Fast Auto")).toContain('displayed as "Fast Auto"');
-		const config = validateFileConfig(layerYaml(), globalConfigPath()).config;
+		const config = validateFileConfig(configYaml(), configFilePath()).config;
 		expect(config.models[0]?.id).toBe("switchback/auto-fast");
 		expect(config.models[0]?.name).toBe("Fast Auto");
 	});
 
 	it("removes a model", () => {
-		seedGlobal();
+		seedConfig();
 		run("add spare Spare zai/glm-5.3-flash");
 		expect(run("remove auto")).toContain("removed auto");
-		expect(validateFileConfig(layerYaml(), globalConfigPath()).config.models).toHaveLength(1);
+		expect(validateFileConfig(configYaml(), configFilePath()).config.models).toHaveLength(1);
 	});
 
 	it("refuses to remove the last virtual model", () => {
-		seedGlobal();
+		seedConfig();
 		const text = run("remove auto");
 		expect(text).toContain("the last virtual model cannot be removed");
-		expect(validateFileConfig(layerYaml(), globalConfigPath()).config.models).toHaveLength(1);
+		expect(validateFileConfig(configYaml(), configFilePath()).config.models).toHaveLength(1);
 	});
 
 	it("surfaces the editor's own message for an unknown model id", () => {
-		seedGlobal();
+		seedConfig();
 		expect(run("remove nosuchmodel")).toContain('no config entry for virtual model "switchback/nosuchmodel"');
 	});
 });
 
 describe("/switchback-config: fallback order", () => {
 	beforeEach(() => {
-		seedGlobal();
+		seedConfig();
 	});
 
 	it("replaces the whole ordered list", () => {
 		expect(run("chain auto a/one,b/two")).toContain("a/one -> b/two");
-		expect(validateFileConfig(layerYaml(), globalConfigPath()).config.models[0]?.fallbacks).toEqual([
+		expect(validateFileConfig(configYaml(), configFilePath()).config.models[0]?.fallbacks).toEqual([
 			"a/one",
 			"b/two",
 		]);
@@ -251,7 +213,7 @@ describe("/switchback-config: fallback order", () => {
 
 	it("appends one fallback", () => {
 		expect(run("chain-add auto c/three")).toContain("added c/three to auto");
-		expect(validateFileConfig(layerYaml(), globalConfigPath()).config.models[0]?.fallbacks).toEqual([
+		expect(validateFileConfig(configYaml(), configFilePath()).config.models[0]?.fallbacks).toEqual([
 			"zai/glm-5.3-flash",
 			"openrouter/qwen3.8-max",
 			"c/three",
@@ -260,14 +222,14 @@ describe("/switchback-config: fallback order", () => {
 
 	it("removes a fallback by its 1-based position", () => {
 		expect(run("chain-remove auto 1")).toContain("removed fallback 1");
-		expect(validateFileConfig(layerYaml(), globalConfigPath()).config.models[0]?.fallbacks).toEqual([
+		expect(validateFileConfig(configYaml(), configFilePath()).config.models[0]?.fallbacks).toEqual([
 			"openrouter/qwen3.8-max",
 		]);
 	});
 
 	it("moves a fallback between 1-based positions", () => {
 		expect(run("chain-move auto 1 2")).toContain("moved fallback 1 to position 2");
-		expect(validateFileConfig(layerYaml(), globalConfigPath()).config.models[0]?.fallbacks).toEqual([
+		expect(validateFileConfig(configYaml(), configFilePath()).config.models[0]?.fallbacks).toEqual([
 			"openrouter/qwen3.8-max",
 			"zai/glm-5.3-flash",
 		]);
@@ -275,18 +237,18 @@ describe("/switchback-config: fallback order", () => {
 
 	it("rejects a position below 1 and leaves the file alone", () => {
 		expect(run("chain-remove auto 0")).toContain("usage: /switchback-config chain-remove <id> <n>");
-		expect(validateFileConfig(layerYaml(), globalConfigPath()).config.models[0]?.fallbacks).toHaveLength(2);
+		expect(validateFileConfig(configYaml(), configFilePath()).config.models[0]?.fallbacks).toHaveLength(2);
 	});
 });
 
 describe("/switchback-config: per-model options", () => {
 	beforeEach(() => {
-		seedGlobal();
+		seedConfig();
 	});
 
 	it("sets and reports the idle-reset option", () => {
 		expect(run("idle-reset auto 2h")).toContain("idle-reset is 2h");
-		expect(validateFileConfig(layerYaml(), globalConfigPath()).config.models[0]?.idleReset).toBe("2h");
+		expect(validateFileConfig(configYaml(), configFilePath()).config.models[0]?.idleReset).toBe("2h");
 		expect(run("show")).toContain("idle-reset: 2h");
 	});
 
@@ -298,19 +260,19 @@ describe("/switchback-config: per-model options", () => {
 
 	it("sets a decision model and clears it with off", () => {
 		expect(run("decision-model auto zai/glm-5.3-flash")).toContain("decision model is zai/glm-5.3-flash");
-		expect(validateFileConfig(layerYaml(), globalConfigPath()).config.models[0]?.decisionModel).toBe(
+		expect(validateFileConfig(configYaml(), configFilePath()).config.models[0]?.decisionModel).toBe(
 			"zai/glm-5.3-flash",
 		);
 		expect(run("decision-model auto off")).toContain("decision model is off");
-		expect(validateFileConfig(layerYaml(), globalConfigPath()).config.models[0]?.decisionModel).toBeUndefined();
+		expect(validateFileConfig(configYaml(), configFilePath()).config.models[0]?.decisionModel).toBeUndefined();
 	});
 
 	it("toggles the shared debug flag at the top level", () => {
 		expect(run("debug on")).toContain("debug on");
-		expect(validateFileConfig(layerYaml(), globalConfigPath()).config.debug).toBe(true);
+		expect(validateFileConfig(configYaml(), configFilePath()).config.debug).toBe(true);
 		expect(run("show")).toContain("debug: on");
 		expect(run("debug off")).toContain("debug off");
-		expect(validateFileConfig(layerYaml(), globalConfigPath()).config.debug).toBeFalsy();
+		expect(validateFileConfig(configYaml(), configFilePath()).config.debug).toBeFalsy();
 	});
 
 	it("rejects a debug value that is neither on nor off", () => {
@@ -319,22 +281,23 @@ describe("/switchback-config: per-model options", () => {
 });
 
 describe("/switchback-config: reset", () => {
-	it("removes the edited layer file", () => {
-		seedGlobal();
-		expect(existsSync(globalConfigPath())).toBe(true);
-		expect(run("reset")).toContain("removed the global layer");
-		expect(existsSync(globalConfigPath())).toBe(false);
+	it("removes the config file", () => {
+		seedConfig();
+		expect(existsSync(configFilePath())).toBe(true);
+		expect(run("reset")).toContain("removed the config file");
+		expect(existsSync(configFilePath())).toBe(false);
 	});
 
-	it("reports a missing layer as already absent", () => {
-		expect(run("reset")).toContain("does not exist");
+	it("reports a missing file as already absent", () => {
+		expect(run("reset")).toContain("there is no config file");
 	});
 
-	it("refuses to delete a layer it cannot parse", () => {
-		writeFileSync(globalConfigPath(), "models: [ not valid\n", "utf8");
+	it("refuses to delete a file it cannot parse", () => {
+		mkdirSync(dirname(configFilePath()), { recursive: true });
+		writeFileSync(configFilePath(), "models: [ not valid\n", "utf8");
 		const text = run("reset");
 		expect(text).toContain("was left in place");
-		expect(existsSync(globalConfigPath())).toBe(true);
+		expect(existsSync(configFilePath())).toBe(true);
 	});
 });
 
@@ -342,8 +305,9 @@ describe("/switchback-config: failure handling", () => {
 	it("reports an invalid saved state with the loader's own message", () => {
 		// A duplicate id is structurally undetectable at add time only when the
 		// file was hand-edited; the save gate still catches it.
+		mkdirSync(dirname(configFilePath()), { recursive: true });
 		writeFileSync(
-			globalConfigPath(),
+			configFilePath(),
 			[
 				"models:",
 				"  - id: switchback/auto",
@@ -361,10 +325,11 @@ describe("/switchback-config: failure handling", () => {
 		expect(text).toContain("more than once");
 	});
 
-	it("reports an unreadable layer instead of editing it", () => {
-		writeFileSync(globalConfigPath(), "models: [ not valid\n", "utf8");
+	it("reports an unreadable file instead of editing it", () => {
+		mkdirSync(dirname(configFilePath()), { recursive: true });
+		writeFileSync(configFilePath(), "models: [ not valid\n", "utf8");
 		const text = run("add auto Auto zai/glm-5.3-flash");
-		expect(text).toContain("cannot edit the global layer");
+		expect(text).toContain("cannot edit");
 	});
 
 	it("keeps the on-disk file loadable by the real loader after every verb", () => {
@@ -383,7 +348,7 @@ describe("/switchback-config: failure handling", () => {
 
 describe("/switchback-config: sink", () => {
 	it("delivers the report through the sink and returns it", async () => {
-		seedGlobal();
+		seedConfig();
 		const said: string[] = [];
 		const result = await runConfigCommand(session, "show", {
 			say: (text) => {

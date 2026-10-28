@@ -37,7 +37,6 @@ describe("packages/pi/src/index.ts barrel", () => {
 		const expected = [
 			"runDialogue", // packages/pi/src/dialogue.ts
 			"describeDecisionModel", // packages/pi/src/dialogue-ui.ts (moved out of dialogue.ts)
-			"layerOptionLabel", // packages/pi/src/dialogue.ts
 			"decide", // packages/core/src/routing.ts
 			"observeUnretriedFailure", // packages/core/src/failure.ts
 			"buildRoute", // packages/pi/src/build-route.ts (split out of routing.ts)

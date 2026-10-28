@@ -9,7 +9,7 @@
  * menu driven by the server's config grammar (`./tui-guide.ts`).
  *
  * It owns no routing and writes no files: notices are decided server-side, and
- * every edit is sent back as layer-1 verb text for the server's single editor
+ * every edit is sent back as command-verb text for the server's single editor
  * to apply. That is what keeps the menu and the typed command from drifting.
  *
  * Notice delivery is best effort in both directions. A TUI that loads before

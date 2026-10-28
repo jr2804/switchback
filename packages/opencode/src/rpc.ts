@@ -198,7 +198,7 @@ export const SwitchbackRpc = Rpc.define({
 				properties: {
 					chains: { type: "array", items: chain },
 					models: { type: "array", items: model },
-					/** Absolute path of the layer the server is editing. */
+					/** Absolute path of the config file the server is editing. */
 					path: { type: "string" },
 				},
 				required: ["chains", "models", "path"],

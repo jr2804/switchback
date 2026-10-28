@@ -19,7 +19,7 @@
  *     manage the shared account-scoped state.
  *
  * Config, block state and crash corpus are shared with the pi extension
- * unchanged: the shared `switchback.yaml` layers plus the neutral state dir
+ * unchanged: the shared `switchback.yaml` file plus the shared state dir
  * (see `switchback-core/config.ts`; override with SWITCHBACK_DIR).
  */
 
@@ -34,7 +34,7 @@ import {
 	getPinnedModel,
 	isDisabled,
 	isValidAnnotationClass,
-	layerPath,
+	configFilePath,
 	loadConfig,
 	readBlockedMap,
 	readCrashMap,
@@ -49,13 +49,7 @@ import type { DisabledMap, ErrorClass, ModelId, ResolvedSwitchbackFileConfig, Se
 import { clearBridge, publishBridge } from "./bridge.ts";
 import type { SwitchbackBridge } from "./bridge.ts";
 import { splitModelAddress } from "./catalog.ts";
-import {
-	clearConfigSessions,
-	execute as executeConfigCommand,
-	layerForSession,
-	parseConfigCommand,
-	runConfigCommand,
-} from "./config-command.ts";
+import { execute as executeConfigCommand, parseConfigCommand, runConfigCommand } from "./config-command.ts";
 import { attachNoticeSink, detachNoticeSink, publishNotice, resetNoticeChannel, setNoticeChannel } from "./notices.ts";
 import { SwitchbackRpc } from "./rpc.ts";
 import { readString } from "./rpc.ts";
@@ -254,7 +248,7 @@ export default Plugin.define({
 			detach: async () => ({ attached: detachNoticeSink() }),
 			// The interactive guide reads its menu from here, so the server stays the
 			// only place that parses `switchback.yaml` and the model catalog.
-			state: async (input: unknown) => guideState(ctx, readString(input, "sessionID")),
+			state: async () => guideState(ctx),
 			// And it edits by sending layer-1 verb text, so the menu and the typed
 			// command go through the same grammar and the same writer.
 			config: async (input: unknown) => {
@@ -278,7 +272,6 @@ export default Plugin.define({
 
 		return () => {
 			clearBridge();
-			clearConfigSessions();
 			resetNoticeChannel();
 		};
 	},
@@ -613,11 +606,8 @@ async function republish(ctx: Plugin.Context): Promise<void> {
 	await ctx.model.reload();
 }
 
-/** Read the merged chains and the catalog for the interactive guide's menu. */
-async function guideState(
-	ctx: Plugin.Context,
-	sessionID: string | undefined,
-): Promise<{
+/** Read the chains and the catalog for the interactive guide's menu. */
+async function guideState(ctx: Plugin.Context): Promise<{
 	chains: readonly {
 		id: string;
 		name: string;
@@ -665,7 +655,7 @@ async function guideState(
 		// The guide must never offer a switchback chain as one of its own
 		// fallbacks: it would resolve to itself and re-enter the router.
 		.filter((model) => !model.address.startsWith(`${SWITCHBACK_PROVIDER_ID}/`));
-	return { chains: chainRows, models, path: layerPath(layerForSession(sessionID ?? "rpc")) };
+	return { chains: chainRows, models, path: configFilePath() };
 }
 
 /** `/switchback-next`: advance the pin through (none, ...fallbacks) and wrap. */

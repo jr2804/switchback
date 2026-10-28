@@ -4,7 +4,7 @@
  * packages/pi/src/dialogue.ts (the /switchback-config flow on pi's built-in dialogs).
  *
  * The editor must carry no rules of its own: mutations are structural, and
- * saveLayer() re-validates through the loader's exported gate
+ * saveConfigFile() re-validates through the loader's exported gate
  * (validateFileConfig + resolveJevConfig). Several tests therefore assert
  * that an invalid edit throws the LOADER's message at save time, and that
  * the file on disk stays untouched.
@@ -27,20 +27,19 @@ import {
 	addDecisionModel,
 	addFallback,
 	addVirtualModel,
-	defaultLayer,
-	loadLayer,
+	loadConfigFile,
 	moveFallback,
-	readLayerConfig,
+	readConfigFile,
 	removeDecisionModel,
 	removeFallback,
 	renameDecisionModel,
 	renameVirtualModel,
-	saveLayer,
+	saveConfigFile,
 	setDecisionModel,
 	setDebug,
-	type LoadedLayer,
+	type LoadedConfig,
 } from "switchback-core/config-editor.ts";
-import { layerOptionLabel, runDialogue } from "pi-switchback/dialogue.ts";
+import { runDialogue } from "pi-switchback/dialogue.ts";
 import {
 	describeDecisionModel,
 	secretNameFor,
@@ -81,10 +80,10 @@ const TWO_MODELS = SAMPLE.replace(
 decisionModels:`,
 );
 
-/** Invalid YAML (unclosed flow sequence) for the loadLayer error path. */
+/** Invalid YAML (unclosed flow sequence) for the loadConfigFile error path. */
 const BROKEN_YAML = "models: [unclosed\n";
 
-/** Rule-violating but parseable YAML (empty fallbacks) for the readLayerConfig error path. */
+/** Rule-violating but parseable YAML (empty fallbacks) for the readConfigFile error path. */
 const INVALID_RULES = `models:
   - id: switchback/auto
     name: Auto
@@ -94,12 +93,17 @@ const INVALID_RULES = `models:
 let tmpDir: string;
 let originalCwd: string;
 let originalAgentDir: string | undefined;
+let originalConfigDir: string | undefined;
 
 beforeEach(() => {
 	originalCwd = process.cwd();
 	originalAgentDir = process.env["PI_CODING_AGENT_DIR"];
+	originalConfigDir = process.env["SWITCHBACK_CONFIG_DIR"];
 	tmpDir = mkdtemp();
 	process.env["PI_CODING_AGENT_DIR"] = tmpDir;
+	// The editor's "global" layer is the shared ~/.config/switchback file, so the
+	// suite pins it into the temp dir alongside pi's agent dir.
+	process.env["SWITCHBACK_CONFIG_DIR"] = tmpDir;
 	process.chdir(tmpDir);
 });
 
@@ -107,6 +111,8 @@ afterEach(() => {
 	process.chdir(originalCwd);
 	if (originalAgentDir === undefined) delete process.env["PI_CODING_AGENT_DIR"];
 	else process.env["PI_CODING_AGENT_DIR"] = originalAgentDir;
+	if (originalConfigDir === undefined) delete process.env["SWITCHBACK_CONFIG_DIR"];
+	else process.env["SWITCHBACK_CONFIG_DIR"] = originalConfigDir;
 	rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -123,20 +129,20 @@ function rmTempLater(path: string): string {
 	return path;
 }
 
-const globalPath = (): string => join(tmpDir, "switchback.yaml");
-const projectPath = (): string => join(tmpDir, ".pi", "switchback.yaml");
+/** The one config file: `<SWITCHBACK_CONFIG_DIR>/switchback.yaml` = the temp dir here. */
+const configPath = (): string => join(tmpDir, "switchback.yaml");
 
-function seed(text: string, path: string = globalPath()): void {
+function seed(text: string, path: string = configPath()): void {
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, text, "utf8");
 }
 
-function readText(path: string = globalPath()): string {
+function readText(path: string = configPath()): string {
 	return readFileSync(path, "utf8");
 }
 
-function load(layer: "global" | "project" = "global"): LoadedLayer {
-	return loadLayer(layer);
+function load(): LoadedConfig {
+	return loadConfigFile();
 }
 
 /** Scripted UI: queues answer the dialog calls in order; an empty queue fails the test. */
@@ -200,12 +206,13 @@ function run(ui: ScriptedUi, store?: SecretStore, extra: Partial<DialogueContext
 
 const MODEL_LABEL = "switchback/auto - Auto";
 
-describe("config-editor: layer handling", () => {
-	it("creates a fresh layer file with the header comment and a normalized bare id", () => {
+describe("config-editor: one file, no layers", () => {
+	it("creates a fresh config file with the header comment and a normalized bare id", () => {
 		const loaded = load();
 		expect(loaded.existed).toBe(false);
+		expect(loaded.path).toBe(configPath());
 		addVirtualModel(loaded, { id: "auto", name: "Auto", fallbacks: ["zai/glm-5.3"] });
-		saveLayer(loaded);
+		saveConfigFile(loaded);
 		const text = readText();
 		expect(text).toContain("switchback configuration - see docs/configuration.md");
 		expect(text).toContain("id: switchback/auto");
@@ -213,31 +220,11 @@ describe("config-editor: layer handling", () => {
 		expect(readdirSync(tmpDir).filter((name) => name.startsWith("switchback.yaml."))).toEqual([]);
 	});
 
-	it("prefers the global layer, falling back to a project-only file", () => {
-		// Neither file exists: the global config is the natural home for a new one.
-		expect(defaultLayer()).toBe("global");
-		// A `.pi/` directory alone does NOT make the project layer the target - that
-		// rule silently wrote project overrides for users editing their global config.
-		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-		expect(defaultLayer()).toBe("global");
-		// Only a project file exists: that is plainly what the user works with.
-		seed(SAMPLE, projectPath());
-		expect(defaultLayer()).toBe("project");
-		// Both exist: global is the base every project inherits, so it wins.
-		seed(SAMPLE);
-		expect(defaultLayer()).toBe("global");
-		expect(load("project").path).toBe(projectPath());
-	});
-
-	it("labels each layer with its presence, model count or invalidity", () => {
-		expect(layerOptionLabel("global")).toBe("Global - not present");
-		expect(layerOptionLabel("project")).toBe("Project - not present");
-		seed(SAMPLE);
-		expect(layerOptionLabel("global")).toBe("Global - 1 model");
-		seed(TWO_MODELS, projectPath());
-		expect(layerOptionLabel("project")).toBe("Project - 2 models");
-		seed(BROKEN_YAML);
-		expect(layerOptionLabel("global")).toBe("Global - unreadable (invalid config)");
+	it("ignores a per-project <.cwd>/.pi/switchback.yaml entirely", () => {
+		// The layer concept is gone: a `.pi/` file is neither read nor offered.
+		seed(SAMPLE, join(tmpDir, ".pi", "switchback.yaml"));
+		expect(load().existed).toBe(false);
+		expect(existsSync(configPath())).toBe(false);
 	});
 });
 
@@ -246,13 +233,13 @@ describe("config-editor: comment-preserving round-trip", () => {
 		seed(SAMPLE);
 		const loaded = load();
 		moveFallback(loaded, "switchback/auto", 0, 1);
-		saveLayer(loaded);
+		saveConfigFile(loaded);
 		const text = readText();
 		expect(text).toContain("# my custom header comment");
 		expect(text).toContain("# primary router");
 		expect(text).toContain("# local ollama classifier");
 		expect(text).toContain("# bare id, stays bare in the file");
-		const config = readLayerConfig(load());
+		const config = readConfigFile(load());
 		expect(config.models[0]?.fallbacks).toEqual(["minimax/MiniMax-M3", "zai/glm-5.3"]);
 		// The ref form survives: bare id stays bare, decisionModel reference intact.
 		expect(text).toContain("id: auto");
@@ -263,7 +250,7 @@ describe("config-editor: comment-preserving round-trip", () => {
 		seed(SAMPLE);
 		const loaded = load();
 		renameVirtualModel(loaded, "switchback/auto", "switchback/auto-fast");
-		saveLayer(loaded);
+		saveConfigFile(loaded);
 		expect(readText()).toContain("switchback/auto-fast");
 	});
 
@@ -290,7 +277,7 @@ describe("config-editor: the loader's gate owns every rule", () => {
 		seed(SAMPLE);
 		const loaded = load();
 		addFallback(loaded, "switchback/auto", "noprovider");
-		expect(() => saveLayer(loaded)).toThrow(/provider\/id/);
+		expect(() => saveConfigFile(loaded)).toThrow(/provider\/id/);
 		// The file on disk is untouched by the failed save.
 		expect(readText()).not.toContain("noprovider");
 	});
@@ -299,16 +286,16 @@ describe("config-editor: the loader's gate owns every rule", () => {
 		seed(SAMPLE);
 		const loaded = load();
 		setDecisionModel(loaded, "switchback/auto", "typesafe/jev-latest");
-		saveLayer(loaded);
-		expect(readLayerConfig(load()).models[0]?.decisionModel).toBe("typesafe/jev-latest");
+		saveConfigFile(loaded);
+		expect(readConfigFile(load()).models[0]?.decisionModel).toBe("typesafe/jev-latest");
 	});
 
 	it("removing a decision model leaves the referencing chain on catalog resolution", () => {
 		seed(SAMPLE);
 		const loaded = load();
 		removeDecisionModel(loaded, "ollama/tev1");
-		saveLayer(loaded);
-		const config = readLayerConfig(load());
+		saveConfigFile(loaded);
+		const config = readConfigFile(load());
 		expect(config.decisionModels).toBeUndefined();
 		// The chain keeps the address: without an entry, pi resolves it from its own
 		// classifier catalog. Clearing it silently would hide that choice.
@@ -317,9 +304,9 @@ describe("config-editor: the loader's gate owns every rule", () => {
 
 	it("reads an invalid file through the loader's message and refuses to open it", () => {
 		seed(BROKEN_YAML);
-		expect(() => loadLayer("global")).toThrow(/not valid YAML/);
+		expect(() => loadConfigFile("global")).toThrow(/not valid YAML/);
 		seed(INVALID_RULES);
-		expect(() => readLayerConfig(load())).toThrow(/fallbacks must be a non-empty array/);
+		expect(() => readConfigFile(load())).toThrow(/fallbacks must be a non-empty array/);
 	});
 });
 
@@ -332,7 +319,7 @@ describe("config-editor: decision models and debug", () => {
 			baseUrl: "http://localhost:11434/v1",
 			apiKeySecretName: "svc-key",
 		});
-		saveLayer(loaded);
+		saveConfigFile(loaded);
 		const text = readText();
 		expect(text).toContain("secret:svc-key");
 	});
@@ -341,8 +328,8 @@ describe("config-editor: decision models and debug", () => {
 		seed(SAMPLE);
 		const loaded = load();
 		renameDecisionModel(loaded, "ollama/tev1", "ollama/tev2");
-		saveLayer(loaded);
-		const config = readLayerConfig(load());
+		saveConfigFile(loaded);
+		const config = readConfigFile(load());
 		expect(config.decisionModels?.["ollama/tev2"]).toBeDefined();
 		expect(config.decisionModels?.["ollama/tev1"]).toBeUndefined();
 		expect(config.models[0]?.decisionModel).toBe("ollama/tev2");
@@ -352,12 +339,12 @@ describe("config-editor: decision models and debug", () => {
 		seed(SAMPLE);
 		const loaded = load();
 		setDebug(loaded, true);
-		saveLayer(loaded);
-		expect(readLayerConfig(load()).debug).toBe(true);
+		saveConfigFile(loaded);
+		expect(readConfigFile(load()).debug).toBe(true);
 		const again = load();
 		setDebug(again, false);
-		saveLayer(again);
-		expect(readLayerConfig(load()).debug).toBe(false);
+		saveConfigFile(again);
+		expect(readConfigFile(load()).debug).toBe(false);
 	});
 });
 
@@ -372,13 +359,7 @@ describe("dialogue", () => {
 
 	it("walks the add-virtual-model wizard into a saved file", async () => {
 		const ui = new ScriptedUi({
-			select: [
-				layerOptionLabel("global"),
-				"Add virtual model...",
-				"Add fallback...",
-				"Done (needs at least one)",
-				"Done",
-			],
+			select: ["Add virtual model...", "Add fallback...", "Done (needs at least one)", "Done"],
 			input: ["auto", "Auto (fast)", "zai/glm-5.3"],
 		});
 		await run(ui);
@@ -392,49 +373,33 @@ describe("dialogue", () => {
 	it("reverts a failed wizard (duplicate id) and leaves the file unchanged", async () => {
 		seed(SAMPLE);
 		const ui = new ScriptedUi({
-			select: [
-				layerOptionLabel("global"),
-				"Add virtual model...",
-				"Add fallback...",
-				"Done (needs at least one)",
-				"Done",
-			],
+			select: ["Add virtual model...", "Add fallback...", "Done (needs at least one)", "Done"],
 			input: ["auto", "Dup", "zai/glm-5.3"],
 		});
 		await run(ui);
 		expect(ui.notifications.some((n) => n.message.includes("more than once"))).toBe(true);
-		expect(readLayerConfig(load()).models).toHaveLength(1);
+		expect(readConfigFile(load()).models).toHaveLength(1);
 	});
 
 	it("toggles debug on and back off", async () => {
 		seed(SAMPLE);
-		await run(new ScriptedUi({ select: [layerOptionLabel("global"), "Toggle debug (currently off)", "Done"] }));
-		expect(readLayerConfig(load()).debug).toBe(true);
-		await run(new ScriptedUi({ select: [layerOptionLabel("global"), "Toggle debug (currently on)", "Done"] }));
-		expect(readLayerConfig(load()).debug).toBe(false);
+		await run(new ScriptedUi({ select: ["Toggle debug (currently off)", "Done"] }));
+		expect(readConfigFile(load()).debug).toBe(true);
+		await run(new ScriptedUi({ select: ["Toggle debug (currently on)", "Done"] }));
+		expect(readConfigFile(load()).debug).toBe(false);
 	});
 
 	it("reorders and removes fallbacks through the editor", async () => {
 		seed(SAMPLE);
 		await run(
 			new ScriptedUi({
-				select: [
-					layerOptionLabel("global"),
-					MODEL_LABEL,
-					"Edit fallbacks (2)",
-					"Move down...",
-					"1. zai/glm-5.3",
-					"Done",
-					"Back",
-					"Done",
-				],
+				select: [MODEL_LABEL, "Edit fallbacks (2)", "Move down...", "1. zai/glm-5.3", "Done", "Back", "Done"],
 			}),
 		);
-		expect(readLayerConfig(load()).models[0]?.fallbacks).toEqual(["minimax/MiniMax-M3", "zai/glm-5.3"]);
+		expect(readConfigFile(load()).models[0]?.fallbacks).toEqual(["minimax/MiniMax-M3", "zai/glm-5.3"]);
 		await run(
 			new ScriptedUi({
 				select: [
-					layerOptionLabel("global"),
 					"switchback/auto - Auto",
 					"Edit fallbacks (2)",
 					"Remove fallback...",
@@ -445,39 +410,24 @@ describe("dialogue", () => {
 				],
 			}),
 		);
-		expect(readLayerConfig(load()).models[0]?.fallbacks).toEqual(["minimax/MiniMax-M3"]);
+		expect(readConfigFile(load()).models[0]?.fallbacks).toEqual(["minimax/MiniMax-M3"]);
 	});
 
 	it("guards the last remaining fallback", async () => {
 		seed("models:\n  - id: switchback/auto\n    name: Auto\n    fallbacks:\n      - zai/glm-5.3\n");
 		const ui = new ScriptedUi({
-			select: [
-				layerOptionLabel("global"),
-				MODEL_LABEL,
-				"Edit fallbacks (1)",
-				"Remove fallback...",
-				undefined,
-				undefined,
-				"Done",
-			],
+			select: [MODEL_LABEL, "Edit fallbacks (1)", "Remove fallback...", undefined, undefined, "Done"],
 		});
 		await run(ui);
 		expect(ui.notifications.some((n) => n.message.includes("at least one fallback"))).toBe(true);
-		expect(readLayerConfig(load()).models[0]?.fallbacks).toEqual(["zai/glm-5.3"]);
+		expect(readConfigFile(load()).models[0]?.fallbacks).toEqual(["zai/glm-5.3"]);
 	});
 
 	it("stores a new API key in the secret store and writes only secret:<name> to the file", async () => {
 		seed(SAMPLE);
 		const store = new FakeSecretStore();
 		const ui = new ScriptedUi({
-			select: [
-				layerOptionLabel("global"),
-				"Decision models (1)...",
-				"Add decision model...",
-				"New secret...",
-				"Back",
-				"Done",
-			],
+			select: ["Decision models (1)...", "Add decision model...", "New secret...", "Back", "Done"],
 			// Wizard order (a declared endpoint): provider, baseUrl, modelId, the apiKey
 			// value, then the address LAST (prefilled provider/modelId).
 			input: [
@@ -503,7 +453,6 @@ describe("dialogue", () => {
 		seed(SAMPLE);
 		const ui = new ScriptedUi({
 			select: [
-				layerOptionLabel("global"),
 				"Decision models (1)...",
 				"ollama/tev1 - direct: http://localhost:11434/v1",
 				"Delete",
@@ -514,49 +463,49 @@ describe("dialogue", () => {
 		});
 		await run(ui);
 		expect(ui.notifications.some((n) => n.message.includes("still named by"))).toBe(true);
-		expect(readLayerConfig(load()).decisionModels?.["ollama/tev1"]).toBeDefined();
+		expect(readConfigFile(load()).decisionModels?.["ollama/tev1"]).toBeDefined();
 	});
 
 	it("removes a model after confirm and keeps it on cancel", async () => {
 		seed(TWO_MODELS);
 		await run(
 			new ScriptedUi({
-				select: [layerOptionLabel("global"), "switchback/alt - Alt", "Remove model", "Done"],
+				select: ["switchback/alt - Alt", "Remove model", "Done"],
 				confirm: [true],
 			}),
 		);
-		expect(readLayerConfig(load()).models).toHaveLength(1);
+		expect(readConfigFile(load()).models).toHaveLength(1);
 		expect(readText()).not.toContain("switchback/alt");
 
 		seed(TWO_MODELS);
 		await run(
 			new ScriptedUi({
-				select: [layerOptionLabel("global"), "switchback/alt - Alt", "Remove model", undefined, "Done"],
+				select: ["switchback/alt - Alt", "Remove model", undefined, "Done"],
 				confirm: [false],
 			}),
 		);
-		expect(readLayerConfig(load()).models).toHaveLength(2);
+		expect(readConfigFile(load()).models).toHaveLength(2);
 	});
 
 	it("guards the last virtual model against removal", async () => {
 		seed(SAMPLE);
 		const ui = new ScriptedUi({
-			select: [layerOptionLabel("global"), MODEL_LABEL, "Remove model", undefined, "Done"],
+			select: [MODEL_LABEL, "Remove model", undefined, "Done"],
 			confirm: [true],
 		});
 		await run(ui);
 		expect(ui.notifications.some((n) => n.message.includes("last virtual model"))).toBe(true);
-		expect(readLayerConfig(load()).models).toHaveLength(1);
+		expect(readConfigFile(load()).models).toHaveLength(1);
 	});
 
 	it("renames a model id and warns about the restart", async () => {
 		seed(SAMPLE);
 		const ui = new ScriptedUi({
-			select: [layerOptionLabel("global"), MODEL_LABEL, "Rename model id (pi restart required)", "Back", "Done"],
+			select: [MODEL_LABEL, "Rename model id (pi restart required)", "Back", "Done"],
 			input: ["auto-fast"],
 		});
 		await run(ui);
-		const config = readLayerConfig(load());
+		const config = readConfigFile(load());
 		expect(config.models[0]?.id).toBe("switchback/auto-fast");
 		expect(ui.notifications.some((n) => n.message.includes("restart"))).toBe(true);
 	});
@@ -564,65 +513,11 @@ describe("dialogue", () => {
 	it("reports an invalid config file and exits without touching it", async () => {
 		seed(INVALID_RULES);
 		const before = readText();
-		const ui = new ScriptedUi({ select: [layerOptionLabel("global")] });
+		const ui = new ScriptedUi();
 		await run(ui);
 		expect(ui.notifications[0]?.type).toBe("error");
 		expect(ui.notifications[0]?.message).toContain("fallbacks must be a non-empty array");
 		expect(readText()).toBe(before);
-	});
-
-	it("edits the project layer when <cwd>/.pi exists", async () => {
-		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-		const ui = new ScriptedUi({
-			select: [
-				layerOptionLabel("project"),
-				"Add virtual model...",
-				"Add fallback...",
-				"Done (needs at least one)",
-				"Done",
-			],
-			input: ["auto", "Auto (project)", "zai/glm-5.3"],
-		});
-		await run(ui);
-		expect(existsSync(projectPath())).toBe(true);
-		expect(readText(projectPath())).toContain("Auto (project)");
-		expect(existsSync(globalPath())).toBe(false);
-	});
-
-	it("edits the chosen layer and leaves the other one alone", async () => {
-		seed(SAMPLE);
-		seed(SAMPLE, projectPath());
-		await run(
-			new ScriptedUi({
-				select: [layerOptionLabel("project"), "Toggle debug (currently off)", "Done"],
-			}),
-		);
-		expect(readLayerConfig(load("project")).debug).toBe(true);
-		expect(readLayerConfig(load("global")).debug).toBe(false);
-	});
-
-	it("switches layer from the main menu through the chooser", async () => {
-		seed(SAMPLE);
-		seed(SAMPLE, projectPath());
-		await run(
-			new ScriptedUi({
-				select: [
-					layerOptionLabel("global"),
-					"Switch layer...",
-					layerOptionLabel("project"),
-					"Toggle debug (currently off)",
-					"Done",
-				],
-			}),
-		);
-		expect(readLayerConfig(load("project")).debug).toBe(true);
-		expect(readLayerConfig(load("global")).debug).toBe(false);
-	});
-
-	it("touches nothing when the layer prompt is cancelled", async () => {
-		await run(new ScriptedUi({ select: [undefined] }));
-		expect(existsSync(globalPath())).toBe(false);
-		expect(existsSync(projectPath())).toBe(false);
 	});
 });
 
@@ -653,15 +548,7 @@ describe("dialogue: catalog-assisted setup", () => {
 		const picked: { title: string; current: readonly string[] }[] = [];
 		await run(
 			new ScriptedUi({
-				select: [
-					layerOptionLabel("global"),
-					MODEL_LABEL,
-					"Edit fallbacks (2)",
-					"Add fallback...",
-					"Done",
-					"Back",
-					"Done",
-				],
+				select: [MODEL_LABEL, "Edit fallbacks (2)", "Add fallback...", "Done", "Back", "Done"],
 			}),
 			undefined,
 			{
@@ -671,7 +558,7 @@ describe("dialogue: catalog-assisted setup", () => {
 				},
 			},
 		);
-		expect(readLayerConfig(load()).models[0]?.fallbacks).toEqual([
+		expect(readConfigFile(load()).models[0]?.fallbacks).toEqual([
 			"zai/glm-5.3",
 			"minimax/MiniMax-M3",
 			"opencode-go/mimo-v2.6-flash",
@@ -691,7 +578,6 @@ describe("dialogue: catalog-assisted setup", () => {
 			// pi holds the credential, so switchback neither asks for one nor writes a
 			// secret reference.
 			select: [
-				layerOptionLabel("global"),
 				"Decision models (1)...",
 				"Add decision model...",
 				CATALOG_PROVIDER.label,
@@ -709,7 +595,7 @@ describe("dialogue: catalog-assisted setup", () => {
 				return probeResult(true);
 			},
 		});
-		const entry = readLayerConfig(load()).decisionModels?.["typesafe/jev-latest"];
+		const entry = readConfigFile(load()).decisionModels?.["typesafe/jev-latest"];
 		// pi resolves the endpoint and the credential from its own catalog (whatever
 		// /login configured), so the entry stays empty.
 		expect(entry?.baseUrl).toBeUndefined();
@@ -737,7 +623,6 @@ describe("dialogue: catalog-assisted setup", () => {
 				// provider ("Other"), provider id, baseUrl, modelId (live list),
 				// apiKey action, apiKey value, address LAST (prefilled).
 				select: [
-					layerOptionLabel("global"),
 					"Decision models (1)...",
 					"Add decision model...",
 					"Other (type a provider id)...",
@@ -754,7 +639,7 @@ describe("dialogue: catalog-assisted setup", () => {
 				],
 			});
 			await run(ui, store, { classifierProviders: [CATALOG_PROVIDER] });
-			const entry = readLayerConfig(load()).decisionModels?.["local-ollama/tev1:0.8b"];
+			const entry = readConfigFile(load()).decisionModels?.["local-ollama/tev1:0.8b"];
 			expect(entry?.baseUrl).toBe("http://localhost:11434/v1");
 			// switchback speaks one wire protocol, so the entry carries only the
 			// transport and the credential reference.
@@ -771,7 +656,6 @@ describe("dialogue: catalog-assisted setup", () => {
 				// Wizard order: provider, model id (from the catalog list), apiKey
 				// action "(no API key)", baseUrl (Enter = keep pi's catalog), name LAST.
 				select: [
-					layerOptionLabel("global"),
 					"Decision models (1)...",
 					"Add decision model...",
 					CATALOG_PROVIDER.label,
@@ -785,7 +669,7 @@ describe("dialogue: catalog-assisted setup", () => {
 			undefined,
 			{ classifierProviders: [CATALOG_PROVIDER] },
 		);
-		const entry = readLayerConfig(load()).decisionModels?.["typesafe/jev-1.13"];
+		const entry = readConfigFile(load()).decisionModels?.["typesafe/jev-1.13"];
 		expect(entry?.baseUrl).toBeUndefined();
 	});
 });

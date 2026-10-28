@@ -21,22 +21,27 @@ import { groupLocalEndpoints, registerLocalClassifier } from "pi-switchback/loca
 let originalCwd: string;
 let tmpDir: string;
 
+/** The one config file these tests write: `<tmp>/switchback.yaml`. */
+const configFile = (): string => join(tmpDir, "switchback.yaml");
+
+/** Write the shared config file, creating the directory on demand. */
+function writeConfig(yaml: string): void {
+	mkdirSync(tmpDir, { recursive: true });
+	writeFileSync(configFile(), yaml);
+}
+
 beforeEach(() => {
 	originalCwd = process.cwd();
 	tmpDir = join(tmpdir(), `switchback-config-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 	mkdirSync(tmpDir, { recursive: true });
-	// Point pi's config dir at the tmp dir so the test is portable and doesn't pick
-	// up the user's activated agent-dir copy.
-	process.env["PI_CODING_AGENT_DIR"] = tmpDir;
-	// The neutral basis layer (~/.config/switchback) is a real user file on some
-	// machines; pin it into the temp dir so the suite is hermetic.
+	// The config lives at `~/.config/switchback/switchback.yaml`; USERPROFILE and
+	// SWITCHBACK_CONFIG_DIR both point into the temp dir so the suite is hermetic.
 	process.env["SWITCHBACK_CONFIG_DIR"] = tmpDir;
 	process.chdir(tmpDir);
 });
 
 afterEach(() => {
 	process.chdir(originalCwd);
-	delete process.env["PI_CODING_AGENT_DIR"];
 	delete process.env["SWITCHBACK_CONFIG_DIR"];
 	if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -62,97 +67,73 @@ describe("DEFAULT_CONFIG", () => {
 		}
 	});
 
-	it("loadConfig with no user files falls back to DEFAULT_CONFIG with source '<default>'", () => {
+	it("loadConfig with no config file falls back to DEFAULT_CONFIG with source '<default>'", () => {
 		const { config, source } = loadConfig();
 		expect(source).toBe("<default>");
 		expect(config.models[0]?.fallbacks).toEqual([]);
 	});
 });
 
-describe("loadConfig - layer aggregation", () => {
-	const writeProject = (yaml: string): void => {
-		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-		writeFileSync(join(tmpDir, ".pi", "switchback.yaml"), yaml);
-	};
-	const writeAgent = (yaml: string): void => {
+describe("loadConfig - one file, no layers", () => {
+	it("reads ~/.config/switchback/switchback.yaml and reports its path as the source", () => {
+		writeConfig(`models:
+  - id: switchback/auto
+    name: shared
+    fallbacks: ["zai/glm-5.3"]
+`);
+		const { config, source } = loadConfig();
+		expect(config.models[0]?.name).toBe("shared");
+		expect(source).toBe(resolve(configFile()));
+	});
+
+	it("ignores pi's agent overlay even when it holds a different chain set", () => {
+		// The bug this contract exists for: OpenCode used to read this file.
+		writeConfig(`models:
+  - id: switchback/auto
+    name: shared
+    fallbacks: ["zai/glm-5.3"]
+`);
 		mkdirSync(join(tmpDir, "agent"), { recursive: true });
 		process.env["PI_CODING_AGENT_DIR"] = join(tmpDir, "agent");
-		writeFileSync(join(tmpDir, "agent", "switchback.yaml"), yaml);
-	};
-
-	it("a duplicated model id means the project entry wins wholesale", () => {
-		writeProject(`models:
-  - id: switchback/auto
-    name: project override
-    fallbacks: ["zai/glm-5.3"]
-`);
-		writeAgent(`models:
-  - id: switchback/auto
-    name: agent-dir copy
-    fallbacks: ["ollama-cloud/glm-5.3-flash"]
-`);
+		writeFileSync(
+			join(tmpDir, "agent", "switchback.yaml"),
+			'models:\n  - id: switchback/auto\n    name: pi only\n    fallbacks: ["ollama/tev1:0.8b"]\n',
+		);
 		const { config, source } = loadConfig();
-		expect(config.models).toHaveLength(1);
-		expect(config.models[0]?.name).toBe("project override");
+		expect(config.models[0]?.name).toBe("shared");
 		expect(config.models[0]?.fallbacks).toEqual(["zai/glm-5.3"]);
-		expect(source).toContain(join(tmpDir, ".pi", "switchback.yaml"));
-		expect(source).toContain(join(tmpDir, "agent", "switchback.yaml"));
+		expect(source).not.toContain("agent");
+		delete process.env["PI_CODING_AGENT_DIR"];
 	});
 
-	it("keeps global order, overrides in place, appends project-only models", () => {
-		writeProject(`models:
-  - id: switchback/local
-    name: Project Only
-    fallbacks: ["minimax/MiniMax-M3"]
+	it("ignores a per-project <.cwd>/.pi/switchback.yaml", () => {
+		writeConfig(`models:
   - id: switchback/auto
-    name: project override
+    name: shared
     fallbacks: ["zai/glm-5.3"]
 `);
-		writeAgent(`models:
-  - id: switchback/auto
-    name: agent auto
-    fallbacks: ["zai/glm-5.3"]
-  - id: switchback/auto-flash
-    name: agent flash
-    fallbacks: ["zai/glm-5.3-flash"]
-`);
+		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+		writeFileSync(
+			join(tmpDir, ".pi", "switchback.yaml"),
+			'models:\n  - id: switchback/auto\n    name: project override\n    fallbacks: ["minimax/MiniMax-M3"]\n',
+		);
 		const { config } = loadConfig();
-		expect(config.models.map((m) => `${m.id}:${m.name}`)).toEqual([
-			"switchback/auto:project override",
-			"switchback/auto-flash:agent flash",
-			"switchback/local:Project Only",
-		]);
+		expect(config.models[0]?.name).toBe("shared");
+		expect(config.models[0]?.fallbacks).toEqual(["zai/glm-5.3"]);
 	});
 
-	it("agent-dir copy is used verbatim when no project layer exists", () => {
-		writeAgent(`models:
-  - id: switchback/auto
-    name: agent-dir copy
-    fallbacks: ["ollama-cloud/glm-5.3-flash"]
-`);
-		const { config, source } = loadConfig();
-		expect(config.models[0]?.name).toBe("agent-dir copy");
-		expect(source).toBe(resolve(join(tmpDir, "agent", "switchback.yaml")));
-	});
-
-	it("a broken project layer throws even when the global layer is valid", () => {
-		writeProject("models: definitely: not: a: list\n");
-		writeAgent(`models:
-  - id: switchback/auto
-    name: agent-dir copy
-    fallbacks: ["ollama-cloud/glm-5.3-flash"]
-`);
+	it("a broken config file throws rather than being skipped", () => {
+		writeConfig("models: definitely: not: a: list\n");
 		expect(() => loadConfig()).toThrow(ConfigError);
 	});
 });
 
 describe("loadConfig - yaml-only lookup (no JSON user config)", () => {
-	it("does not consider switchback.json in the candidate list", () => {
-		// Ship a switchback.json next to the project-local yaml slot. The loader
-		// should NOT pick it up - user config is YAML only.
-		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
+	it("does not consider a switchback.json sibling", () => {
+		// User config is YAML only; a .json file next to it is not a candidate.
+		mkdirSync(tmpDir, { recursive: true });
 		writeFileSync(
-			join(tmpDir, ".pi", "switchback.json"),
+			join(tmpDir, "switchback.json"),
 			JSON.stringify({
 				models: [{ id: "switchback/auto", name: "should be ignored", fallbacks: ["zai/glm-5.3"] }],
 			}),
@@ -166,8 +147,7 @@ describe("loadConfig - yaml-only lookup (no JSON user config)", () => {
 
 describe("loadConfig - bare ids and decision-model addresses", () => {
 	const writeWith = (modelsYaml: string, decisionModelsYaml = ""): void => {
-		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-		writeFileSync(join(tmpDir, ".pi", "switchback.yaml"), `models:\n  ${modelsYaml}\n${decisionModelsYaml}`);
+		writeConfig(`models:\n  ${modelsYaml}\n${decisionModelsYaml}`);
 	};
 
 	it("normalises a bare model id (auto → switchback/auto)", () => {
@@ -235,8 +215,7 @@ describe("loadConfig - bare ids and decision-model addresses", () => {
 
 describe("loadConfig - debug flag", () => {
 	const writeWith = (yaml: string): void => {
-		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-		writeFileSync(join(tmpDir, ".pi", "switchback.yaml"), yaml);
+		writeConfig(yaml);
 	};
 
 	it("parses a top-level debug flag", () => {
@@ -264,16 +243,14 @@ describe("loadConfig - debug flag", () => {
 });
 
 describe("loadConfig - decision model connection details", () => {
-	const writeConfig = (entryLines: string, address = "ollama/tev1:0.8b"): void => {
-		mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-		writeFileSync(
-			join(tmpDir, ".pi", "switchback.yaml"),
+	const writeDecisionConfig = (entryLines: string, address = "ollama/tev1:0.8b"): void => {
+		writeConfig(
 			`models:\n  - id: switchback/auto\n    name: Auto (Switchback)\n    fallbacks: ["zai/glm-5.3"]\n    decisionModel: ${address}\ndecisionModels:\n  ${address}:\n${entryLines}`,
 		);
 	};
 
 	it("parses a direct endpoint (baseUrl + apiKey)", () => {
-		writeConfig("    baseUrl: http://localhost:11434/v1\n    apiKey: ollama\n");
+		writeDecisionConfig("    baseUrl: http://localhost:11434/v1\n    apiKey: ollama\n");
 		const { config } = loadConfig();
 		expect(config.models[0]?.decisionModel).toEqual({
 			provider: "ollama",
@@ -284,7 +261,7 @@ describe("loadConfig - decision model connection details", () => {
 	});
 
 	it("accepts an entry with no connection details (catalog resolution) and warns about it", () => {
-		writeConfig("    {}\n", "typesafe/jev-latest");
+		writeDecisionConfig("    {}\n", "typesafe/jev-latest");
 		const { config, warnings } = loadConfig();
 		expect(config.models[0]?.decisionModel).toEqual({ provider: "typesafe", id: "jev-latest" });
 		expect(warnings.join("\n")).toMatch(/has no connection details/);
@@ -294,30 +271,30 @@ describe("loadConfig - decision model connection details", () => {
 		// The loader names no providers: whether an id collides with one pi already
 		// serves is registry knowledge, and the wizard refuses that case at the
 		// point where the registry is available (see classifier-catalog.ts).
-		writeConfig("    baseUrl: http://localhost:11434/v1\n    apiKey: local\n", "anything/tev1:0.8b");
+		writeDecisionConfig("    baseUrl: http://localhost:11434/v1\n    apiKey: local\n", "anything/tev1:0.8b");
 		const decisionModel = findModelConfig(loadConfig().config, "switchback/auto")?.decisionModel;
 		expect(decisionModel?.provider).toBe("anything");
 		expect(decisionModel?.baseUrl).toBe("http://localhost:11434/v1");
 	});
 
 	it("warns about the retired api field instead of accepting it", () => {
-		writeConfig("    baseUrl: http://localhost:1/v1\n    apiKey: local\n    api: openai-completions\n");
+		writeDecisionConfig("    baseUrl: http://localhost:1/v1\n    apiKey: local\n    api: openai-completions\n");
 		const { warnings } = loadConfig();
 		expect(warnings.join("\n")).toMatch(/api is no longer supported/);
 	});
 
 	it("rejects a direct endpoint without an apiKey", () => {
-		writeConfig("    baseUrl: http://localhost:11434/v1\n");
+		writeDecisionConfig("    baseUrl: http://localhost:11434/v1\n");
 		expect(() => loadConfig()).toThrow(/apiKey is required with baseUrl/);
 	});
 
 	it("rejects apiKey without baseUrl", () => {
-		writeConfig("    apiKey: secret\n");
+		writeDecisionConfig("    apiKey: secret\n");
 		expect(() => loadConfig()).toThrow(/apiKey requires/);
 	});
 
 	it("rejects a non-http(s) baseUrl", () => {
-		writeConfig("    baseUrl: ftp://localhost/v1\n    apiKey: local\n");
+		writeDecisionConfig("    baseUrl: ftp://localhost/v1\n    apiKey: local\n");
 		expect(() => loadConfig()).toThrow(/must be http\(s\)/);
 	});
 });

@@ -18,8 +18,6 @@
  * Grammar (`/switchback-config <verb> [args]`):
  *
  *   (none) | show                 the effective config, one line per model
- *   layers                        which layer file is edited, and by what rule
- *   layer <global|project>        pin the layer this session edits
  *
  *   add <id> <name> <fallbacks>   add a virtual model (fallbacks comma-separated)
  *   remove <id>                   remove a virtual model
@@ -35,11 +33,11 @@
  *   decision-model <id> <addr|off> classify this chain's failures with <addr>
  *
  *   debug <on|off>                the shared `debug:` flag
- *   reset                         delete the edited layer file
+ *   reset                         delete the config file
  *
  * Every mutation goes through `switchback-core/config-editor.ts` and is saved
  * immediately, so the file on disk always holds the last good config: a save
- * failure reports the loader's own message and reloads the layer from disk,
+ * failure reports the loader's own message and reloads the file from disk,
  * reverting exactly the failed action. That is the same failure model as the pi
  * dialogue, reached by a different road.
  *
@@ -52,15 +50,14 @@ import { existsSync, rmSync } from "node:fs";
 import {
 	addFallback,
 	addVirtualModel,
-	defaultLayer,
-	layerPath,
-	loadLayer,
+	configFilePath,
+	loadConfigFile,
 	moveFallback,
-	readLayerConfig,
+	readConfigFile,
 	removeFallback,
 	removeVirtualModel,
 	renameVirtualModel,
-	saveLayer,
+	saveConfigFile,
 	setDebug,
 	setDecisionModel,
 	setFallbacks,
@@ -69,8 +66,7 @@ import {
 	validateFileConfig,
 	IDLE_RESET_OPTIONS,
 	SWITCHBACK_PROVIDER,
-	type ConfigLayer,
-	type LoadedLayer,
+	type LoadedConfig,
 } from "switchback-core";
 import type { IdleResetConfig, ModelId, SwitchbackFileConfig } from "switchback-core";
 
@@ -85,29 +81,9 @@ export interface ConfigCommandResult {
 	readonly text: string;
 }
 
-/** Per-session layer choice, keyed by session id; `defaultLayer()` seeds it. */
-const sessionLayers = new Map<string, ConfigLayer>();
-
-/** The layer this session edits (the `layer` verb pins it). */
-export function layerForSession(sessionKey: string): ConfigLayer {
-	return sessionLayers.get(sessionKey) ?? defaultLayer();
-}
-
-/** Pin the layer a session edits. */
-export function setLayerForSession(sessionKey: string, layer: ConfigLayer): void {
-	sessionLayers.set(sessionKey, layer);
-}
-
-/** Drop per-session state (plugin dispose, and tests). */
-export function clearConfigSessions(): void {
-	sessionLayers.clear();
-}
-
 /** Verbs the grammar accepts, in help order. */
 export const CONFIG_VERBS = [
 	"show",
-	"layers",
-	"layer",
 	"add",
 	"remove",
 	"rename",
@@ -155,7 +131,7 @@ export function parseConfigCommand(input: string | undefined): ParsedConfigComma
  *
  * Errors are reported, never thrown: an invalid fallback address, an out-of-
  * range chain position and the loader's own validation message all arrive as
- * `ok: false` with the loader's text, and the layer is reloaded from disk so
+ * `ok: false` with the loader's text, and the file is reloaded from disk so
  * the in-memory document matches the file that a failed save left untouched.
  */
 export async function runConfigCommand(
@@ -170,28 +146,26 @@ export async function runConfigCommand(
 }
 
 /** The synchronous core of a command; separated so tests read the result directly. */
-export function execute(sessionKey: string, parsed: ParsedConfigCommand): ConfigCommandResult {
+export function execute(_sessionKey: string, parsed: ParsedConfigCommand): ConfigCommandResult {
 	const verb = parsed.verb;
-	if (verb === undefined || verb === "show") return showConfig(sessionKey, parsed.args);
-	if (verb === "layers") return describeLayers(sessionKey);
-	if (verb === "layer") return pinLayer(sessionKey, parsed.args);
-	if (verb === "reset") return resetLayer(sessionKey);
+	if (verb === undefined || verb === "show") return showConfig(parsed.args);
+	if (verb === "reset") return resetConfigFile();
 	try {
-		return mutate(sessionKey, verb, parsed.args);
+		return mutate(verb, parsed.args);
 	} catch (error) {
 		return { ok: false, text: errorText(error) };
 	}
 }
 
-/** Every mutating verb: open the layer, edit, save, and describe what changed. */
-function mutate(sessionKey: string, verb: ConfigVerb, args: readonly string[]): ConfigCommandResult {
-	const opened = openLayer(sessionKey);
+/** Every mutating verb: open the config file, edit, save, and describe what changed. */
+function mutate(verb: ConfigVerb, args: readonly string[]): ConfigCommandResult {
+	const opened = openConfigFile();
 	if ("problem" in opened) return { ok: false, text: opened.problem };
 	const loaded = opened.loaded;
 	const before = safeConfig(loaded);
 	const outcome = applyEdit(loaded, verb, args);
 	if (outcome !== undefined) return { ok: false, text: outcome };
-	saveLayer(loaded);
+	saveConfigFile(loaded);
 	const after = safeConfig(loaded);
 	return { ok: true, text: `${describeChange(verb, args, before, after)}\n${loaded.path}` };
 }
@@ -200,7 +174,7 @@ function mutate(sessionKey: string, verb: ConfigVerb, args: readonly string[]): 
  * Dispatch one edit onto the loaded document. Returns a problem string (and
  * leaves the document untouched) when the arguments do not fit the verb.
  */
-function applyEdit(loaded: LoadedLayer, verb: ConfigVerb, args: readonly string[]): string | undefined {
+function applyEdit(loaded: LoadedConfig, verb: ConfigVerb, args: readonly string[]): string | undefined {
 	const [first, ...rest] = args;
 	switch (verb) {
 		case "add": {
@@ -228,7 +202,7 @@ function applyEdit(loaded: LoadedLayer, verb: ConfigVerb, args: readonly string[
 			// The loader requires at least one model, so removing the last one is
 			// refused here (with an actionable message) rather than at save time.
 			if (currentModelCount(loaded) <= 1) {
-				return "switchback: the last virtual model cannot be removed - add another one first, or /switchback-config reset to remove the layer";
+				return "switchback: the last virtual model cannot be removed - add another one first, or /switchback-config reset to remove the config file";
 			}
 			removeVirtualModel(loaded, first);
 			return undefined;
@@ -311,36 +285,39 @@ function applyEdit(loaded: LoadedLayer, verb: ConfigVerb, args: readonly string[
 	}
 }
 
-/** The config report: one block per virtual model, plus the effective layer paths. */
-function showConfig(sessionKey: string, args: readonly string[]): ConfigCommandResult {
+/** The config report: one block per virtual model, from the single config file. */
+function showConfig(args: readonly string[]): ConfigCommandResult {
 	const filter = args[0]?.toLowerCase();
-	const lines: string[] = [];
-	for (const layer of ["project", "global"] as const) {
-		const path = layerPath(layer);
-		if (!existsSync(path)) continue;
-		let config: SwitchbackFileConfig;
-		try {
-			config = readLayerConfig(loadLayer(layer));
-		} catch (error) {
-			lines.push(`${layer}: ${path}\n  unreadable - ${errorText(error)}`);
-			continue;
-		}
-		const models = config.models.filter((model) => filter === undefined || model.id.toLowerCase().includes(filter));
-		if (models.length === 0) continue;
-		lines.push(`${layer}: ${path}`);
-		for (const model of models) lines.push(...describeModel(model));
-		if (config.debug === true) lines.push("  debug: on");
-	}
-	const layer = layerForSession(sessionKey);
-	if (lines.length === 0) {
+	const path = configFilePath();
+	if (!existsSync(path)) {
 		return {
 			ok: true,
 			text:
 				filter === undefined
-					? `switchback: no configuration yet\nedit layer: ${layerPath(layer)}\nadd one with /switchback-config add <id> <name> <fallbacks>`
+					? `switchback: no configuration yet\nconfig file: ${path}\nadd one with /switchback-config add <id> <name> <fallbacks>`
 					: `switchback: no configured model matches "${filter}"`,
 		};
 	}
+	const lines: string[] = [];
+	let config: SwitchbackFileConfig;
+	try {
+		config = readConfigFile(loadConfigFile());
+	} catch (error) {
+		return { ok: false, text: `${path}\n  unreadable - ${errorText(error)}` };
+	}
+	const models = config.models.filter((model) => filter === undefined || model.id.toLowerCase().includes(filter));
+	if (models.length === 0) {
+		return {
+			ok: true,
+			text:
+				filter === undefined
+					? `switchback: the config has no models\nconfig file: ${path}\nadd one with /switchback-config add <id> <name> <fallbacks>`
+					: `switchback: no configured model matches "${filter}"`,
+		};
+	}
+	lines.push(path);
+	for (const model of models) lines.push(...describeModel(model));
+	if (config.debug === true) lines.push("  debug: on");
 	return { ok: true, text: lines.join("\n") };
 }
 
@@ -355,43 +332,12 @@ function describeModel(model: SwitchbackFileConfig["models"][number]): string[] 
 	return rows;
 }
 
-/** Which layer this session edits, and what is in each layer file. */
-function describeLayers(sessionKey: string): ConfigCommandResult {
-	const current = layerForSession(sessionKey);
-	const rows = (["global", "project"] as const).map((layer) => {
-		const path = layerPath(layer);
-		const marker = layer === current ? " (editing)" : "";
-		if (!existsSync(path)) return `  ${layer}${marker}: ${path}\n    not present`;
-		try {
-			const models = readLayerConfig(loadLayer(layer)).models.length;
-			return `  ${layer}${marker}: ${path}\n    ${models} model${models === 1 ? "" : "s"}`;
-		} catch (error) {
-			return `  ${layer}${marker}: ${path}\n    unreadable - ${errorText(error)}`;
-		}
-	});
-	return {
-		ok: true,
-		text: `switchback: config layers (project overrides global per model id)\n${rows.join("\n")}\nchange with /switchback-config layer <global|project>`,
-	};
-}
-
-/** Pin the edited layer for this session. */
-function pinLayer(sessionKey: string, args: readonly string[]): ConfigCommandResult {
-	const target = (args[0] ?? "").toLowerCase();
-	if (target !== "global" && target !== "project") {
-		return { ok: false, text: usage("layer <global|project>") };
-	}
-	setLayerForSession(sessionKey, target);
-	return { ok: true, text: `switchback: editing the ${target} layer (${layerPath(target)})` };
-}
-
-/** Delete the edited layer file, after confirming it parses (so we never delete a file we misread). */
-function resetLayer(sessionKey: string): ConfigCommandResult {
-	const layer = layerForSession(sessionKey);
-	const path = layerPath(layer);
-	if (!existsSync(path)) return { ok: true, text: `switchback: the ${layer} layer does not exist (${path})` };
+/** Delete the config file, after confirming it parses (so we never delete a file we misread). */
+function resetConfigFile(): ConfigCommandResult {
+	const path = configFilePath();
+	if (!existsSync(path)) return { ok: true, text: `switchback: there is no config file yet (${path})` };
 	try {
-		readLayerConfig(loadLayer(layer));
+		readConfigFile(loadConfigFile());
 	} catch (error) {
 		return {
 			ok: false,
@@ -403,23 +349,22 @@ function resetLayer(sessionKey: string): ConfigCommandResult {
 	} catch (error) {
 		return { ok: false, text: `switchback: cannot remove ${path} - ${errorText(error)}` };
 	}
-	return { ok: true, text: `switchback: removed the ${layer} layer (${path})` };
+	return { ok: true, text: `switchback: removed the config file (${path})` };
 }
 
-/** Open the layer this session edits, mapping a load failure to a report. */
-function openLayer(sessionKey: string): { loaded: LoadedLayer } | { problem: string } {
-	const layer = layerForSession(sessionKey);
+/** Open the config file, mapping a load failure to a report. */
+function openConfigFile(): { loaded: LoadedConfig } | { problem: string } {
 	try {
-		return { loaded: loadLayer(layer) };
+		return { loaded: loadConfigFile() };
 	} catch (error) {
 		return {
-			problem: `switchback: cannot edit the ${layer} layer (${layerPath(layer)}) - ${errorText(error)}`,
+			problem: `switchback: cannot edit ${configFilePath()} - ${errorText(error)}`,
 		};
 	}
 }
 
-/** The layer's config, or undefined when the document does not validate (an edit that is being fixed). */
-function safeConfig(loaded: LoadedLayer): SwitchbackFileConfig | undefined {
+/** The file's config, or undefined when the document does not validate (an edit that is being fixed). */
+function safeConfig(loaded: LoadedConfig): SwitchbackFileConfig | undefined {
 	try {
 		return validateFileConfig(loaded.doc.toJSON(), loaded.path).config;
 	} catch {
@@ -427,8 +372,8 @@ function safeConfig(loaded: LoadedLayer): SwitchbackFileConfig | undefined {
 	}
 }
 
-/** Whether the layer's document names this virtual model. */
-function hasVirtualModel(loaded: LoadedLayer, id: string): boolean {
+/** Whether the document names this virtual model. */
+function hasVirtualModel(loaded: LoadedConfig, id: string): boolean {
 	const models = loaded.doc.get("models");
 	if (models === undefined || models === null) return false;
 	const items = (models as { items?: readonly unknown[] }).items;
@@ -446,7 +391,7 @@ function hasVirtualModel(loaded: LoadedLayer, id: string): boolean {
  * node list rather than the validated config, because a mid-edit document may
  * not validate yet and the count is only used for the "last model" guard.
  */
-function currentModelCount(loaded: LoadedLayer): number {
+function currentModelCount(loaded: LoadedConfig): number {
 	const models = loaded.doc.get("models");
 	if (models === undefined || models === null) return 0;
 	const items = (models as { items?: readonly unknown[] }).items;

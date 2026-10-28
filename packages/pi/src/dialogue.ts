@@ -1,18 +1,18 @@
 /**
- * Interactive `/switchback-config` dialogue: an edit loop over one
- * switchback.yaml layer, built on pi's built-in dialogs (`ctx.ui.select`,
- * `confirm`, `input`, `notify`).
+ * Interactive `/switchback-config` dialogue: an edit loop over switchback.yaml,
+ * built on pi's built-in dialogs (`ctx.ui.select`, `confirm`, `input`,
+ * `notify`).
  *
- * This module is the shell: it picks the layer, owns the main menu, the
- * per-model menu and the fallback editor, and hands the classifier work to
- * `src/dialogue-classifier.ts`. Session state, the screen primitives and
- * every prompt live in `src/dialogue-ui.ts`.
+ * This module is the shell: it owns the main menu, the per-model menu and the
+ * fallback editor, and hands the classifier work to
+ * `src/dialogue-classifier.ts`. Session state, the screen primitives and every
+ * prompt live in `src/dialogue-ui.ts`.
  *
  * Design: every mutation goes through `packages/core/src/config-editor.ts` and is saved
- * immediately (`saveLayer`). The file on disk therefore always holds the
+ * immediately (`saveConfigFile`). The file on disk therefore always holds the
  * last good config, which makes failure handling trivial: when a save
  * throws the loader's own ConfigError, the dialogue reports it and reloads
- * the layer from disk - exactly the failed action is reverted, nothing else.
+ * the file from disk - exactly the failed action is reverted, nothing else.
  * No undo bookkeeping, and the document in memory never drifts from a valid
  * state for longer than one action.
  *
@@ -27,27 +27,22 @@
  * shape, tests can mock it without a TUI, and this module keeps a bare
  * import surface (install-safe: no host-package imports at all).
  *
- * Screen titles always carry the file path being edited, so it is always
- * obvious which layer - project or global - a change lands in.
+ * One file, no layer choice: `configFilePath()` is the config every switchback
+ * host reads. Screen titles carry its path, so it is always obvious what is
+ * being edited.
  */
 
 import {
 	addFallback,
 	addVirtualModel,
-	defaultLayer,
-	globalConfigPath,
-	layerExists,
-	loadLayer,
+	loadConfigFile,
 	moveFallback,
-	projectConfigPath,
-	readLayerConfig,
 	removeFallback,
 	removeVirtualModel,
 	renameVirtualModel,
 	setDebug,
 	setVirtualModelName,
-	type ConfigLayer,
-	type LoadedLayer,
+	type LoadedConfig,
 } from "switchback-core/config-editor.ts";
 import { createSecretStore, type SecretStore } from "./secrets.ts";
 import {
@@ -65,59 +60,8 @@ import { decisionModelPicker, decisionModelsMenu } from "./dialogue-classifier.t
 import type { SwitchbackConfig, SwitchbackFileConfig } from "switchback-core/types.ts";
 
 /**
- * Label for one layer in the chooser: which file, and what is in it right now.
- * Paths live in the screen title, so a label stays stable and scriptable.
- */
-export function layerOptionLabel(layer: ConfigLayer): string {
-	const name = layer === "global" ? "Global" : "Project";
-	return `${name} - ${describeLayerState(layer)}`;
-}
-
-/** "not present", "N model(s)" or "unreadable (invalid config)" for a layer. */
-function describeLayerState(layer: ConfigLayer): string {
-	if (!layerExists(layer)) return "not present";
-	try {
-		const models = readLayerConfig(loadLayer(layer)).models.length;
-		return `${models} model${models === 1 ? "" : "s"}`;
-	} catch {
-		return "unreadable (invalid config)";
-	}
-}
-
-/**
- * Ask which layer to edit.
- *
- * This is the dialogue's first prompt, and the target of "Switch layer...",
- * because the layer changes what every later action means: project entries
- * override global entries with the same model id, so writing to the wrong file
- * either shadows the other config or fails to. The chooser shows both files,
- * what each currently holds, and which one is being edited; the preferred layer
- * is offered first (Enter keeps it). Esc cancels the dialogue.
- */
-async function selectLayer(ctx: DialogueContext, current: ConfigLayer | undefined): Promise<ConfigLayer | undefined> {
-	const preferred = current ?? defaultLayer();
-	const labels: Record<ConfigLayer, string> = {
-		global: layerOptionLabel("global"),
-		project: layerOptionLabel("project"),
-	};
-	const order: ConfigLayer[] = preferred === "global" ? ["global", "project"] : ["project", "global"];
-	const title = [
-		current === undefined ? "which config layer do you want to edit?" : `switch layer (currently: ${current})`,
-		`  global:  ${globalConfigPath()}`,
-		`  project: ${projectConfigPath()}`,
-		"Project entries override global entries with the same model id.",
-	].join("\n");
-	const choice = await ctx.ui.select(
-		title,
-		order.map((layer) => labels[layer]),
-	);
-	if (choice === undefined) return undefined;
-	return choice === labels["global"] ? "global" : "project";
-}
-
-/**
  * Run the dialogue. Returns when the user is done; every completed action has
- * already been saved to the layer file by then.
+ * already been saved to the config file by then.
  */
 export async function runDialogue(ctx: DialogueContext, store?: SecretStore): Promise<void> {
 	if (!ctx.hasUI) {
@@ -125,27 +69,18 @@ export async function runDialogue(ctx: DialogueContext, store?: SecretStore): Pr
 		return;
 	}
 	const secrets = store ?? createSecretStore();
-	const chosen = await selectLayer(ctx, undefined);
-	if (chosen === undefined) return;
-	let layer: ConfigLayer = chosen;
-	for (;;) {
-		const loaded = openLayer(ctx, layer);
-		if (loaded === undefined) return;
-		const session: DialogueSession = { loaded, secrets };
-		const outcome = await mainMenu(ctx, session);
-		if (outcome === "done") return;
-		const next = await selectLayer(ctx, loaded.layer);
-		if (next === undefined) return;
-		layer = next;
-	}
+	const loaded = openConfig(ctx);
+	if (loaded === undefined) return;
+	const session: DialogueSession = { loaded, secrets };
+	await mainMenu(ctx, session);
 }
 
-/** Load a layer for editing; a read or YAML failure is reported and ends the dialogue. */
-function openLayer(ctx: DialogueContext, layer: ConfigLayer): LoadedLayer | undefined {
+/** Load the config for editing; a read or YAML failure is reported and ends the dialogue. */
+function openConfig(ctx: DialogueContext): LoadedConfig | undefined {
 	try {
-		return loadLayer(layer);
+		return loadConfigFile();
 	} catch (error) {
-		ctx.ui.notify(`cannot open ${layer} layer: ${errorMessage(error)}`, "error");
+		ctx.ui.notify(`cannot open the switchback config: ${errorMessage(error)}`, "error");
 		return undefined;
 	}
 }
@@ -164,36 +99,30 @@ async function chooseFallback(
 	return promptRequired(ctx, title, "provider/id");
 }
 
-type MainOutcome = "done" | "switch";
-
-async function mainMenu(ctx: DialogueContext, session: DialogueSession): Promise<MainOutcome> {
+async function mainMenu(ctx: DialogueContext, session: DialogueSession): Promise<void> {
 	for (;;) {
-		// A layer with no content yet (first save) has no valid config to read;
-		// offer the reduced menu until the first virtual model exists.
+		// A fresh file (first save) has no valid config to read; offer the reduced
+		// menu until the first virtual model exists.
 		if (session.loaded.doc.contents === undefined || session.loaded.doc.contents === null) {
-			const choice = await ctx.ui.select(screenTitle(session.loaded, "no config in this layer yet"), [
+			const choice = await ctx.ui.select(screenTitle(session.loaded, "no config in this file yet"), [
 				"Add virtual model...",
-				"Switch layer...",
 				"Done",
 			]);
-			if (choice === undefined || choice === "Done") return "done";
-			if (choice.startsWith("Switch layer")) return "switch";
+			if (choice === undefined || choice === "Done") return;
 			await addVirtualModelWizard(ctx, session);
 			continue;
 		}
 		const config = readConfigOrReport(ctx, session.loaded);
-		if (config === undefined) return "done";
+		if (config === undefined) return;
 		const options: string[] = config.models.map((m) => `${m.id} - ${m.name}`);
 		const addOption = "Add virtual model...";
 		const debugOption = `Toggle debug (currently ${config.debug === true ? "on" : "off"})`;
 		const dmOption = `Decision models (${Object.keys(config.decisionModels ?? {}).length})...`;
-		const switchOption = "Switch layer...";
 		const doneOption = "Done";
-		options.push(addOption, debugOption, dmOption, switchOption, doneOption);
+		options.push(addOption, debugOption, dmOption, doneOption);
 
 		const choice = await ctx.ui.select(screenTitle(session.loaded, "switchback configuration"), options);
-		if (choice === undefined || choice === doneOption) return "done";
-		if (choice === switchOption) return "switch";
+		if (choice === undefined || choice === doneOption) return;
 		if (choice === debugOption) {
 			await toggleDebug(ctx, session, config);
 			continue;

@@ -5,10 +5,10 @@
  * (`src/dialogue.ts`) and the decision-model wizard
  * (`src/dialogue-classifier.ts`) - and none of it belongs to either:
  *
- *  - the session (the loaded layer plus the secret store) and the structural
+ *  - the session (the loaded config file plus the secret store) and the structural
  *    UI types,
  *  - the primitives every screen needs: a screen title naming the file being
- *    edited, a validated read of that layer, a save that either succeeds or
+ *    edited, a validated read of that file, a save that either succeeds or
  *    reverts exactly the failed action, and a model lookup,
  *  - every prompt (required, name-last, optional) in one place, so the wording
  *    of "a value is required" or "empty clears, Esc keeps" is defined once,
@@ -21,7 +21,7 @@
  * See `src/dialogue.ts` for the design of the dialogue as a whole.
  */
 
-import { loadLayer, readLayerConfig, saveLayer, type LoadedLayer } from "switchback-core/config-editor.ts";
+import { loadConfigFile, readConfigFile, saveConfigFile, type LoadedConfig } from "switchback-core/config-editor.ts";
 import type { ClassifierProviderOption } from "switchback-core/classifier-catalog.ts";
 import type { ProbeResult } from "switchback-core/classifier-probe.ts";
 import type { SecretStore } from "./secrets.ts";
@@ -65,7 +65,7 @@ export interface DialogueContext {
 }
 
 export interface DialogueSession {
-	loaded: LoadedLayer;
+	loaded: LoadedConfig;
 	secrets: SecretStore;
 }
 /** Describe a model's decision model for menus: its address, or none. */
@@ -77,18 +77,18 @@ export function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-export function screenTitle(loaded: LoadedLayer, body: string): string {
+export function screenTitle(loaded: LoadedConfig, body: string): string {
 	const fresh = loaded.existed ? "" : " (new file)";
-	return `[${loaded.layer} layer: ${loaded.path}${fresh}]\n${body}`;
+	return `[${loaded.path}${fresh}]\n${body}`;
 }
 /**
  * The validated config snapshot for menus; a file that fails the loader's
  * rules is reported (with the fix hint) and ends the dialogue - the editor
  * only round-trips config the loader itself accepts.
  */
-export function readConfigOrReport(ctx: DialogueContext, loaded: LoadedLayer): SwitchbackFileConfig | undefined {
+export function readConfigOrReport(ctx: DialogueContext, loaded: LoadedConfig): SwitchbackFileConfig | undefined {
 	try {
-		return readLayerConfig(loaded);
+		return readConfigFile(loaded);
 	} catch (error) {
 		ctx.ui.notify(
 			`${errorMessage(error)}\nThe editor only opens valid config; fix switchback.yaml by hand and retry.`,
@@ -100,12 +100,12 @@ export function readConfigOrReport(ctx: DialogueContext, loaded: LoadedLayer): S
 
 /**
  * Save and report success; on a ConfigError, report the loader's message and
- * reload the layer from disk so exactly the failed action is reverted (the
+ * reload the file from disk so exactly the failed action is reverted (the
  * file on disk always holds the last good config). Returns true when saved.
  */
 export async function saveOrRevert(ctx: DialogueContext, session: DialogueSession): Promise<boolean> {
 	try {
-		saveLayer(session.loaded);
+		saveConfigFile(session.loaded);
 		return true;
 	} catch (error) {
 		ctx.ui.notify(
@@ -113,22 +113,22 @@ export async function saveOrRevert(ctx: DialogueContext, session: DialogueSessio
 			"error",
 		);
 		try {
-			session.loaded = loadLayer(session.loaded.layer);
+			session.loaded = loadConfigFile();
 		} catch (reloadError) {
-			ctx.ui.notify(`cannot reload layer after failed save: ${errorMessage(reloadError)}`, "error");
+			ctx.ui.notify(`cannot reload the config after a failed save: ${errorMessage(reloadError)}`, "error");
 		}
 		return false;
 	}
 }
 
 /**
- * The validated config snapshot, or undefined when the layer has no content
+ * The validated config snapshot, or undefined when the file has no content
  * yet (fresh file) - callers treat undefined as "nothing to clash with"; the
  * save gate still validates everything that ends up in the file.
  */
-export function tryReadConfig(loaded: LoadedLayer): SwitchbackFileConfig | undefined {
+export function tryReadConfig(loaded: LoadedConfig): SwitchbackFileConfig | undefined {
 	try {
-		return readLayerConfig(loaded);
+		return readConfigFile(loaded);
 	} catch {
 		return undefined;
 	}
@@ -155,7 +155,7 @@ export async function promptRequired(
  */
 export async function promptAddressLast(
 	ctx: DialogueContext,
-	loaded: LoadedLayer,
+	loaded: LoadedConfig,
 	suggestedAddress: string,
 	knownAddresses: readonly string[],
 ): Promise<string | undefined> {

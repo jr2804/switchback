@@ -55,15 +55,15 @@ authoritative; see [Versioning](versioning.md).
 
 ## Test layout
 
-**424** unit/integration tests across **27** files, plus **11 opt-in**
+**417** unit/integration tests across **27** files, plus **11 opt-in**
 live cases (10 live-classifier, 1 live DPAPI store) that skip unless
 their environment gates are set:
 
 | File | Tests | Covers |
 |---|---|---|
 | `tests/router.test.ts` | 100 | routing, blind cycle, classifier-mocked verdicts, session stickiness, pin override, idle reset, context-window fit and the classifier's candidate choice, forward failover walk, catalog validity, exhaustion, thinking-level resolution, state, buildRoute, manual disables (walk skip, session stickiness, pin, exhaustion), and the unretried-failure fallback (`observeUnretriedFailure` blocks and the next turn walks forward) |
-| `tests/config.test.ts` | 28 | `DEFAULT_CONFIG`, `findModelConfig`, layer aggregation, YAML-only, classifier-field validation, orphan `decisionModels` rejection, reserved-provider rejection, debug flag |
-| `tests/dialogue.test.ts` | 35 | config editor: comment-preserving round-trip, layers, decision models, secret references; dialogue flows incl. the layer chooser, the searchable picker and the classifier test offer (scripted UI, hermetic) |
+| `tests/config.test.ts` | 28 | `DEFAULT_CONFIG`, `findModelConfig`, the one-file contract (pi's agent dir and `<cwd>/.pi` are ignored), YAML-only, classifier-field validation, orphan `decisionModels` rejection, reserved-provider rejection, debug flag |
+| `tests/dialogue.test.ts` | 30 | config editor: comment-preserving round-trip, the one-file contract, decision models, secret references; dialogue flows incl. the main menu, the searchable picker and the classifier test offer (scripted UI, hermetic) |
 | `tests/secrets.test.ts` | 23 (1 opt-in) | encrypted DPAPI store: round-trip, corruption quarantine, version refuse; live DPAPI gated on `SWITCHBACK_SECRETS_LIVE` |
 | `tests/crashes.test.ts` | 25 | crash store, dedup, Tier 2b cache, annotation, corrupt-file quarantine |
 | `tests/classify-inventory.test.ts` | 15 | corpus-preservation in `switchback.simulate.json` |
@@ -77,11 +77,11 @@ their environment gates are set:
 | `tests/state-migration.test.ts` | 5 | legacy `<cwd>/.pi/switchback.json` → new path migration |
 | `tests/systemone.test.ts` | 5 | switchback's own System One transport (hermetic; injected fetch) |
 | `tests/commands.test.ts` | 4 | the registered command surface and its snapshot |
-| `tests/opencode-adapter.test.ts` | 15 | the OpenCode adapter end to end (hermetic fake harness): provider publication, quota block + in-request failover, pre-blocked exhaustion, out-of-chain silence, no-classifier blind cycle, empty-message short-circuit, `secret:` resolution, the status/unblock/pin commands, and the manual disable list |
-| `tests/opencode-config-command.test.ts` | 38 | the `/switchback-config` grammar: every verb against a real temp layer file, layer pinning and reset, the last-model guard, usage and loader-error text, and the RPC `state`/`config` round trip |
+| `tests/opencode-adapter.test.ts` | 17 | the OpenCode adapter end to end (hermetic fake harness): provider publication, quota block + in-request failover, pre-blocked exhaustion, out-of-chain silence, no-classifier blind cycle, empty-message short-circuit, `secret:` resolution, the one-file config contract (pi's agent dir never read), the status/unblock/pin commands, and the manual disable list |
+| `tests/opencode-config-command.test.ts` | 34 | the `/switchback-config` grammar: every verb against a real temp config file, reset, the last-model guard, usage and loader-error text, and the RPC `state`/`config` round trip |
 | `tests/opencode-notices.test.ts` | 15 | the notice channel: transcript fallback with nothing attached, sink refcounting, a throwing sink, the RPC definition staying JSON Schema, and the `unknown`-wire readers dropping malformed payloads |
 | `tests/opencode-tui.test.ts` | 9 | the TUI half: attach/retry/detach lifecycle, notice → toast (with and without `sessionID`), the slash command, and an unreachable server |
-| `tests/opencode-tui-guide.test.ts` | 15 | the guided menu: every screen dispatching the layer-1 verb a typed command would, the scripted dialog flow, and cancel paths |
+| `tests/opencode-tui-guide.test.ts` | 15 | the guided menu: every screen dispatching the command verb a typed command would, the scripted dialog flow, and cancel paths |
 | `tests/opencode-gui.test.ts` | 12 | the GUI half's host-free logic: the app's dialogs adapted to the guide's contract, notice severity → toast variant, attach-before-subscribe ordering, an unreachable server, and a rejected edit reported without losing the menu |
 | `tests/disabled.test.ts` | 7 | the manual disable store (`disabled.json`): missing file, idempotent disable with a stable stamp, no expiry, enable, clear-all count, hand-edited non-number rejection, atomic write |
 | `tests/thinking.test.ts` | 10 | reasoning-level categories, availability, and classifier resolution (hermetic) |
@@ -181,7 +181,7 @@ Before considering any task done:
 
 ```bash
 npx tsc --noEmit    # strict + noUncheckedIndexedAccess + exactOptionalPropertyTypes
-npx vitest run      # 412 + 11 opt-in
+npx vitest run      # 417 + 11 opt-in
 ```
 
 Both must be clean. Do not report a milestone until both pass.

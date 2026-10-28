@@ -21,7 +21,7 @@ change the prompt.
 - **[Configuration](configuration.md)** — `switchback.yaml`, lookup order,
   greyed entries, `DEFAULT_CONFIG`, the `decisionModel:` classifier config.
 - **[Interactive configuration](configuration-dialogue.md)** — the
-  `/switchback-config` wizard: layers, fallbacks, decision models, the
+  `/switchback-config` wizard: fallbacks, decision models, the
   live model browse and the capability test.
 - **[Classifier](classifier.md)** — live classifier validation (env vars,
   TypeSafe hosted / OpenRouter / llama.cpp / Ollama) and the coverage

@@ -84,13 +84,11 @@ selector as `switchback/auto`.
 
 ## Configuration
 
-The plugin reads the same [`switchback.yaml`](configuration.md) layers as pi:
-
-| Layer | Lowest → highest |
-|---|---|
-| neutral basis (agent-agnostic) | `~/.config/switchback/switchback.yaml` |
-| agent overlay | `~/.pi/agent/switchback.yaml` |
-| project override | `<cwd>/.pi/switchback.yaml` |
+The plugin reads the one shared config file, exactly as pi does
+([`~/.config/switchback/switchback.yaml`](configuration.md#the-config-file)).
+There is no OpenCode-specific and no per-project config: a copy under
+`~/.pi/agent/` or `<cwd>/.pi/` is ignored. One file means both hosts run the
+same chain list, which matters because they do not share a model catalog.
 
 Runtime state (`blocks.json`, `crashes.json`, `disabled.json`, `pin.json`) lives under
 `~/.pi/agent/switchback/` and is shared with pi; set `SWITCHBACK_DIR` to
@@ -137,8 +135,6 @@ action is a command you could have typed:
 ```text
 /switchback-config                            current config
 /switchback-config <filter>                   just the chains matching it
-/switchback-config layers                     which layer file is edited
-/switchback-config layer <global|project>     pin the layer for this session
 
 /switchback-config add <id> <name> <fallbacks>
 /switchback-config remove <id>
@@ -154,7 +150,7 @@ action is a command you could have typed:
 /switchback-config decision-model <id> <provider/model|off>
 
 /switchback-config debug <on|off>
-/switchback-config reset                      delete the edited layer file
+/switchback-config reset                      delete the config file
 ```
 
 `<fallbacks>` is a comma-separated `provider/model` list, first entry

@@ -28,14 +28,14 @@ OpenCode V2 adapter (provider-architecture routing — see
 - `packages/core/src/simulate.ts` — `loadSimulate()`, `simulateRetry()`.
 - `packages/pi/src/secrets.ts` — encrypted API-key store; `createSecretStore()`,
   `secretsFilePath()` (DPAPI via powershell, `secret:<name>` in YAML).
-- `switchback.yaml` — shipped 4-provider fallback list.
+- `~/.config/switchback/switchback.yaml` — the one user config file both hosts read (the repo ships `switchback.yaml.example` as the template).
 
 ## Build / test
 
 ```bash
 npm install         # one lockfile, three workspaces
 npx tsc --noEmit    # type check (all of packages/ + root)
-npx vitest run      # 309 tests + 11 opt-in across 20 files
+npx vitest run      # 417 tests + 11 opt-in across 27 files
 ```
 
 Run the extension from the repository root with

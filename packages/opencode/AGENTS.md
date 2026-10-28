@@ -43,8 +43,14 @@ split is what makes the surfaces pi has actually work:
   (`src/gui-support.ts` adapts them), so all three surfaces share one editor.
 
 Config, block state, crash corpus and the configured classifier are shared with
-the pi adapter unchanged (`switchback-core` config layers, default state dir,
+the pi adapter unchanged (`switchback-core`'s one config file, default state dir,
 `SWITCHBACK_DIR` override) — root AGENTS.md project rule 3 owns the location.
+
+**Both hosts read exactly one config file** (`switchback-wix.12`, user decision
+m08294): `~/.config/switchback/switchback.yaml`. OpenCode adds no candidate of
+its own, and pi's `~/.pi/agent/switchback.yaml` is ignored. Do not "fix" a
+missing-config report by adding a host-specific path — that reintroduces the bug
+where OpenCode silently ran pi's chains.
 
 ## Ownership
 
@@ -119,7 +125,7 @@ the pi adapter unchanged (`switchback-core` config layers, default state dir,
   TUI half, not in a server command.
 - **The TUI and GUI halves own presentation only.** They render toasts and run
   the menu; they never parse `switchback.yaml`, never write it, and never route.
-  Every edit travels as layer-1 verb text through the RPC's `config` method, and
+  Every edit travels as command verb text through the RPC's `config` method, and
   the server's single editor decides whether it lands. A new menu action that
   needs a new verb adds the verb to `config-command.ts` first.
 - **The GUI bundle may import only the app's provided modules.** Both processes

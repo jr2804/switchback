@@ -75,27 +75,11 @@ the command reports and exits without prompting.
   so a fair coin should land on index 1), which is why it is shown with the
   level it lands on rather than as a bare number.
 - **Debug** — toggles the top-level `debug:` flag (per-switch diagnostics).
-- **Layer switch** — the dialogue asks **which layer to edit before anything
-  else**, and "Switch layer..." in the main menu asks again. The chooser shows
-  both files and what each currently holds, for example:
-
-  ```text
-  which config layer do you want to edit?
-    global:  ~/.pi/agent/switchback.yaml
-    project: <cwd>/.pi/switchback.yaml
-  Project entries override global entries with the same model id.
-
-    Global - 2 models        <- offered first
-    Project - not present
-  ```
-
-  `not present` means the file does not exist yet (a first save creates it),
-  `N models` is what the layer holds now, and `unreadable (invalid config)`
-  means the file exists but breaks a config rule. The preferred layer is
-  offered first (press Enter to take it): **global** — the base every project
-  inherits — unless only a project file exists, in which case that one is
-  plainly what you are working with. Esc cancels. Every screen title also shows
-  the file path being edited, so it is always clear where a change lands.
+- **One file, shown everywhere** — there is no layer to choose: every screen
+  edits `~/.config/switchback/switchback.yaml`, and each title shows that path
+  so it is always clear where a change lands. A machine with no file yet opens
+  a fresh editor whose first save creates it (directory included) with a
+  commented starter file.
 
 ## API keys and the secret store
 
@@ -119,8 +103,8 @@ for the on-disk format and platform notes.
   `decisionModel` name, a malformed fallback id, a duplicate model id) is
   reported with the loader's exact message and reverted; the file on disk is
   unchanged.
-- Writes are atomic (temporary file + rename), and a first save into a fresh
-  project layer creates the directory and a commented starter file.
+- Writes are atomic (temporary file + rename), and a first save creates the
+  config directory and a commented starter file.
 - Comments and key order in your existing `switchback.yaml` are preserved
   through edits.
 - If the file on disk is already invalid (for example after a hand edit),
@@ -129,6 +113,6 @@ for the on-disk format and platform notes.
 
 ## Reference
 
-The full YAML reference — layers and aggregation, the `decisionModel:`
+The full YAML reference — the config file, the `decisionModel:`
 address, the `decisionModels:` map, and the `debug:` flag — lives in
 [Configuration](configuration.md).

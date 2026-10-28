@@ -38,6 +38,44 @@ repo root, so the built bundle was being linted as source (424 errors, 472 warni
 `tsconfig.eslint.json` gained `packages/**/*.tsx` so `gui.tsx` is type-aware linted; the
 `tsc --noEmit` gate already included it.
 
+## 2026-10-28 — One config file, shared by both hosts (user decision)
+
+`loadConfig()` used to layer config: a shared basis at
+`~/.config/switchback/switchback.yaml`, an agent overlay defaulting to pi's
+`~/.pi/agent`, and a per-project `<cwd>/.pi`. The default made every host read
+pi's private file, so OpenCode silently ran pi's chains — including ids pi
+resolves from its own provider catalog and OpenCode cannot. Reported as "the
+opencode extension searches the switchback.yaml in `~/.pi/agent`".
+
+The interim fix made the overlay opt-in per host. The user then decided the
+whole layering was the problem and asked for one file (m08294, verbatim):
+"only the config from ~/.config/switchback/switchback.yaml must be used - no
+individual opencode or pi configs (just ignore them)".
+
+So the layer concept is gone, not re-scoped: `ConfigLayerDirs`,
+`piConfigLayers()`, `candidatePaths()` and `aggregateConfigs()` were deleted;
+`loadConfig(secrets?)` reads exactly `configFilePath()` =
+`~/.config/switchback/switchback.yaml` (`SWITCHBACK_CONFIG_DIR` relocates the
+directory). `~/.pi/agent/switchback.yaml` and `<cwd>/.pi/switchback.yaml` are
+ignored even when present. The editor followed: `ConfigLayer`,
+`defaultLayer()`, `layerPath()`, `layerExists()` and `projectConfigPath()` are
+gone; `loadLayer`/`saveLayer`/`readLayerConfig` became
+`loadConfigFile`/`saveConfigFile`/`readConfigFile`, and `LoadedLayer` became
+`LoadedConfig` (no `layer` field). The pi dialogue lost its layer chooser;
+OpenCode's grammar lost `layers` and `layer`.
+
+The rationale is the catalog mismatch: the hosts do not share one, so divergent
+copies leave one host with dead fallbacks. One file means one chain list, one
+truth, and no question about which copy is in effect. State
+(`switchbackStateDir()`, under `piConfigDir()`) is deliberately unaffected — a
+block is a fact about the account's quota, not about a config file.
+
+Tests were rewritten to the single-file contract. `tests/config.test.ts` gained
+`loadConfig - one file, no layers`, which proves pi's agent dir and `<cwd>/.pi`
+are ignored even when they hold a different chain set;
+`tests/opencode-adapter.test.ts` proves the adapter publishes the shared file's
+chains and does **not** fall back to pi's copy when the shared file is missing.
+
 ## 2026-10-09 — Nothing decides from historical error text (project rule 7, prompt v5)
 
 A captured corpus of provider error messages is a **test input, never a source of truth for

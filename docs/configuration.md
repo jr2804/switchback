@@ -15,7 +15,7 @@ timestamp wins) and then deleted.
 
 | File | Format | Role | Owned by | Location |
 |---|---|---|---|---|
-| `switchback.yaml` | YAML | Human config: fallback list, optional decision model. Per-project override, agent overlay, or neutral basis. | user | see [Config layers](#config-layers-and-aggregation) |
+| `switchback.yaml` | YAML | Human config: fallback list, optional decision model. The one config file, shared by every host. | user | see [The config file](#the-config-file) |
 | `blocks.json` | JSON | Runtime blocked-until map (atomic write, lazy prune). Created on first block. Migrated from the legacy `<cwd>/.pi/switchback.json` path on first read. Shared with the [OpenCode plugin](opencode.md). | switchback | state dir (`SWITCHBACK_DIR`) |
 | `crashes.json` | JSON | Runtime crash dedup store: sha256(raw) → entry. Created on first failure. User annotations become the Tier 2b cache. Shared with the [OpenCode plugin](opencode.md). | switchback | state dir (`SWITCHBACK_DIR`) |
 | `disabled.json` | JSON | Manual disable list: model address → epoch ms it was disabled. Entries never expire; only `/switchback-enable` (or hand-editing) removes them. See [Manually disabling a model](#manually-disabling-a-model). | user (via commands) | state dir (`SWITCHBACK_DIR`) |
@@ -25,40 +25,36 @@ The YAML-only rule applies to **user config** only. JSON stays for files that
 are written by the runtime or used as read-only fixtures; switchback never
 parses a user-supplied JSON config.
 
-## Config layers and aggregation
+## The config file
 
-Three optional user layers exist. Precedence is lowest → highest:
+There is exactly **one** user config file:
 
-1. `~/.config/switchback/switchback.yaml` (neutral basis, agent-agnostic)
-2. `~/.pi/agent/switchback.yaml` (agent overlay — shared by pi and the
-   [OpenCode plugin](opencode.md))
-3. `<cwd>/.pi/switchback.yaml` (per-project layer)
+```text
+~/.config/switchback/switchback.yaml
+```
 
-With none present, the built-in `DEFAULT_CONFIG` (empty fallback list —
-surfaces a `ConfigError` pointing the user at this section; see below) applies.
+Both pi and the [OpenCode plugin](opencode.md) read it, and it is the only
+place config is read from. There is no per-host and no per-project config:
+`~/.pi/agent/switchback.yaml` and `<cwd>/.pi/switchback.yaml` are **ignored**,
+even if they exist. With no file present, the built-in `DEFAULT_CONFIG` (empty
+fallback list — surfaces a `ConfigError` pointing the user at this section; see
+below) applies.
 
-The layers are **aggregated**, not first-match-wins: the merged model list is
-the global list with per-project entries overriding same-id entries **in
-place**, and project-only models appended after the global ones in project
-order. A duplicated model id therefore means the project entry wins wholesale
-— fallbacks, name and classifier — with no field-level merging.
+A single file is a deliberate simplification, not an oversight. The two hosts do
+not share a model catalog, so a per-host overlay let them disagree about the
+chain set — and an entry one host could resolve became a dead fallback on the
+other. One file means one chain list, one truth, and no question about which copy
+is in effect.
 
-The project-local slot lives under `.pi/` deliberately: git ignores that
-directory (pi's own convention), so a per-project override can never be
-committed into a repository the way a repo-root `switchback.yaml` would be.
-The repo ships only `switchback.yaml.example` as the template. The base config
-therefore belongs in the global file, and the project file carries only the
-overrides for one directory — `/switchback-config` asks which layer to edit
-before anything else and shows both files with their current contents, so an
-edit never lands in the wrong one by accident (see
-[Configuration dialogue](configuration-dialogue.md)). Practically:
+`SWITCHBACK_CONFIG_DIR` moves the directory (used by tests and portable
+installs); the file name stays `switchback.yaml`. A file that exists but fails
+to parse or validate throws immediately — it is surfaced, never silently
+ignored in favour of the built-in default.
 
-- **Inside a project with a `.pi/switchback.yaml`**: that layer is merged on
-  top of the global one (or stands alone if no global copy exists).
-- **Anywhere else**: the global copy is used verbatim.
-
-A layer that exists but fails to parse or validate throws immediately — a
-broken layer is surfaced, never silently dropped in favour of the other.
+The repo ships only `switchback.yaml.example` as the template. Copy it to the
+path above. `/switchback-config` (in both hosts) edits that same file and shows
+its path before anything else, so an edit never lands somewhere unexpected (see
+[Configuration dialogue](configuration-dialogue.md)).
 
 ## Diagnostics (`debug`)
 
@@ -85,16 +81,17 @@ is always shown, regardless of this flag.
 
 ## `DEFAULT_CONFIG` and the empty-fallbacks design
 
-`DEFAULT_CONFIG` ships with `fallbacks: []`. This is intentional: if a user
-has neither a project-local copy nor an agent-dir copy, the router should fail loudly
+`DEFAULT_CONFIG` ships with `fallbacks: []`. This is intentional: if the user
+config file does not exist, the router should fail loudly
 with a clear `ConfigError` ("no fallbacks configured") rather than silently
 fall through to a placeholder that may or may not exist in the catalog at
 any given moment.
 
 `switchback.yaml.example` carries the 4-provider fallback list as the
-template; a copy of it at `<project>/.pi/switchback.yaml` or
-`~/.pi/agent/switchback.yaml` is what fills `DEFAULT_CONFIG` in practice. It
-contains only model ids and a classifier reference — no API keys, no
+template; a copy of it at `~/.config/switchback/switchback.yaml` is what fills
+`DEFAULT_CONFIG` in practice, for both hosts. There is no per-project and no
+per-agent override — that one file is the whole config.
+It contains only model ids and a classifier reference — no API keys, no
 tokens, no account identifiers. Credentials are read from environment
 variables by pi itself, not by switchback.
 

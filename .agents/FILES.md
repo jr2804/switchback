@@ -11,7 +11,7 @@
 | OpenCode GUI half (desktop bundle entry, toast sink, command) | `packages/opencode/src/gui.tsx` |
 | OpenCode GUI host-free logic (dialog adaptation, variants, attach order) | `packages/opencode/src/gui-support.ts` |
 | OpenCode GUI bundle build (Vite preset, `dist/gui-experimental.cjs`) | `packages/opencode/vite.config.ts` |
-| OpenCode guided config menu (client of the layer-1 grammar) | `packages/opencode/src/tui-guide.ts` |
+| OpenCode guided config menu (client of the command grammar) | `packages/opencode/src/tui-guide.ts` |
 | `/switchback-config` grammar + its single writer | `packages/opencode/src/config-command.ts` |
 | OpenCode `unknown`-wire readers (notice, edit, guide state) | `packages/opencode/src/rpc.ts` |
 | OpenCode notice channel + sink refcount | `packages/opencode/src/notices.ts` |
@@ -34,7 +34,7 @@
 | Local-classifier provider registration | `packages/pi/src/local-classifier.ts` |
 | System One classifier transport (delegates to `@typesafe-ai/sdk`) | `packages/core/src/systemone.ts` |
 | Catalog validity (`resolveFallbacks`) | `packages/core/src/availability.ts` |
-| Config loader (YAML) | `packages/core/src/config.ts` |
+| Config loader (YAML; the one shared file at `~/.config/switchback/switchback.yaml`) | `packages/core/src/config.ts` |
 | Config editor (comment-preserving YAML round-trip) | `packages/core/src/config-editor.ts` |
 | Interactive config dialogue (`/switchback-config`) | `packages/pi/src/dialogue.ts` |
 | …its shared session, screen-title and prompt primitives | `packages/pi/src/dialogue-ui.ts` |

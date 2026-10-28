@@ -62,17 +62,18 @@ pi --model switchback/auto -p "ping" --no-tools   # -> pong
 
 ## Configuration
 
-`switchback.yaml` is the single user config format (YAML only). Two optional layers,
-**aggregated** on startup (not first-match-wins):
+`switchback.yaml` is the single user config format (YAML only) and there is
+exactly **one** config file (YAML), read by both pi and OpenCode:
 
-1. `<cwd>/.pi/switchback.yaml` — per-project layer (`.pi/` is gitignored, so it never lands in a repo)
-2. `~/.pi/agent/switchback.yaml` — global layer
-3. Neither present → built-in `DEFAULT_CONFIG` (empty `fallbacks: []` — surfaces a `ConfigError`).
+```text
+~/.config/switchback/switchback.yaml
+```
 
-The merged model list is the global list with per-project entries overriding
-same-id entries **in place** (a duplicated model id means the project entry wins
-wholesale) and project-only models appended. A layer that exists but is invalid
-fails startup loudly instead of being skipped. The repo ships only
+Per-host and per-project copies (`~/.pi/agent/switchback.yaml`,
+`<cwd>/.pi/switchback.yaml`) are **ignored**, even when they exist. One file
+means both hosts run the same chain list — they do not share a model catalog, so
+divergent copies would leave one host with dead fallbacks. A file that exists but
+is invalid fails startup loudly instead of being skipped. The repo ships only
 `switchback.yaml.example` as the template.
 
 A chain names its classifier by address, exactly like a fallback

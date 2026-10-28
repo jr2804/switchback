@@ -2,24 +2,21 @@
  * OpenCode V2 plugin for switchback - quota-aware model fallback routing.
  *
  * pi resolves the router's virtual model per request and re-routes provider
- * failures in flight. OpenCode has no virtual-model dispatch, so the same job
- * moves to a turn boundary around the `retry` session hook:
+ * failures in flight. OpenCode cannot re-point a model mid-request (its
+ * `model.request` hook only edits baseURL/headers, and its retry policy never
+ * retries quota errors), so the same job moves into a provider package:
  *
- *  1. OpenCode classifies a failure and proposes its own retry policy; this
- *     hook runs after that decision, before any retry is scheduled.
- *  2. The plugin classifies the error with the shared config's classifier
- *     (switchback.yaml's `decisionModel`) and, per the verdict, updates the shared
- *     account-scoped block state.
- *  3. When the failing model belongs to a configured fallback chain, the
- *     session is switched to the next effective fallback via
- *     `ctx.session.switchModel`, so the retry OpenCode already scheduled runs
- *     on the switched model - the in-flight re-route step wide.
- *  4. When no alternative remains, the hook's `decision` is flipped to
- *     `retry: false` so OpenCode surfaces the failure instead of looping into
- *     blocked models. Every other case keeps OpenCode's own policy untouched.
- *  5. Without a classifier decision nothing is blocked and no verdict is
- *     fabricated (root AGENTS.md rule 1): the sighting lands in the shared
- *     crash corpus and OpenCode's policy runs undetoured.
+ *  1. This plugin publishes a `switchback` provider whose catalog entries are
+ *     the configured chains (one model per chain, thinking levels as variants).
+ *     They appear in OpenCode's model selector like any physical model.
+ *  2. Each entry's `package` points at this npm package, so the host resolves
+ *     every request through `src/route.ts`'s `model(modelID, settings)`.
+ *  3. The route asks the bridge (`src/router.ts` -> core `decide()`) which
+ *     physical model serves the request, streams from it, and on a pre-output
+ *     failure classifies the error and walks the chain - the same in-flight
+ *     cascade pi gets from `registerVirtualModel`.
+ *  4. The chat commands (`/switchback`, `-unblock`, `-disable`, `-enable`)
+ *     manage the shared account-scoped state.
  *
  * Config, block state and crash corpus are shared with the pi extension
  * unchanged: the shared `switchback.yaml` layers plus the neutral state dir
@@ -28,37 +25,137 @@
 
 import { Plugin } from "@opencode/plugin";
 import {
-	assessFailure,
+	annotateCrash,
 	clearDisabled,
 	disableModel,
 	disabledFilePath,
 	enableModel,
+	findModelConfig,
+	getPinnedModel,
 	isDisabled,
+	isValidAnnotationClass,
+	layerPath,
 	loadConfig,
-	pickNextEffective,
 	readBlockedMap,
+	readCrashMap,
 	readDisabledMap,
-	recordDecideCrash,
 	resolveFallbacks,
+	setPinnedModel,
+	shortHash,
 	unblockModel,
-	systemOneClassifierPort,
+	SWITCHBACK_THINKING_LEVELS,
 } from "switchback-core";
-import type {
-	CrashAction,
-	DisabledMap,
-	HostModel,
-	ModelId,
-	ResolvedSwitchbackFileConfig,
-	RouterRegistryPort,
-	AvailabilityPort,
-	SecretResolver,
-} from "switchback-core";
+import type { DisabledMap, ErrorClass, ModelId, ResolvedSwitchbackFileConfig, SecretResolver } from "switchback-core";
+import { clearBridge, publishBridge } from "./bridge.ts";
+import type { SwitchbackBridge } from "./bridge.ts";
+import { splitModelAddress } from "./catalog.ts";
+import {
+	clearConfigSessions,
+	execute as executeConfigCommand,
+	layerForSession,
+	parseConfigCommand,
+	runConfigCommand,
+} from "./config-command.ts";
+import { attachNoticeSink, detachNoticeSink, publishNotice, resetNoticeChannel, setNoticeChannel } from "./notices.ts";
+import { SwitchbackRpc } from "./rpc.ts";
+import { readString } from "./rpc.ts";
+import { createRouter } from "./router.ts";
+
+/** The provider id the chains are published under. */
+export const SWITCHBACK_PROVIDER_ID = "switchback";
+
+/**
+ * `secret:<name>` refs resolve against the environment: OpenCode's credential
+ * API activates stored profiles but never returns key material. Unresolvable
+ * refs surface through `loadConfig` as a visible config problem - same failure
+ * mode as pi, different store.
+ */
+const envSecrets: SecretResolver = {
+	get: (name) => process.env[name],
+};
 
 export default Plugin.define({
 	id: "switchback",
 	async setup(ctx) {
-		// Failure handling first: routing must be live even if a dialog fails to register.
-		await ctx.session.hook("retry", (input) => handleRetry(ctx, input));
+		const config = readConfigOr(undefined);
+		const chains = config?.models.map((model) => model.id) ?? [];
+
+		// The bridge must exist before any routed request arrives; the provider
+		// package reads it through the globalThis symbol (separate module graph).
+		const bridge: SwitchbackBridge = createRouter({ ctx, chains });
+		publishBridge(bridge);
+
+		// Publish the chains as selector-visible models of the switchback
+		// provider. Re-run on every provider reload so config changes land.
+		await ctx.provider.transform(async (rawEditor) => {
+			try {
+				// The host's ProviderEditor generics are brand-heavy; this module only
+				// needs the structural slice below (same policy as route.ts's RouteLike).
+				interface EditorLike {
+					list(): readonly { provider: { readonly id: string } }[];
+					models: { set(providerID: string, models: unknown): unknown };
+					update(id: string, fn: (info: { activation: string }) => void): unknown;
+					add(input: unknown): unknown;
+				}
+				const editor = rawEditor as unknown as EditorLike;
+				// Read the config fresh: a transform also runs on every reload (the guide
+				// triggers one after each edit), so the capture from `setup` would go
+				// stale the moment a chain is added or removed.
+				const current = readConfigOr(undefined)?.models ?? [];
+				const models: unknown[] = [];
+				for (const chain of current) {
+					// Catalog id is provider-relative: the chain id already carries the
+					// "switchback/" prefix, so strip it ("switchback/auto" -> "auto").
+					const modelId = chain.id.startsWith("switchback/")
+						? chain.id.slice("switchback/".length)
+						: chain.id;
+					const variants = SWITCHBACK_THINKING_LEVELS.map((level) => ({
+						id: level,
+						settings: { chain: chain.id, switchbackLevel: level },
+					}));
+					models.push({
+						id: modelId,
+						modelID: modelId,
+						providerID: SWITCHBACK_PROVIDER_ID,
+						name: chain.name,
+						enabled: true,
+						capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+						limit: { context: 0, output: 0 },
+						// Model.Info.cost is an array of tier entries; an empty array keeps
+						// routing cost-free (pi-side accounting is per physical model).
+						cost: [],
+						time: { released: 0 },
+						status: "active",
+						variants,
+						package: "opencode-switchback",
+					});
+				}
+				const existing = editor.list().find((record) => record.provider.id === SWITCHBACK_PROVIDER_ID);
+				if (existing !== undefined) {
+					editor.models.set(SWITCHBACK_PROVIDER_ID, models as unknown as readonly unknown[]);
+					editor.update(SWITCHBACK_PROVIDER_ID, (info) => {
+						info.activation = "enabled";
+					});
+				} else {
+					editor.add({
+						info: {
+							id: SWITCHBACK_PROVIDER_ID,
+							name: "Switchback",
+							activation: "enabled",
+							package: "opencode-switchback",
+						},
+						models: models as unknown as readonly unknown[],
+					});
+				}
+			} catch (error) {
+				console.error(
+					"[switchback] provider publish failed:",
+					error instanceof Error ? (error.stack ?? error.message) : error,
+				);
+				throw error;
+			}
+		});
+
 		await ctx.command.transform((editor) => {
 			editor.add({
 				name: "switchback",
@@ -93,141 +190,110 @@ export default Plugin.define({
 				},
 			});
 		});
+		await ctx.command.transform((editor) => {
+			editor.add({
+				name: "switchback-next",
+				description: "Cycle the pin to the next fallback of this chain (pin off to start)",
+				execute: async ({ sessionID }) => {
+					await runNextPin(ctx, sessionID);
+				},
+			});
+			editor.add({
+				name: "switchback-model",
+				description: "Pin this chain to one fallback, or clear the pin: [<provider/model>|auto]",
+				execute: async ({ sessionID, prompt }) => {
+					await runPinModel(ctx, sessionID, prompt.text);
+				},
+			});
+		});
+		await ctx.command.transform((editor) => {
+			editor.add({
+				name: "switchback-config",
+				description:
+					"Edit switchback.yaml (add/remove models, fallback order, idle-reset, decision model): /switchback-config help",
+				execute: async ({ sessionID, prompt }) => {
+					await runConfigCommand(sessionID, prompt.text, {
+						say: async (text) => {
+							if (publishNotice({ sessionID, message: text, variant: "info" })) return;
+							await ctx.session.synthetic({ sessionID, text }).catch(() => {
+								// Same best-effort rule as notify.
+							});
+						},
+					});
+				},
+			});
+		});
+		await ctx.command.transform((editor) => {
+			editor.add({
+				name: "switchback-blocked",
+				description: "List models currently blocked by the switchback router",
+				execute: async ({ sessionID }) => {
+					await runListBlocked(ctx, sessionID);
+				},
+			});
+			editor.add({
+				name: "switchback-crashes",
+				description: "List the most-recent N crash entries (default 10)",
+				execute: async ({ sessionID, prompt }) => {
+					await runListCrashes(ctx, sessionID, prompt.text);
+				},
+			});
+			editor.add({
+				name: "switchback-annotate",
+				description: "Annotate a crash with a confirmed class: <hash-prefix> <class> [note...]",
+				execute: async ({ sessionID, prompt }) => {
+					await runAnnotate(ctx, sessionID, prompt.text);
+				},
+			});
+		});
+
+		// Notices reach an attached client (TUI toast today, GUI later) through
+		// this RPC; with nothing attached they keep going to the transcript.
+		const registration = await ctx.rpc.register(SwitchbackRpc, {
+			attach: async () => ({ attached: attachNoticeSink() }),
+			detach: async () => ({ attached: detachNoticeSink() }),
+			// The interactive guide reads its menu from here, so the server stays the
+			// only place that parses `switchback.yaml` and the model catalog.
+			state: async (input: unknown) => guideState(ctx, readString(input, "sessionID")),
+			// And it edits by sending layer-1 verb text, so the menu and the typed
+			// command go through the same grammar and the same writer.
+			config: async (input: unknown) => {
+				const text = readString(input, "text") ?? "";
+				const key = readString(input, "sessionID") ?? "rpc";
+				const result = executeConfigCommand(key, parseConfigCommand(text));
+				if (result.ok)
+					await republish(ctx).catch(() => {
+						// Republishing is best effort; the edit itself already landed.
+					});
+				return { ok: result.ok, text: result.text };
+			},
+		});
+		setNoticeChannel((notice) => {
+			void registration.events.emit("notice", {
+				...(notice.sessionID === undefined ? {} : { sessionID: notice.sessionID }),
+				message: notice.message,
+				variant: notice.variant,
+			});
+		});
+
+		return () => {
+			clearBridge();
+			clearConfigSessions();
+			resetNoticeChannel();
+		};
 	},
 });
 
-/**
- * The retry hook's payload, narrowed to what switchback reads.
- *
- * OpenCode's own record is `SessionRetry` plus `Model.Ref` plus
- * `SessionError.Error` (see @opencode/plugin/dist/promise/session.d.ts) - the
- * plugin never imports the host's types, only structurally compatible shapes.
- * `decision` stays mutable on purpose: it is OpenCode's pending retry policy
- * and the exhausted path flips it to `retry: false`.
- */
-interface RetryPayload {
-	readonly sessionID: string;
-	readonly model: { readonly providerID: string; readonly id: string };
-	readonly error: { readonly message: string; readonly response?: { readonly body?: string } | undefined };
-	decision: { retry: false } | { retry: true; delay: number };
+/** Read the shared config; a failure is reported lazily by the router. */
+function readConfigOr(fallback: ResolvedSwitchbackFileConfig | undefined): ResolvedSwitchbackFileConfig | undefined {
+	try {
+		return loadConfig(envSecrets).config;
+	} catch {
+		return fallback;
+	}
 }
 
-/**
- * Classification + block + advance for one failure OpenCode chose to retry.
- *
- * The failing model must be listed in a configured chain's fallbacks; anything
- * else is untouched (pi behaves the same way: its route only ever runs for the
- * switchback virtual model). Without a chain match OpenCode's own policy is
- * kept as-is, which is also what keeps unrelated failures cheap.
- */
-async function handleRetry(ctx: Plugin.Context, input: RetryPayload): Promise<void> {
-	const now = Date.now();
-	const rawMessage = [input.error.message, input.error.response?.body]
-		.filter((part) => typeof part === "string" && part.trim().length > 0)
-		.join("\n");
-	if (rawMessage.length === 0) return; // Provider text is the classifier's only input; nothing to classify.
-	const config = readConfig(ctx, input.sessionID);
-	if (config === undefined) return;
-
-	const catalog = (await ctx.model.list()).data;
-	const info = findInCatalog(catalog, input.model.providerID, input.model.id);
-	const failing: ModelId =
-		info !== undefined ? `${info.providerID}/${info.modelID}` : `${input.model.providerID}/${input.model.id}`;
-	const chain = config.models.find((model) => model.fallbacks.includes(failing));
-	if (chain === undefined) return; // This model answers to no configured chain; OpenCode's policy stands.
-
-	const availability = catalogPort(catalog);
-	const decisionModel = chain.decisionModel;
-	const registry: RouterRegistryPort = {
-		...availability,
-		...systemOneClassifierPort({
-			baseUrl: decisionModel?.baseUrl,
-			...(decisionModel?.apiKey !== undefined ? { apiKey: decisionModel.apiKey } : {}),
-			identity: { provider: decisionModel?.provider ?? "", id: decisionModel?.id ?? "" },
-		}),
-	};
-	const assessed = await assessFailure({
-		failedId: failing,
-		errorMessage: rawMessage,
-		stopReason: undefined,
-		decisionModel,
-		registry,
-		now,
-		blocked: readBlockedMap(now),
-		// Every hook sighting is fresh: OpenCode owns the retry schedule, and a
-		// cycle pi counts in-flight is a cycle OpenCode's own policy already
-		// counted. Transient state does not cross the host boundary.
-		transientRetries: 0,
-	});
-	if (assessed.noClassifierReason !== undefined) {
-		// No verdict, no block, no switch (root AGENTS.md rule 1). Recording the
-		// sighting keeps the gap visible in the shared crash corpus.
-		recordDecideCrash(
-			assessed.failedId,
-			registry,
-			rawMessage,
-			now,
-			null,
-			assessed.noClassifierReason,
-			"blind-cycle",
-		);
-		notify(
-			ctx,
-			input.sessionID,
-			`switchback: no classifier decision (${assessed.noClassifierReason}) for ${failing}; no block, no switch`,
-		);
-		return;
-	}
-	const classified = assessed.verdict;
-	if (classified === undefined) return; // Unreachable; satisfies the type without a cast.
-
-	const action: CrashAction = assessed.touchedBlocks ? "blocked+advanced" : "stuck-stayed";
-	recordDecideCrash(assessed.failedId, registry, rawMessage, now, classified, undefined, action);
-	if (!assessed.touchedBlocks) return; // Transient within OpenCode's own budget: leave its policy standing.
-
-	const disabled = readDisabledMap();
-	const resolved = resolveFallbacks(chain.fallbacks, availability);
-	const next = pickNextEffective(resolved, failing, readBlockedMap(now), now, failing, undefined, disabled);
-	const until = classified.resetAtMs === undefined ? "" : ` until ${new Date(classified.resetAtMs).toISOString()}`;
-	if (next === undefined || next.degraded) {
-		// Nothing effective left (or only the failing model itself): surface the
-		// failure instead of scheduling another attempt into a blocked model -
-		// pi's stuck behavior when the advance finds nothing left.
-		const disabledInChain = chain.fallbacks.filter((id) => isDisabled(id, disabled)).length;
-		const disabledNote = disabledInChain === 0 ? "" : `; ${disabledInChain} disabled by hand`;
-		notify(
-			ctx,
-			input.sessionID,
-			`switchback: ${failing} blocked${until}; every further fallback in ${chain.id} is unavailable${disabledNote} - surfacing the failure`,
-		);
-		input.decision = { retry: false };
-		return;
-	}
-	const address = splitModelAddress(next.modelId);
-	const nextInfo = address === undefined ? undefined : findInCatalog(catalog, address.provider, address.modelId);
-	if (nextInfo === undefined) return; // Unreachable: pickNextEffective only offers catalog-backed entries.
-	await ctx.session.switchModel({
-		sessionID: input.sessionID,
-		model: { providerID: nextInfo.providerID, id: nextInfo.modelID },
-	});
-	notify(
-		ctx,
-		input.sessionID,
-		`switchback: ${classified.class} on ${failing} (blocked${until}) - advancing to ${next.modelId}`,
-	);
-}
-
-/**
- * OpenCode has no readable secret vault (its credential API activates stored
- * profiles; it never returns key material), so `secret:<name>` refs resolve
- * against the environment. Unresolvable refs surface through `loadConfig` as
- * a visible config problem - same failure mode as pi, different store.
- */
-const envSecrets: SecretResolver = {
-	get: (name) => process.env[name],
-};
-
-/** Read the shared config once per decision; on a config failure the notice is fan-out-safe. */
+/** Read the shared config once per command; on a config failure the notice is fan-out-safe. */
 function readConfig(ctx: Plugin.Context, sessionID: string): ResolvedSwitchbackFileConfig | undefined {
 	try {
 		return loadConfig(envSecrets).config;
@@ -245,13 +311,28 @@ const seenNotifications = new Map<string, Set<string>>();
 
 /**
  * Chat-side notice, one per session-per message (a process-lifetime best
- * effort) so a long-lived session does not spam the conversation. Never
+ * effort) so a long-lived session does not spam the conversation. Prefers an
+ * attached client's toast surface; the transcript is the fallback. Never
  * blocks: a failed write stays a failed write.
  */
 function notify(ctx: Plugin.Context, sessionID: string, message: string): void {
 	const seen = seenNotifications.get(sessionID);
 	if (seen?.has(message) === true) return;
 	seenNotifications.set(sessionID, new Set([...(seen ?? []), message]));
+	say(ctx, sessionID, message, "info");
+}
+
+/**
+ * Route one notice to the best available surface: an attached client if there
+ * is one, else the transcript.
+ */
+function say(
+	ctx: Plugin.Context,
+	sessionID: string,
+	message: string,
+	variant: "info" | "success" | "warning" | "error",
+): void {
+	if (publishNotice({ sessionID, message, variant })) return;
 	void ctx.session.synthetic({ sessionID, text: message }).catch(() => {
 		// Nothing the routing decision can use; swallow.
 	});
@@ -437,67 +518,326 @@ async function runUnblock(ctx: Plugin.Context, sessionID: string, argument: stri
 		});
 }
 
-/** What the adapter reads off a model catalog entry, narrowed to consumed fields. */
-interface CatalogModel {
-	readonly id: string;
-	readonly modelID: string;
-	readonly providerID: string;
-	readonly name: string;
-	readonly enabled: boolean | undefined;
-	readonly limit: { readonly context: number } | undefined;
-}
-
 /**
- * The availability port over OpenCode's model catalog. The catalog is re-read
- * per decision (one `ctx.model.list()` call) rather than snapshotted: OpenCode
- * edits its own catalog live and the list never lives longer than one
- * classification.
+ * The availability port over OpenCode's model catalog for the status dialog.
+ * Mirrors `catalog.ts`'s port shape (that one serves the router; this one
+ * avoids importing the router's catalog types into the command layer).
  */
-function catalogPort(catalog: readonly CatalogModel[]): AvailabilityPort {
+function catalogPort(
+	catalog: readonly {
+		readonly providerID: string;
+		readonly modelID: string;
+		readonly id: string;
+		readonly name: string;
+		readonly enabled: boolean | undefined;
+		readonly limit?: { readonly context: number } | undefined;
+	}[],
+) {
+	const findIn = (provider: string, modelId: string) => {
+		const bare = splitModelAddress(modelId)?.modelId ?? modelId;
+		return catalog.find(
+			(info) =>
+				info.providerID === provider &&
+				(info.modelID === modelId || info.modelID === bare || info.id === modelId),
+		);
+	};
 	return {
-		find: (provider, modelId) => {
-			const info = findInCatalog(catalog, provider, modelId);
-			return info === undefined || info.enabled === false ? undefined : hostModel(info);
+		find: (provider: string, modelId: string) => {
+			const info = findIn(provider, modelId);
+			return info === undefined || info.enabled === false
+				? undefined
+				: {
+						provider: info.providerID,
+						id: info.modelID,
+						name: info.name,
+						api: "opencode",
+						contextWindow: info.limit?.context ?? 0,
+					};
 		},
-		hasConfiguredAuth: (model) => findInCatalog(catalog, model.provider, model.id) !== undefined,
-		getProviderAuthStatus: (provider) =>
+		hasConfiguredAuth: (model: { provider: string; id: string }) => findIn(model.provider, model.id) !== undefined,
+		getProviderAuthStatus: (provider: string) =>
 			catalog.some((info) => info.providerID === provider)
 				? { configured: true }
 				: { configured: false, label: `no enabled models for provider "${provider}" in the OpenCode catalog` },
 	};
 }
 
-/** A catalog entry gets a second look when it carries OpenCode's own record type. */
-function hostModel(info: CatalogModel): HostModel {
-	return {
-		provider: info.providerID,
-		id: info.modelID,
-		name: info.name,
-		// OpenCode's catalog carries no wire-API name; the core port keeps the
-		// field for pi-shaped records and no core switchback step reads it here.
-		api: "opencode",
-		contextWindow: info.limit?.context ?? 0,
-	};
+// Re-exported for the host's provider-package resolution: the switchback
+// provider's catalog entries declare this package, and the host's
+// `importPackage` looks for `model(modelID, settings)` on the entrypoint.
+export { model } from "./route.ts";
+
+/**
+ * Which configured chain the session is using, when it is a switchback one.
+ * The pin commands address a chain the way the catalog does, and the host
+ * records the selection on the session record (`session.model`).
+ */
+async function chainOfSession(
+	ctx: Plugin.Context,
+	sessionID: string,
+): Promise<{ chainId: string; config: ResolvedSwitchbackFileConfig } | undefined> {
+	try {
+		const info = await ctx.session.get({ sessionID });
+		const model = (info as { model?: { id?: string; providerID?: string } } | undefined)?.model;
+		if (model?.providerID !== SWITCHBACK_PROVIDER_ID || typeof model.id !== "string") return undefined;
+		const chainId = model.id.includes("/") ? model.id : `${SWITCHBACK_PROVIDER_ID}/${model.id}`;
+		const config = readConfigOr(undefined);
+		if (config === undefined) return undefined;
+		// A session may still point at a chain that a config edit removed; the
+		// commands report that as "no switchback model selected" rather than throw.
+		return findModelConfig(config, chainId) === undefined ? undefined : { chainId, config };
+	} catch {
+		return undefined;
+	}
 }
 
-/** "provider/id" to its halves; undefined for anything else config could hold. */
-function splitModelAddress(serialized: string): { provider: string; modelId: string } | undefined {
-	const slash = serialized.indexOf("/");
-	if (slash <= 0 || slash === serialized.length - 1) return undefined;
-	return { provider: serialized.slice(0, slash), modelId: serialized.slice(slash + 1) };
+/** Post one chat-side notice; the commands do not need the dedupe `notify` adds. */
+async function sayNow(ctx: Plugin.Context, sessionID: string, text: string): Promise<void> {
+	if (publishNotice({ sessionID, message: text, variant: "info" })) return;
+	await ctx.session.synthetic({ sessionID, text }).catch(() => {
+		// Same best-effort rule as notify.
+	});
 }
 
 /**
- * Resolve a catalog entry by provider plus model id. OpenCode's catalog
- * entries carry both a bare (`modelID`) and a provider-qualified (`id`)
- * address; switchback's config speaks "provider/modelID", and the openCode
- * surfaces so far (the Model.Ref the retry hook gets) have historically been
- * bare - so both forms resolve.
+ * Republish the switchback models from a fresh read of switchback.yaml.
+ *
+ * `provider.transform` runs on every reload, and it re-reads the config itself,
+ * so a reload is all that is needed for a config edit to reach the selector.
+ * Both halves are best effort: the edit is already on disk, and the next
+ * request resolves the chain from the file regardless of what the selector
+ * shows.
  */
-function findInCatalog(catalog: readonly CatalogModel[], provider: string, modelId: string): CatalogModel | undefined {
-	const bare = splitModelAddress(modelId)?.modelId ?? modelId;
-	return catalog.find(
-		(info) =>
-			info.providerID === provider && (info.modelID === modelId || info.modelID === bare || info.id === modelId),
+async function republish(ctx: Plugin.Context): Promise<void> {
+	await ctx.provider.reload();
+	await ctx.model.reload();
+}
+
+/** Read the merged chains and the catalog for the interactive guide's menu. */
+async function guideState(
+	ctx: Plugin.Context,
+	sessionID: string | undefined,
+): Promise<{
+	chains: readonly {
+		id: string;
+		name: string;
+		fallbacks: readonly string[];
+		idleReset?: string;
+		decisionModel?: string;
+	}[];
+	models: readonly { address: string; name: string; contextWindow?: number; ready: boolean }[];
+	path: string;
+}> {
+	const chainRows: {
+		id: string;
+		name: string;
+		fallbacks: readonly string[];
+		idleReset?: string;
+		decisionModel?: string;
+	}[] = [];
+	const config = readConfigOr(undefined);
+	for (const model of config?.models ?? []) {
+		// The guide speaks `provider/model`, the file holds a parsed decision
+		// model, so render it back into the same address form the picker offers.
+		const decision = model.decisionModel;
+		const decisionAddress = decision === undefined ? undefined : `${decision.provider}/${decision.id}`;
+		chainRows.push({
+			id: model.id,
+			name: model.name,
+			fallbacks: [...model.fallbacks],
+			...(model.idleReset === undefined ? {} : { idleReset: model.idleReset }),
+			...(decisionAddress === undefined ? {} : { decisionModel: decisionAddress }),
+		});
+	}
+	const catalog = await ctx.model.list().catch(() => ({ data: [] as readonly never[] }));
+	const models = catalog.data
+		.filter((info) => info.enabled !== false)
+		.map((info) => {
+			const address = `${info.providerID}/${info.modelID}`;
+			const contextWindow = info.limit?.context;
+			return {
+				address,
+				name: info.name,
+				...(contextWindow === undefined || contextWindow <= 0 ? {} : { contextWindow }),
+				ready: true,
+			};
+		})
+		// The guide must never offer a switchback chain as one of its own
+		// fallbacks: it would resolve to itself and re-enter the router.
+		.filter((model) => !model.address.startsWith(`${SWITCHBACK_PROVIDER_ID}/`));
+	return { chains: chainRows, models, path: layerPath(layerForSession(sessionID ?? "rpc")) };
+}
+
+/** `/switchback-next`: advance the pin through (none, ...fallbacks) and wrap. */
+async function runNextPin(ctx: Plugin.Context, sessionID: string): Promise<void> {
+	const found = await chainOfSession(ctx, sessionID);
+	if (found === undefined) {
+		await sayNow(ctx, sessionID, "switchback: /switchback-next only applies while a switchback model is selected");
+		return;
+	}
+	const { chainId, config } = found;
+	const chain = findModelConfig(config, chainId);
+	if (chain === undefined) return;
+	const choices: ReadonlyArray<ModelId | null> = [null, ...chain.fallbacks];
+	const currentPin = getPinnedModel(chainId);
+	// Slot 0 is "pin off". With no pin the cycle starts there, so the first
+	// press selects the first fallback instead of re-clearing an empty pin.
+	const currentIndex = currentPin === undefined ? 0 : Math.max(0, choices.indexOf(currentPin));
+	const next = choices[(currentIndex + 1) % choices.length] ?? null;
+	setPinnedModel(chainId, next);
+	await sayNow(
+		ctx,
+		sessionID,
+		next === null
+			? `${chainId}: pin cleared (routing falls back to stickiness and preference)`
+			: `${chainId}: pinned to ${next}`,
 	);
+}
+
+/**
+ * `/switchback-model [<provider/model>|auto]`: set the pin directly. With no
+ * argument the known choices are listed - the host has no plugin-facing picker
+ * API, so the argument is the selection channel.
+ */
+async function runPinModel(ctx: Plugin.Context, sessionID: string, argument: string | undefined): Promise<void> {
+	const found = await chainOfSession(ctx, sessionID);
+	if (found === undefined) {
+		await sayNow(ctx, sessionID, "switchback: /switchback-model only applies while a switchback model is selected");
+		return;
+	}
+	const { chainId, config } = found;
+	const chain = findModelConfig(config, chainId);
+	if (chain === undefined) return;
+	const target = argument?.trim() ?? "";
+	if (target.length === 0) {
+		const currentPin = getPinnedModel(chainId);
+		const rows = chain.fallbacks.map((id) => `  - ${id}${id === currentPin ? "  (current pin)" : ""}`);
+		await sayNow(
+			ctx,
+			sessionID,
+			`${chainId} routes to: ${currentPin ?? "(auto - stickiness and preference)"}\nchoices:\n${rows.join("\n")}\nset one with /switchback-model <provider/model>, or /switchback-model auto to clear`,
+		);
+		return;
+	}
+	if (target.toUpperCase() === "AUTO") {
+		setPinnedModel(chainId, null);
+		await sayNow(ctx, sessionID, `${chainId}: pin cleared`);
+		return;
+	}
+	const address = resolveAddress(config, target);
+	if (address === undefined || !chain.fallbacks.includes(address)) {
+		await sayNow(ctx, sessionID, `switchback: ${JSON.stringify(target)} is not a fallback of ${chainId}`);
+		return;
+	}
+	setPinnedModel(chainId, address);
+	await sayNow(ctx, sessionID, `${chainId}: routes to ${address}`);
+}
+
+/** `/switchback-blocked`: live block state with reset times, soonest first. */
+async function runListBlocked(ctx: Plugin.Context, sessionID: string): Promise<void> {
+	const now = Date.now();
+	const entries = Object.entries(readBlockedMap(now))
+		.filter(([, until]) => until > now)
+		.sort(([, a], [, b]) => a - b);
+	if (entries.length === 0) {
+		await sayNow(ctx, sessionID, "switchback: (no models currently blocked)");
+		return;
+	}
+	const rows = entries.map(
+		([modelId, until]) => `  - ${modelId}  (resets in ${Math.ceil((until - now) / 60_000)} min)`,
+	);
+	await sayNow(ctx, sessionID, `switchback: blocked models (${entries.length}):\n${rows.join("\n")}`);
+}
+
+/** `/switchback-crashes [n]`: the most recent N crash entries (default 10). */
+async function runListCrashes(ctx: Plugin.Context, sessionID: string, argument: string | undefined): Promise<void> {
+	const count = parseCount(argument, 10);
+	if (count === undefined) {
+		await sayNow(ctx, sessionID, "switchback: usage: /switchback-crashes [n]");
+		return;
+	}
+	const map = readCrashMap();
+	const entries = Object.entries(map)
+		.sort(([, a], [, b]) => b.last - a.last)
+		.slice(0, count);
+	if (entries.length === 0) {
+		await sayNow(ctx, sessionID, "switchback: (no crashes recorded yet)");
+		return;
+	}
+	const rows = entries.map(([hash, entry]) => {
+		const klass =
+			entry.verdict === null ? `no-classifier (${entry.noClassifierReason ?? "?"})` : entry.verdict.class;
+		const minutes = Math.max(0, Math.floor((Date.now() - entry.last) / 60_000));
+		return `  - ${shortHash(hash)}  ${entry.provider}/${entry.model}  ${klass}  count=${entry.count}  last=${minutes}m ago  action=${entry.action}${entry.annotated === undefined ? "" : "  [annot]"}`;
+	});
+	await sayNow(
+		ctx,
+		sessionID,
+		`switchback: crashes (${entries.length} of ${Object.keys(map).length} total):\n${rows.join("\n")}`,
+	);
+}
+
+/** `/switchback-annotate <hash-prefix> <class> [note...]`: write the Tier 2b cache row. */
+async function runAnnotate(ctx: Plugin.Context, sessionID: string, argument: string | undefined): Promise<void> {
+	const parsed = parseAnnotateArgs(argument ?? "");
+	if (parsed === undefined) {
+		await sayNow(
+			ctx,
+			sessionID,
+			`switchback: usage: /switchback-annotate <hash-prefix> <class> [note...] (classes: ${ANNOTATION_CLASSES.join(", ")})`,
+		);
+		return;
+	}
+	if (!isValidAnnotationClass(parsed.klass)) {
+		await sayNow(ctx, sessionID, `switchback: class must be one of: ${ANNOTATION_CLASSES.join(", ")}`);
+		return;
+	}
+	const map = readCrashMap();
+	const matches = Object.keys(map).filter((hash) => hash.startsWith(parsed.hash));
+	if (matches.length === 0) {
+		await sayNow(ctx, sessionID, `switchback: no crash matches hash prefix ${JSON.stringify(parsed.hash)}`);
+		return;
+	}
+	if (matches.length > 1 && !/^[0-9a-f]{8}$/u.test(parsed.hash)) {
+		const rows = matches.map((hash) => `  - ${shortHash(hash)}  ${map[hash]?.provider}/${map[hash]?.model}`);
+		await sayNow(ctx, sessionID, `switchback: ambiguous prefix; matches:\n${rows.join("\n")}\nuse a longer prefix`);
+		return;
+	}
+	const hash = matches[0];
+	if (hash === undefined) return;
+	try {
+		annotateCrash(hash, parsed.klass, parsed.note ?? "");
+	} catch (error) {
+		await sayNow(
+			ctx,
+			sessionID,
+			`switchback: annotation failed: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		return;
+	}
+	await sayNow(ctx, sessionID, `switchback: annotated ${shortHash(hash)} as ${parsed.klass}`);
+}
+
+/** Every class `switchback-annotate` accepts, in menu order (core validates). */
+const ANNOTATION_CLASSES: readonly ErrorClass[] = ["quota", "auth", "transient", "overflow", "unknown"];
+
+/** `[n]` argument parser shared by the listing commands. */
+function parseCount(argument: string | undefined, fallback: number): number | undefined {
+	const trimmed = argument?.trim() ?? "";
+	if (trimmed.length === 0) return fallback;
+	const parsed = Number(trimmed);
+	return Number.isInteger(parsed) && parsed >= 1 ? parsed : undefined;
+}
+
+/** `<hash-prefix> <class> [note...]` parser for `/switchback-annotate`. */
+function parseAnnotateArgs(argument: string): { hash: string; klass: ErrorClass; note?: string } | undefined {
+	const parts = argument
+		.trim()
+		.split(/\s+/u)
+		.filter((part) => part.length > 0);
+	const [hash, klass, ...rest] = parts;
+	if (hash === undefined || klass === undefined) return undefined;
+	if (!/^[0-9a-f]{4,}$/u.test(hash)) return undefined;
+	const note = rest.length > 0 ? rest.join(" ") : undefined;
+	return { hash, klass: klass as ErrorClass, ...(note === undefined ? {} : { note }) };
 }

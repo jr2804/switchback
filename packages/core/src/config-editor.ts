@@ -36,7 +36,7 @@ import { join } from "node:path";
 import { writeFileAtomic } from "./atomic-write.ts";
 import { isMap, isSeq, parseDocument, type Document, type YAMLMap, type YAMLSeq } from "yaml";
 import { ConfigError, piConfigDir, validateFileConfig } from "./config.ts";
-import type { ModelId, SwitchbackFileConfig } from "./types.ts";
+import type { IdleResetConfig, ModelId, SwitchbackFileConfig } from "./types.ts";
 
 /** Which switchback.yaml layer the editor has open. */
 export type ConfigLayer = "global" | "project";
@@ -403,6 +403,22 @@ export function countDecisionModelReferences(loaded: LoadedLayer, address: strin
 		if (item.get("decisionModel") === address) count += 1;
 	}
 	return count;
+}
+
+/**
+ * Set or clear a model's `idleReset:` option. A duration ("30m", "2h", ...)
+ * returns to the head of the fallback list after that much idle time;
+ * `classifier` asks the decision model; `null` deletes the key, which is the
+ * loader's default (`never`). Validation of the value itself is the loader's
+ * job at save time, so an unknown value surfaces with the loader's message.
+ */
+export function setIdleReset(loaded: LoadedLayer, virtualId: string, option: IdleResetConfig | null): void {
+	const { node } = findModelNode(loaded, virtualId);
+	if (option === null) {
+		node.delete("idleReset");
+		return;
+	}
+	node.set("idleReset", option);
 }
 
 /** Set the top-level `debug:` flag (per-switch diagnostics notifications). */

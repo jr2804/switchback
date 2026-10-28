@@ -53,13 +53,18 @@ export {
 	disableModel,
 	disabledFilePath,
 	enableModel,
+	getPinnedModel,
 	isBlocked,
 	isDisabled,
+	pinFilePath,
 	readBlockedMap,
 	readDisabledMap,
-	unblockModel,
+	readPinMap,
+	setPinnedModel,
 	stateFilePath,
+	unblockModel,
 } from "./state.ts";
+export type { PinMap } from "./state.ts";
 export {
 	readCrashMap,
 	recordCrash,
@@ -115,6 +120,7 @@ export {
 	setDecisionModel,
 	setDebug,
 	setFallbacks,
+	setIdleReset,
 	setVirtualModelName,
 	updateDecisionModel,
 } from "./config-editor.ts";

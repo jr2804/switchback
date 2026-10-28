@@ -13,7 +13,10 @@ node_modules/
 # Coverage
 coverage/
 
-# Distribution builds (we ship source-only; pi loads via jiti)
+# Distribution builds (we ship source-only; pi loads via jiti). The OpenCode
+# GUI bundle under packages/opencode/dist is a build artifact too - `prepack`
+# rebuilds it from src/gui.tsx on publish, and `files` in that package's
+# manifest is what puts it in the tarball.
 dist/
 
 # Tarballs from `npm pack` / `npm publish --dry-run`

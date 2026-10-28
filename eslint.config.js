@@ -46,6 +46,10 @@ export default [
       '.beads/**',
       'node_modules/**',
       'dist/**',
+      // Per-package build output, e.g. `packages/opencode/dist/gui-experimental.cjs`
+      // (the Vite bundle `prepack` builds). The bare `dist/**` above only
+      // matches the repo root, so the built bundle was being linted as source.
+      '**/dist/**',
       'coverage/**',
       // Generated docs output (`mkdocs build`), gitignored but still on disk.
       'site/**',

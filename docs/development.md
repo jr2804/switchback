@@ -35,11 +35,14 @@ Build steps 1–8 are complete (per the design doc):
   live-classifier tests, skipped unless configured.
 - [x] **Step 8** — Catalog validity & degraded lists: per-route availability resolution, single-model warning, `/switchback` status command.
 - [x] **OpenCode plugin** — `packages/opencode/` ships the same routing for
-  [OpenCode V2](opencode.md) (`retry`-hook classification, `switchModel`
-  advancement at the turn boundary, `/switchback` + `/switchback-unblock` +
-  `/switchback-disable` + `/switchback-enable`),
-  on the shared `switchback-core` package and shared block state. Pinned by
-  `tests/opencode-adapter.test.ts`; live-instance exercise still open
+  [OpenCode V2](opencode.md) on the shared `switchback-core` package and shared
+  block state: the chains are published as selector-visible `switchback/*`
+  models, and a delegating provider-package route dispatches each request to
+  the physical model the router picks, failing over inside the same request.
+  The TUI half adds real toasts and the `/switchback-config` menu; the GUI half
+  (`./gui-experimental`, a prebuilt Vite bundle) brings the same toasts and the
+  same menu to OpenCode Desktop over the app's own dialogs. Pinned by
+  `tests/opencode-*.test.ts`; live-instance exercise still open
   (`switchback-wix.10`).
 
 ## Release automation
@@ -52,7 +55,7 @@ authoritative; see [Versioning](versioning.md).
 
 ## Test layout
 
-**316** unit/integration tests across **21** files, plus **11 opt-in**
+**424** unit/integration tests across **27** files, plus **11 opt-in**
 live cases (10 live-classifier, 1 live DPAPI store) that skip unless
 their environment gates are set:
 
@@ -74,7 +77,12 @@ their environment gates are set:
 | `tests/state-migration.test.ts` | 5 | legacy `<cwd>/.pi/switchback.json` → new path migration |
 | `tests/systemone.test.ts` | 5 | switchback's own System One transport (hermetic; injected fetch) |
 | `tests/commands.test.ts` | 4 | the registered command surface and its snapshot |
-| `tests/opencode-adapter.test.ts` | 14 | the OpenCode plugin end to end (hermetic fake harness): quota block + advance, pre-blocked exhaustion, out-of-chain silence, no-classifier blind cycle, empty-message short-circuit, `secret:` resolution, `/switchback` + `/switchback-unblock`, and the manual disable list (`/switchback-disable`, refusal of an unlisted address, advance never onto a disabled model, `/switchback-enable ALL`, disabled marker) |
+| `tests/opencode-adapter.test.ts` | 15 | the OpenCode adapter end to end (hermetic fake harness): provider publication, quota block + in-request failover, pre-blocked exhaustion, out-of-chain silence, no-classifier blind cycle, empty-message short-circuit, `secret:` resolution, the status/unblock/pin commands, and the manual disable list |
+| `tests/opencode-config-command.test.ts` | 38 | the `/switchback-config` grammar: every verb against a real temp layer file, layer pinning and reset, the last-model guard, usage and loader-error text, and the RPC `state`/`config` round trip |
+| `tests/opencode-notices.test.ts` | 15 | the notice channel: transcript fallback with nothing attached, sink refcounting, a throwing sink, the RPC definition staying JSON Schema, and the `unknown`-wire readers dropping malformed payloads |
+| `tests/opencode-tui.test.ts` | 9 | the TUI half: attach/retry/detach lifecycle, notice → toast (with and without `sessionID`), the slash command, and an unreachable server |
+| `tests/opencode-tui-guide.test.ts` | 15 | the guided menu: every screen dispatching the layer-1 verb a typed command would, the scripted dialog flow, and cancel paths |
+| `tests/opencode-gui.test.ts` | 12 | the GUI half's host-free logic: the app's dialogs adapted to the guide's contract, notice severity → toast variant, attach-before-subscribe ordering, an unreachable server, and a rejected edit reported without losing the menu |
 | `tests/disabled.test.ts` | 7 | the manual disable store (`disabled.json`): missing file, idempotent disable with a stable stamp, no expiry, enable, clear-all count, hand-edited non-number rejection, atomic write |
 | `tests/thinking.test.ts` | 10 | reasoning-level categories, availability, and classifier resolution (hermetic) |
 | `tests/barrel.test.ts` | 2 | `packages/pi/src/index.ts` resolves and exposes the documented entry surface — nothing else loads it, so a bad re-export would otherwise ship |
@@ -173,7 +181,7 @@ Before considering any task done:
 
 ```bash
 npx tsc --noEmit    # strict + noUncheckedIndexedAccess + exactOptionalPropertyTypes
-npx vitest run      # 210 + 11 opt-in
+npx vitest run      # 412 + 11 opt-in
 ```
 
 Both must be clean. Do not report a milestone until both pass.

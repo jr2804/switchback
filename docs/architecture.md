@@ -5,14 +5,18 @@
 `packages/core/` is host-agnostic — it reaches the harness only through
 `packages/core/src/ports.ts` — and `packages/pi/` is the pi adapter (dispatch,
 classifier registration, the dialogue, the credential store) plus the barrel.
-`packages/opencode/` is the OpenCode V2 adapter, currently a skeleton. The three
-packages are npm workspaces with one lockfile and one version
+`packages/opencode/` is the OpenCode V2 adapter — a provider-architecture port
+of the same routing (see [OpenCode plugin](opencode.md)). The three packages are
+npm workspaces with one lockfile and one version
 (`docs/versioning.md`).
 
 | File | Role |
 |---|---|
 | `packages/pi/index.ts` | pi extension entry: registers one virtual model per config entry and eight commands (`/switchback`, `/switchback-config`, `/switchback-next`, `/switchback-blocked`, `/switchback-crashes`, `/switchback-annotate`, `/switchback-disable`, `/switchback-enable`). Live config reload on every route: edits to `switchback.yaml` are picked up without a restart; a broken layer emits one warning and the session keeps the last good config. |
-| `packages/opencode/src/index.ts` | OpenCode V2 plugin entry — **skeleton**: `setup()` registers a `/switchback` command that reports the configured chain. Routing is not implemented (the plan is `.agents/plans/opencode-support.md`). |
+| `packages/opencode/src/index.ts` | OpenCode V2 plugin entry (server half): publishes the configured chains as selector-visible `switchback/*` models of a synthetic provider, registers the `switchback` RPC and the ten `/switchback*` commands. |
+| `packages/opencode/src/route.ts` | The delegating provider-package route (`package: "opencode-switchback"` on every published model): dispatches each request to the physical model the router picked, classifies a failure, blocks it, and advances inside the same request. |
+| `packages/opencode/src/tui.ts` | OpenCode V2 TUI entry (`./tui`): turns the server's notices into toasts and serves `/switchback-config` as a guided menu over the server's own command grammar. |
+| `packages/opencode/src/gui.tsx` | OpenCode Desktop GUI entry (`./gui-experimental`, prebuilt to `dist/gui-experimental.cjs` by `vite.config.ts`): the same toasts over the app's own `toast` API and the same guided menu over its `dialogs`, registered as a `/switchback-config` command. Its host-free logic (dialog adaptation, variant mapping, attach ordering) is `gui-support.ts`, which is what the suite drives. |
 | `packages/core/src/index.ts` | The core package surface: the decision vocabulary, ports, routing, stores and classifier transport. Everything a host adapter needs is reachable from here. |
 | `packages/core/src/types.ts` | Shared type definitions (`SwitchbackConfig`, `SwitchbackState`, `ClassifiedError`, `Availability`, `ResolvedEntry`, `ResolvedFallbacks`). |
 | `packages/core/src/atomic-write.ts` | The one atomic file writer every store uses: write `<file>.<pid>.<seq>.tmp` in the destination directory, then rename it over the destination, retrying with a backoff (7 attempts, 10…320 ms) because Windows refuses the rename with `EPERM` while another process holds the destination — an indexer, an antivirus scanner, a second pi session. A fixed `<file>.tmp` made two writers fight over one staging file. Reports failure as `AtomicWriteError`; each store wraps it in its own error type. |

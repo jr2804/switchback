@@ -6,7 +6,20 @@
 | pi extension entry / virtual model + commands | `packages/pi/index.ts` |
 | Core package surface (`switchback-core`) | `packages/core/src/index.ts` |
 | pi package surface (`pi-switchback` barrel) | `packages/pi/src/index.ts` |
-| OpenCode V2 plugin (`retry` hook routing, `/switchback` + `/switchback-unblock`) | `packages/opencode/src/index.ts` |
+| OpenCode adapter (provider publication, RPC, commands) | `packages/opencode/src/index.ts` |
+| OpenCode TUI half (toast sink, `/switchback-config` slash command) | `packages/opencode/src/tui.ts` |
+| OpenCode GUI half (desktop bundle entry, toast sink, command) | `packages/opencode/src/gui.tsx` |
+| OpenCode GUI host-free logic (dialog adaptation, variants, attach order) | `packages/opencode/src/gui-support.ts` |
+| OpenCode GUI bundle build (Vite preset, `dist/gui-experimental.cjs`) | `packages/opencode/vite.config.ts` |
+| OpenCode guided config menu (client of the layer-1 grammar) | `packages/opencode/src/tui-guide.ts` |
+| `/switchback-config` grammar + its single writer | `packages/opencode/src/config-command.ts` |
+| OpenCode `unknown`-wire readers (notice, edit, guide state) | `packages/opencode/src/rpc.ts` |
+| OpenCode notice channel + sink refcount | `packages/opencode/src/notices.ts` |
+| Picker fuzzy matching (OpenCode TUI has no `fuzzyFilter`) | `packages/opencode/src/fuzzy.ts` |
+| OpenCode router↔route seam (bridge, `globalThis` symbol) | `packages/opencode/src/bridge.ts` |
+| OpenCode core `decide()` wiring, credentials, notifications | `packages/opencode/src/router.ts` |
+| OpenCode delegating route (physical dispatch, in-flight failover, realm localization) | `packages/opencode/src/route.ts` |
+| OpenCode chain → physical entry resolution | `packages/opencode/src/catalog.ts` |
 | Lint + format config (gts rules over repo house style) | `eslint.config.js` |
 | Formatter options (house style: tabs, 120 cols, double quotes) | `.prettierrc.json` |
 | tsconfig used for type-aware lint (covers `packages/` + `tests/`) | `tsconfig.eslint.json` |

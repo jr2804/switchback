@@ -116,10 +116,11 @@ relevant child AGENTS.md.
   that package (install-safe imports, account-scoped stores, typed errors, barrel
   discipline), the module table pointer (`.agents/FILES.md`), and the test-file
   `tsc` nuance.
-- `packages/opencode/AGENTS.md` — the OpenCode V2 plugin: turn-boundary routing
-  via the `retry` hook (classify → block → `ctx.session.switchModel`, flip
-  `decision` when exhausted), structural-host-shapes rule, verdict-or-nothing
-  rule, shared state with pi.
+- `packages/opencode/AGENTS.md` — the OpenCode V2 adapter: provider-architecture
+  routing (selector-visible `switchback/*` models + a delegating route that
+  fails over in-request), the two-entrypoint split (server half + TUI half),
+  the structural-host-shapes rule, the verdict-or-nothing rule, and shared state
+  with pi.
 - `tests/AGENTS.md` — vitest suites: hermetic-by-default temp
   `PI_CODING_AGENT_DIR`, mock-by-default / opt-in-live tests, synthetic
   values only, and the `tsc`-graph nuance for test files.

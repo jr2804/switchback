@@ -54,11 +54,11 @@ command output.
 - `npx vitest run` (full suite) before reporting a milestone; opt-in live
   tests are exercised separately when their path is under change
   (e.g. `SWITCHBACK_SECRETS_LIVE=1 npx vitest run tests/secrets.test.ts`).
-- **Graph nuance:** `tsconfig.json` includes `packages/**/*.ts`, not `tests/`,
-  so the `npx tsc --noEmit` gate does not type-check test files — vitest
-  transpiles them without checking. Keep them type-clean and verify with a
-  targeted `npx tsc --noEmit <files>` run when in doubt (same flags as
-  `packages/pi/AGENTS.md` → Verification).
+- **Graph nuance:** `tsconfig.json` includes `packages/**/*.ts` and
+  `packages/**/*.tsx`, not `tests/`, so the `npx tsc --noEmit` gate does not
+  type-check test files — vitest transpiles them without checking. Keep them
+  type-clean and verify with a targeted `npx tsc --noEmit <files>` run when in
+  doubt (same flags as `packages/pi/AGENTS.md` → Verification).
 
 ## Child DOX Index
 

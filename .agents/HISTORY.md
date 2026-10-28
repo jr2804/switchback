@@ -4,6 +4,40 @@ Durable decisions, recorded with git refs. Add new entries at the top.
 Routine history stays in `git log`; only decisions that changed the
 project's direction, contract, or policy belong here.
 
+## 2026-10-28 — OpenCode adapter rebuilt on provider architecture (retry hook abandoned)
+
+The OpenCode port shipped as an option-B plugin: it listened on the `retry` hook,
+classified the failure, blocked the model and called `ctx.session.switchModel`. It could
+not work. Two host facts killed it, both verified against the installed 2.1.x tree:
+
+- `SessionRunnerRetry.policy` runs OpenCode's own `ModelRetry.policy` **first** and only
+then the `retry` hook — the hook can shorten or veto a retry OpenCode already decided to
+schedule, never create one.
+- `isRetryable` in `@opencode/ai` never retries `QuotaExceeded` or `Authentication`. A
+quota-exhausted model is therefore never retried and the hook never fires. It also could
+not put anything in the selector, because a provider only exists in the catalog if a plugin
+publishes it via `ctx.provider.transform`.
+
+The adapter is now `packages/opencode/src/index.ts` (server half) publishing every
+configured chain as a selector-visible `switchback/*` model of a synthetic provider, with
+`route.ts` as the delegating provider-package route (`package: "opencode-switchback"`):
+it takes the physical model the router picked, dispatches the request, and on failure
+classifies, blocks and fails over **inside the same request** — the same shape as pi's
+`registerVirtualModel` route, so both hosts run one `decide()`.
+
+On top of that the port grew the surfaces pi parity needs: `/switchback-config` as
+argument-driven grammar in `config-command.ts` (usable from any client), a notice channel
+(`notices.ts` + `rpc.ts`) rather than `ctx.ui.notify`, the TUI half (`tui.ts`,
+`tui-guide.ts`) rendering notices as toasts and serving the guided menu, and the GUI half
+(`gui.tsx`, `gui-support.ts`, prebuilt to `dist/gui-experimental.cjs` by `vite.config.ts`)
+doing the same over OpenCode Desktop's own `toast`/`dialogs`/`Command` APIs. The bundle is
+a build artifact: `.gitignore` covers it and `prepack` rebuilds it on publish.
+
+`eslint.config.js` gained `**/dist/**` to its ignores — the bare `dist/**` only matched the
+repo root, so the built bundle was being linted as source (424 errors, 472 warnings).
+`tsconfig.eslint.json` gained `packages/**/*.tsx` so `gui.tsx` is type-aware linted; the
+`tsc --noEmit` gate already included it.
+
 ## 2026-10-09 — Nothing decides from historical error text (project rule 7, prompt v5)
 
 A captured corpus of provider error messages is a **test input, never a source of truth for

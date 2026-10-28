@@ -298,8 +298,8 @@ With `baseUrl` present, switchback registers the provider through pi-ai's
 `typesafe-system-one` transport, so a local SystemOne server needs no pi
 provider and no `models.json` entry. This is the only supported way to run pi
 against a local decision model. The OpenCode adapter has no host registry: it
-drives the same endpoint directly through the official `@typesafe-ai/sdk`
-(same wire protocol, same URL conventions).
+drives the same endpoint directly through `switchback-core`'s own SystemOne
+transport (`systemone.ts`, same wire protocol, same URL conventions).
 
 Several decision models may share one endpoint. They are registered together in
 a single provider declaration, because pi replaces a provider's whole model list
@@ -387,4 +387,4 @@ listing exposes names only.
 Under OpenCode there is no encrypted store (the host exposes no readable
 vault); the OpenCode plugin resolves the same `secret:<name>` references
 against environment variables instead — see
-[OpenCode → Secrets](opencode.md#differences-from-pi).
+[OpenCode → Secrets](opencode.md#configuration).

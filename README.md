@@ -90,6 +90,7 @@ automatically when they reappear. Full reference:
 
 - [Configuration](docs/configuration.md)
 - [Classifier — live validation + coverage matrix](docs/classifier.md)
+- [OpenCode plugin — the same routing for OpenCode V2](docs/opencode.md)
 - [License](docs/license.md)
 
 The full docs site (with the **Development** section for maintainers and

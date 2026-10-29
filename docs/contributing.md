@@ -13,7 +13,7 @@ Before considering any task done:
 ```bash
 npx tsc --noEmit      # strict + noUncheckedIndexedAccess + exactOptionalPropertyTypes
 mise run lint-ts      # gts (ESLint + Prettier check) — must report nothing
-npx vitest run        # 309 passing + 11 opt-in
+npx vitest run        # 420 passing + 11 opt-in
 ```
 
 All three must be clean. Do not report a milestone until all three pass.

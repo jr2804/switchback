@@ -49,12 +49,12 @@ the command reports and exits without prompting.
     pointed endpoint does not have to wait for a routing failure to reveal a
     wrong model id.
   - **API keys** are asked for only for a direct endpoint, and only as a value —
-    the store name is derived from the entry, because it is an internal detail
-    of `secret:<name>`. A catalog classifier gets its credential from pi.
-  derived from the decision-model name (`dm2-key`), so a single secret can
-  be re-keyed under the new name. Deleting an entry that is still referenced
-  by a model is refused; re-point those models first. Clearing a model's
-  decision model makes it report and cycle without a classifier.
+    the store name is derived from the decision-model name (`dm2-key`), because
+    it is an internal detail of `secret:<name>`, so a single secret can be
+    re-keyed under the new name. A catalog classifier gets its credential from
+    pi. Deleting an entry that is still referenced
+    by a model is refused; re-point those models first. Clearing a model's
+    decision model makes it report and cycle without a classifier.
 - **Classifier test** — after a decision model is saved (and from its menu
   later) switchback offers a **one-shot capability check**: a single SystemOne
   prompt carrying all three answer shapes a decision model must produce — a

@@ -26,7 +26,8 @@ Build steps 1–8 are complete (per the design doc):
   [Classifier → Coverage matrix](classifier.md#coverage-matrix)).
 - [x] **Step 5** — `route()` reason dispatch (`user` / `continuation` / `retry` / `direct`) per design doc.
 - [x] **Step 6** — Simulate fixture: `switchback.simulate.json` corpus + router tests + opt-in live integration test (no user-facing command).
-- [x] **Step 7** — Integration tests: **153 tests** covering all reasons, blind cycle, all five
+- [x] **Step 7** — Integration tests: the full suite (see [Test layout](#test-layout)
+  for the current counts) covering all reasons, blind cycle, all five
   no-classifier reasons, classifier-mocked quota / auth / transient / unknown, F2
   (`stopReason` short-circuit), session stickiness + forward failover walk, exhaustion,
   state persistence + migration, crash store
@@ -42,8 +43,8 @@ Build steps 1–8 are complete (per the design doc):
   The TUI half adds real toasts and the `/switchback-config` menu; the GUI half
   (`./gui-experimental`, a prebuilt Vite bundle) brings the same toasts and the
   same menu to OpenCode Desktop over the app's own dialogs. Pinned by
-  `tests/opencode-*.test.ts`; live-instance exercise still open
-  (`switchback-wix.10`).
+  `tests/opencode-*.test.ts`; live-instance exercise closed 2026-10-18
+  against OpenCode 2.0.32 (`switchback-wix.10`).
 
 ## Release automation
 
@@ -55,14 +56,14 @@ authoritative; see [Versioning](versioning.md).
 
 ## Test layout
 
-**417** unit/integration tests across **27** files, plus **11 opt-in**
+**420** unit/integration tests across **27** files, plus **11 opt-in**
 live cases (10 live-classifier, 1 live DPAPI store) that skip unless
 their environment gates are set:
 
 | File | Tests | Covers |
 |---|---|---|
 | `tests/router.test.ts` | 100 | routing, blind cycle, classifier-mocked verdicts, session stickiness, pin override, idle reset, context-window fit and the classifier's candidate choice, forward failover walk, catalog validity, exhaustion, thinking-level resolution, state, buildRoute, manual disables (walk skip, session stickiness, pin, exhaustion), and the unretried-failure fallback (`observeUnretriedFailure` blocks and the next turn walks forward) |
-| `tests/config.test.ts` | 28 | `DEFAULT_CONFIG`, `findModelConfig`, the one-file contract (pi's agent dir and `<cwd>/.pi` are ignored), YAML-only, classifier-field validation, orphan `decisionModels` rejection, reserved-provider rejection, debug flag |
+| `tests/config.test.ts` | 31 | `DEFAULT_CONFIG`, `findModelConfig`, the one-file contract (pi's agent dir and `<cwd>/.pi` are ignored), YAML-only, classifier-field validation, orphan `decisionModels` rejection, reserved-provider rejection, debug flag, duplicate-id tolerance (first entry wins, later repeats warned) |
 | `tests/dialogue.test.ts` | 30 | config editor: comment-preserving round-trip, the one-file contract, decision models, secret references; dialogue flows incl. the main menu, the searchable picker and the classifier test offer (scripted UI, hermetic) |
 | `tests/secrets.test.ts` | 23 (1 opt-in) | encrypted DPAPI store: round-trip, corruption quarantine, version refuse; live DPAPI gated on `SWITCHBACK_SECRETS_LIVE` |
 | `tests/crashes.test.ts` | 25 | crash store, dedup, Tier 2b cache, annotation, corrupt-file quarantine |
@@ -181,7 +182,7 @@ Before considering any task done:
 
 ```bash
 npx tsc --noEmit    # strict + noUncheckedIndexedAccess + exactOptionalPropertyTypes
-npx vitest run      # 417 + 11 opt-in
+npx vitest run      # 420 + 11 opt-in
 ```
 
 Both must be clean. Do not report a milestone until both pass.

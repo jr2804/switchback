@@ -183,7 +183,7 @@ sample AND we ran it through the Jev prompt and Jev gave the right answer."
 Until Jev is wired to a live deployment, the second column is "not validated"
 even where the first is "corpus present." What ships in the repo is a set of
 distinct error *shapes* preserved as scenarios in `switchback.simulate.json`
-(10 scenarios today), so a future live Jev run has ground truth to validate
+(11 scenarios today), so a future live Jev run has ground truth to validate
 against. The parenthetical counts in the Corpus column (e.g. `✓ (12+)`) are raw
 occurrences observed during the 2026-10-04 passive mining, not fixture entries;
 the same shape recurs many times.
@@ -230,7 +230,7 @@ class and scope questions are
 **LOCKED against 41** (the pre-probe baseline), and both later captures are
 **pending Jev validation**. The reset question was revised to a rubric in v2
 (see above); the corpus asserts classes, not reset windows. Only the distinct shapes survive in the repo as
-**10 scenarios** in `switchback.simulate.json`; the zai 401 probe and the
+**11 scenarios** in `switchback.simulate.json`; the zai 401 probe and the
 MiniMax capture are preserved verbatim and test-asserted, the rest of the raw
 corpus is not shipped. Jev validation
 status is `⏳` everywhere because TYPESAFE_API_KEY is not set. The router works

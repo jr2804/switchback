@@ -54,14 +54,14 @@ list contains only verified free models.
    model containing the verified free-model fallback list, sorted
    deterministically (alphabetical by provider, then by model name).
 
-   **Config location precedence** (all aggregated, lowest → highest):
-   1. `~/.config/switchback/switchback.yaml` — neutral basis (agent-agnostic)
-   2. `~/.pi/agent/switchback.yaml` — agent overlay (shared by pi and the
-      OpenCode plugin)
-   3. `<cwd>/.pi/switchback.yaml` — local override
-
-   Write to the highest-precedence location that already exists, or to
-   `~/.config/switchback/switchback.yaml` if none exist yet.
+   There is exactly **one** config file:
+   `~/.config/switchback/switchback.yaml` (relocate the whole directory with
+   the `SWITCHBACK_CONFIG_DIR` environment variable). pi copies such as
+   `~/.pi/agent/switchback.yaml` or `<cwd>/.pi/switchback.yaml` are ignored —
+   never write to them; if such a leftover exists, move its entries into the
+   shared file. The file must parse and validate on save — the loader throws
+   on a broken edit, and a repeated `id:` inside `models:` keeps only the
+   first entry and warns.
 
    A chain names its classifier by address in `decisionModel:` (for example
    `decisionModel: typesafe/jev-latest` or `decisionModel: ollama/tev1:0.8b`);

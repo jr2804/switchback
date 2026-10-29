@@ -1,5 +1,20 @@
 # opencode.ai (opencode, opencode-go)
 
+## Provider split
+
+One opencode.ai account (same API key / login) serves two distinct
+providers with dedicated — and possibly different — free-model sets:
+
+| Model prefix   | Service      | Billing       |
+| -------------- | ------------ | ------------- |
+| `opencode/`    | opencode-zen | pay-per-usage |
+| `opencode-go/` | opencode-go  | subscription  |
+
+The same free model name under both prefixes is **two different models**
+with separate free quotas — verify and add **both** entries to the
+`sb-free` chain. Their access rules differ; see
+"Access rules for free models" below.
+
 ## Check active
 
 ```bash
@@ -34,14 +49,15 @@ opencode.ai free models follow the `-free` suffix convention:
 | ------------------ | ------------------------------------------------------ |
 | `opencode/big-pickle` | No `-free` suffix but always free (observed 2026-10-23) |
 
-### Cross-client caveat
+### Access rules for free models
 
-Most `opencode/*` free models answer only from within the OpenCode app;
-other clients (pi, curl) get `403 FreeTierError`. Keep them in `sb-free` —
-the chain's primary host is OpenCode — but expect pi runs to classify, block,
-and cycle past them (the classifier-given resets observed in testing were
-minutes, not days). Some entries (e.g. `opencode/nemotron-3.5-lightning-free`)
-do answer externally; the gate is per model, not per provider.
+- `opencode-go/*` free models always require an active opencode-go
+  subscription, but they run in **any** agent — pi included.
+- `opencode/*` (opencode-zen) free models only work **inside OpenCode**,
+  not pi: other clients (pi, curl) get `403 FreeTierError`. Keep them in
+  `sb-free` — the chain's primary host is OpenCode — but expect pi runs
+  to classify, block, and cycle past them (the classifier-given resets
+  observed in testing were minutes, not days).
 
 ## Verification
 

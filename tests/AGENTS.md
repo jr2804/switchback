@@ -19,6 +19,12 @@ command output.
   `afterEach` (pattern: `tests/crashes.test.ts`, `tests/secrets.test.ts`);
   no test may read or write the real agent dir. Suites that never touch a
   store stay pure (no env redirect needed).
+  - **Anything touching the config file pins `SWITCHBACK_CONFIG_DIR`** into
+    the temp dir (pattern: `tests/config.test.ts`, `tests/opencode-config-command.test.ts`).
+    `USERPROFILE` alone is **not** a sandbox on Linux — `os.homedir()` reads
+    `$HOME` there — so a Windows-green suite can still hit the runner's real
+    `~/.config/switchback/switchback.yaml` in CI (the v2026.10.17/.18 publish
+    failures). Windows-only env vars may accompany, never replace, the pin.
 - **Deterministic by default, live by opt-in.** Mocked classifier/backend
   fixtures for the default path; a real end-to-end path exists only behind
   an env switch that skips otherwise (pattern: `SWITCHBACK_SECRETS_LIVE` in

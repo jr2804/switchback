@@ -11,7 +11,9 @@
  * Hermetic: PI_CODING_AGENT_DIR and cwd both move into a temp dir
  * (crashes.test.ts / dialogue.test.ts pattern), so the global and project
  * layers resolve inside the sandbox and the repository's own `.pi/` is never
- * touched. USERPROFILE redirection covers the Windows `~/.config` basis.
+ * touched. USERPROFILE redirection covers the Windows `~/.config` basis and
+ * SWITCHBACK_CONFIG_DIR pins the one config file into the sandbox on every
+ * platform (Linux `homedir()` reads `$HOME`, which USERPROFILE cannot reach).
  *
  * The suite drives the executor directly - no host context, no plugin setup -
  * which is the whole point of the module's structural `ConfigCommandSink`.
@@ -29,15 +31,18 @@ let tmpDir: string;
 let originalCwd: string;
 let originalAgentDir: string | undefined;
 let originalUserProfile: string | undefined;
+let originalConfigDir: string | undefined;
 
 beforeEach(() => {
 	originalCwd = process.cwd();
 	originalAgentDir = process.env["PI_CODING_AGENT_DIR"];
 	originalUserProfile = process.env["USERPROFILE"];
+	originalConfigDir = process.env["SWITCHBACK_CONFIG_DIR"];
 	tmpDir = join(tmpdir(), `switchback-config-cmd-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(tmpDir, { recursive: true });
 	process.env["PI_CODING_AGENT_DIR"] = join(tmpDir, "agent");
 	process.env["USERPROFILE"] = join(tmpDir, "home");
+	process.env["SWITCHBACK_CONFIG_DIR"] = join(tmpDir, "config");
 	mkdirSync(join(tmpDir, "agent"), { recursive: true });
 	mkdirSync(join(tmpDir, "home"), { recursive: true });
 	process.chdir(tmpDir);
@@ -49,6 +54,8 @@ afterEach(() => {
 	else process.env["PI_CODING_AGENT_DIR"] = originalAgentDir;
 	if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
 	else process.env["USERPROFILE"] = originalUserProfile;
+	if (originalConfigDir === undefined) delete process.env["SWITCHBACK_CONFIG_DIR"];
+	else process.env["SWITCHBACK_CONFIG_DIR"] = originalConfigDir;
 	rmSync(tmpDir, { recursive: true, force: true });
 });
 

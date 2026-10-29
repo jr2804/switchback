@@ -13,6 +13,7 @@ import type { Plugin } from "@opencode/plugin";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import type { ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 import {
+	createConfigWarningReporter,
 	decide,
 	effectiveIds,
 	findModelConfig,
@@ -37,6 +38,9 @@ import { publishNotice } from "./notices.ts";
 /** `secret:<name>` refs resolve against the environment (no readable vault). */
 const envSecrets: SecretResolver = { get: (name) => process.env[name] };
 
+/** Warns once per distinct loader finding; this module reads per request. */
+const reportConfigWarnings = createConfigWarningReporter();
+
 /** How long a resolved credential/provider-settings pair is reused. */
 const ENTRY_TTL_MS = 60_000;
 
@@ -60,6 +64,7 @@ export function createRouter(options: RouterOptions): SwitchbackBridge {
 		try {
 			const loaded = loadConfig(envSecrets);
 			configNotified = false;
+			reportConfigWarnings(loaded.warnings, (message) => notifyAll(message));
 			return loaded.config;
 		} catch (error) {
 			if (!configNotified) {

@@ -92,6 +92,7 @@ export {
 	resolveDecisionModel,
 	resolveSecretApiKey,
 	validateFileConfig,
+	createConfigWarningReporter,
 } from "./config.ts";
 export type { SwitchbackConfig, SwitchbackFileConfig, DecisionModelConfig, SecretResolver } from "./config.ts";
 export type {

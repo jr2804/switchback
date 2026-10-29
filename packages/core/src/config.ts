@@ -406,19 +406,28 @@ function parseFileConfig(value: unknown, path: string, warnings: string[]): Swit
 	if (!Array.isArray(models) || models.length === 0) {
 		throw new ConfigError("models must be a non-empty array", path);
 	}
-	const parsed = models.map((entry, i) => parseSwitchbackModel(entry, i, warnings));
+	const parsedAll = models.map((entry, i) => parseSwitchbackModel(entry, i, warnings));
 	// Any set of virtual model ids is valid - `switchback/auto` is the conventional
 	// first entry, not a requirement. An unknown virtual id is already surfaced by
 	// findModelConfig() at extension load, and index.ts registers one virtual model
-	// per configured entry. A duplicated id WITHIN the file is rejected here:
-	// may legitimately override each other, but one file must not contradict itself.
-	const seen = new Set<string>();
-	for (const entry of parsed) {
-		if (seen.has(entry.id)) {
-			throw new ConfigError(`models contains the id "${entry.id}" more than once`, path);
+	// per configured entry. A repeated id WITHIN the file keeps the FIRST entry and
+	// drops the later ones with a warning: a duplicated chain (a stale editor
+	// write, a hand merge) must not take the whole extension down. Each host shows
+	// the warning through its own channel (createConfigWarningReporter), and the
+	// message names both positions so the extra entry is easy to remove.
+	const parsed: SwitchbackConfig[] = [];
+	const firstIndex = new Map<string, number>();
+	parsedAll.forEach((entry, i) => {
+		const first = firstIndex.get(entry.id);
+		if (first === undefined) {
+			firstIndex.set(entry.id, i);
+			parsed.push(entry);
+		} else {
+			warnings.push(
+				`models[${i}] repeats the id "${entry.id}" (first defined at models[${first}]); the later entry was ignored`,
+			);
 		}
-		seen.add(entry.id);
-	}
+	});
 	const rawDebug = value["debug"];
 	if (rawDebug !== undefined && typeof rawDebug !== "boolean") {
 		throw new ConfigError("debug must be a boolean", path);
@@ -504,6 +513,27 @@ export function loadConfig(secrets?: SecretResolver): {
 	const warnings: string[] = [];
 	const parsed = readAndParse(path, warnings);
 	return { config: resolveFile(parsed, secrets), source: resolve(path), warnings };
+}
+
+/**
+ * A deduplicating sink for the loader's `warnings`. Both hosts reload the config
+ * frequently (pi on every route, OpenCode on every provider transform), so a
+ * finding must not repeat per load: the reporter emits a warning set once and
+ * stays silent until the set changes. An empty set re-arms the reporter, so a
+ * warning that returns after a config fix is shown again.
+ */
+export function createConfigWarningReporter(): (warnings: readonly string[], emit: (message: string) => void) => void {
+	let shown: string | undefined;
+	return (warnings, emit) => {
+		if (warnings.length === 0) {
+			shown = undefined;
+			return;
+		}
+		const key = warnings.join("\n");
+		if (key === shown) return;
+		shown = key;
+		emit(`switchback config: ${warnings.join("; ")}`);
+	};
 }
 
 /**

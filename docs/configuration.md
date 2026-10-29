@@ -51,6 +51,15 @@ installs); the file name stays `switchback.yaml`. A file that exists but fails
 to parse or validate throws immediately — it is surfaced, never silently
 ignored in favour of the built-in default.
 
+A repeated `id:` inside `models:` is tolerated instead of fatal: the **first**
+entry wins, every later duplicate is dropped, and both hosts print a warning
+naming both positions (`models[3] repeats the id "switchback/auto" (first
+defined at models[0]); the later entry was ignored`). A duplicated chain — a
+stale editor write, a hand merge — used to take the whole extension down; now
+the file still loads and the warning tells you what to remove. The
+[configuration dialogue](configuration-dialogue.md) still refuses to *create* a
+duplicate, so the dialogue never reintroduces the problem.
+
 The repo ships only `switchback.yaml.example` as the template. Copy it to the
 path above. `/switchback-config` (in both hosts) edits that same file and shows
 its path before anything else, so an edit never lands somewhere unexpected (see

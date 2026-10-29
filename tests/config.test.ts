@@ -128,6 +128,52 @@ describe("loadConfig - one file, no layers", () => {
 	});
 });
 
+describe("loadConfig - duplicate model ids", () => {
+	it("keeps the first entry and warns instead of failing", () => {
+		writeConfig(`models:
+  - id: switchback/auto
+    name: first
+    fallbacks: ["zai/glm-5.3"]
+  - id: switchback/auto
+    name: second
+    fallbacks: ["ollama/tev1:0.8b"]
+`);
+		const { config, warnings } = loadConfig();
+		expect(config.models).toHaveLength(1);
+		expect(config.models[0]?.name).toBe("first");
+		expect(config.models[0]?.fallbacks).toEqual(["zai/glm-5.3"]);
+		expect(warnings.join("\n")).toMatch(/models\[1\] repeats the id "switchback\/auto"/);
+		expect(warnings.join("\n")).toMatch(/first defined at models\[0\]/);
+	});
+
+	it("compares normalized ids, so a bare id collides with its full form", () => {
+		writeConfig(`models:
+  - id: auto
+    name: first
+    fallbacks: ["zai/glm-5.3"]
+  - id: switchback/auto
+    name: second
+    fallbacks: ["ollama/tev1:0.8b"]
+`);
+		const { config, warnings } = loadConfig();
+		expect(config.models).toHaveLength(1);
+		expect(warnings.join("\n")).toMatch(/repeats the id "switchback\/auto"/);
+	});
+
+	it("findModelConfig resolves the surviving first entry", () => {
+		writeConfig(`models:
+  - id: switchback/auto
+    name: first
+    fallbacks: ["zai/glm-5.3"]
+  - id: switchback/auto
+    name: second
+    fallbacks: ["ollama/tev1:0.8b"]
+`);
+		const { config } = loadConfig();
+		expect(findModelConfig(config, "switchback/auto").name).toBe("first");
+	});
+});
+
 describe("loadConfig - yaml-only lookup (no JSON user config)", () => {
 	it("does not consider a switchback.json sibling", () => {
 		// User config is YAML only; a .json file next to it is not a candidate.
@@ -229,7 +275,7 @@ describe("loadConfig - debug flag", () => {
 		expect(() => loadConfig()).toThrow(/debug must be a boolean/);
 	});
 
-	it("the project layer's debug flag wins over the global layer's", () => {
+	it("ignores the pi agent overlay's debug flag (one file, no layers)", () => {
 		writeWith('debug: false\nmodels:\n  - id: switchback/auto\n    name: A\n    fallbacks: ["zai/glm-5.3"]\n');
 		mkdirSync(join(tmpDir, "agent"), { recursive: true });
 		process.env["PI_CODING_AGENT_DIR"] = join(tmpDir, "agent");

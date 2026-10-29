@@ -302,9 +302,10 @@ describe("/switchback-config: reset", () => {
 });
 
 describe("/switchback-config: failure handling", () => {
-	it("reports an invalid saved state with the loader's own message", () => {
+	it("tolerates a hand-edited duplicate id: the verb lands, the loader keeps the first entry", () => {
 		// A duplicate id is structurally undetectable at add time only when the
-		// file was hand-edited; the save gate still catches it.
+		// file was hand-edited; the loader tolerates it (first entry wins, warning
+		// instead of failure), so the command no longer hard-fails either.
 		mkdirSync(dirname(configFilePath()), { recursive: true });
 		writeFileSync(
 			configFilePath(),
@@ -321,8 +322,13 @@ describe("/switchback-config: failure handling", () => {
 			"utf8",
 		);
 		const text = run("debug on");
-		expect(text).toContain("switchback/auto");
-		expect(text).toContain("more than once");
+		expect(text).not.toContain("more than once");
+		expect(configYaml().debug).toBe(true);
+		// First entry wins on the next load; the duplicate stays a warning.
+		const { config, warnings } = loadConfig({ get: () => undefined });
+		expect(config.models).toHaveLength(1);
+		expect(config.models[0]?.name).toBe("Auto");
+		expect(warnings.join("\n")).toMatch(/repeats the id "switchback\/auto"/);
 	});
 
 	it("reports an unreadable file instead of editing it", () => {

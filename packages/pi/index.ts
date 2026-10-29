@@ -13,12 +13,12 @@
  *
  * Usage: pi -e ./packages/pi/index.ts --model switchback/auto
  *
- * Configuration: the user config is aggregated from two YAML layers
- * (`<cwd>/.pi/switchback.yaml` on top of `~/.pi/agent/switchback.yaml`), each entry
- * a virtual model. Bare ids (`auto`) are normalized to the provider prefix
- * (`switchback/auto`). Edits to the file are picked up on the next request: the
- * router reloads the config per route, surfaces a warning when a reload fails, and
- * falls back to the last good config so a broken edit never kills the session.
+ * Configuration: one shared YAML file (`~/.config/switchback/switchback.yaml`,
+ * overridable with SWITCHBACK_CONFIG_DIR), each entry a virtual model. Bare ids
+ * (`auto`) are normalized to the provider prefix (`switchback/auto`). Edits to
+ * the file are picked up on the next request: the router reloads the config per
+ * route, surfaces a warning when a reload fails (or when the loader reports one),
+ * and falls back to the last good config so a broken edit never kills the session.
  *
  * The full design lives in the design doc (see the project's task notes for the
  * canonical reference).
@@ -27,7 +27,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resolveFallbacks } from "switchback-core/availability.ts";
 import type { AvailabilityPort, NotifyPort } from "switchback-core/ports.ts";
-import { SWITCHBACK_PROVIDER, findModelConfig, loadConfig } from "switchback-core/config.ts";
+import {
+	SWITCHBACK_PROVIDER,
+	createConfigWarningReporter,
+	findModelConfig,
+	loadConfig,
+} from "switchback-core/config.ts";
 import { runDialogue } from "./src/dialogue.ts";
 import { createSecretStore } from "./src/secrets.ts";
 import { buildRoute, ConfigInvalidError } from "./src/build-route.ts";
@@ -126,6 +131,7 @@ export default function (pi: ExtensionAPI) {
 					const reloaded = loadConfig(secrets);
 					lastGoodConfig = reloaded.config;
 					activeConfig = reloaded.config;
+					reportConfigWarnings(reloaded.warnings, (message) => notify(message, "warning"));
 				} catch (error) {
 					notify(
 						`switchback config reload failed (using last good): ${error instanceof Error ? error.message : String(error)}`,
@@ -373,7 +379,7 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	// `/switchback-config` - interactive editor for the switchback.yaml layers:
+	// `/switchback-config` - interactive editor for the shared switchback.yaml:
 	// virtual models, fallback order, decision models, encrypted API-key secrets
 	// and the debug flag. Each action is validated through the loader's single
 	// gate (`validateFileConfig`) and saved immediately, so the
@@ -689,6 +695,9 @@ function debugFlag(value: string | undefined): boolean | undefined {
  * Load the config; surfaces a no-config warning when no file is found rather than
  * throwing (commands run at any time, not just during routing).
  */
+/** One reporter per process: warns once per distinct warning set, on any channel. */
+const reportConfigWarnings = createConfigWarningReporter();
+
 function safeLoad(
 	pi: ExtensionAPI,
 	secrets?: { get(name: string): string | undefined },
@@ -697,7 +706,12 @@ function safeLoad(
 	source: string;
 } {
 	try {
-		return loadConfig(secrets);
+		const loaded = loadConfig(secrets);
+		// Suspicions the loader accepted with a warning (unknown keys, repeated
+		// model ids, ...) instead of failing. Deduplicated by the reporter so the
+		// hot reload path does not repeat the same finding per request.
+		reportConfigWarnings(loaded.warnings, (message) => console.warn(message));
+		return loaded;
 	} catch (error) {
 		const message =
 			error instanceof ConfigInvalidError

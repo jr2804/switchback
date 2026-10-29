@@ -35,6 +35,7 @@ import {
 	isDisabled,
 	isValidAnnotationClass,
 	configFilePath,
+	createConfigWarningReporter,
 	loadConfig,
 	readBlockedMap,
 	readCrashMap,
@@ -67,6 +68,9 @@ export const SWITCHBACK_PROVIDER_ID = "switchback";
 const envSecrets: SecretResolver = {
 	get: (name) => process.env[name],
 };
+
+/** Warns once per distinct loader finding; shared by every read in this module. */
+const reportConfigWarnings = createConfigWarningReporter();
 
 export default Plugin.define({
 	id: "switchback",
@@ -280,7 +284,9 @@ export default Plugin.define({
 /** Read the shared config; a failure is reported lazily by the router. */
 function readConfigOr(fallback: ResolvedSwitchbackFileConfig | undefined): ResolvedSwitchbackFileConfig | undefined {
 	try {
-		return loadConfig(envSecrets).config;
+		const loaded = loadConfig(envSecrets);
+		reportConfigWarnings(loaded.warnings, (message) => console.warn(message));
+		return loaded.config;
 	} catch {
 		return fallback;
 	}
@@ -289,7 +295,9 @@ function readConfigOr(fallback: ResolvedSwitchbackFileConfig | undefined): Resol
 /** Read the shared config once per command; on a config failure the notice is fan-out-safe. */
 function readConfig(ctx: Plugin.Context, sessionID: string): ResolvedSwitchbackFileConfig | undefined {
 	try {
-		return loadConfig(envSecrets).config;
+		const loaded = loadConfig(envSecrets);
+		reportConfigWarnings(loaded.warnings, (message) => notify(ctx, sessionID, message));
+		return loaded.config;
 	} catch (error) {
 		notify(
 			ctx,

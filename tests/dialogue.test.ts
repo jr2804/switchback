@@ -20,7 +20,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -427,7 +427,7 @@ describe("dialogue", () => {
 		seed(SAMPLE);
 		const store = new FakeSecretStore();
 		const ui = new ScriptedUi({
-			select: ["Decision models (1)...", "Add decision model...", "New secret...", "Back", "Done"],
+			select: ["Decision model overrides (1)...", "Add decision model...", "New secret...", "Back", "Done"],
 			// Wizard order (a declared endpoint): provider, baseUrl, modelId, the apiKey
 			// value, then the address LAST (prefilled provider/modelId).
 			input: [
@@ -453,7 +453,7 @@ describe("dialogue", () => {
 		seed(SAMPLE);
 		const ui = new ScriptedUi({
 			select: [
-				"Decision models (1)...",
+				"Decision model overrides (1)...",
 				"ollama/tev1 - direct: http://localhost:11434/v1",
 				"Delete",
 				undefined,
@@ -578,7 +578,7 @@ describe("dialogue: catalog-assisted setup", () => {
 			// pi holds the credential, so switchback neither asks for one nor writes a
 			// secret reference.
 			select: [
-				"Decision models (1)...",
+				"Decision model overrides (1)...",
 				"Add decision model...",
 				CATALOG_PROVIDER.label,
 				"jev-latest",
@@ -623,7 +623,7 @@ describe("dialogue: catalog-assisted setup", () => {
 				// provider ("Other"), provider id, baseUrl, modelId (live list),
 				// apiKey action, apiKey value, address LAST (prefilled).
 				select: [
-					"Decision models (1)...",
+					"Decision model overrides (1)...",
 					"Add decision model...",
 					"Other (type a provider id)...",
 					"tev1:0.8b",
@@ -656,7 +656,7 @@ describe("dialogue: catalog-assisted setup", () => {
 				// Wizard order: provider, model id (from the catalog list), apiKey
 				// action "(no API key)", baseUrl (Enter = keep pi's catalog), name LAST.
 				select: [
-					"Decision models (1)...",
+					"Decision model overrides (1)...",
 					"Add decision model...",
 					CATALOG_PROVIDER.label,
 					"jev-1.13",
@@ -671,6 +671,187 @@ describe("dialogue: catalog-assisted setup", () => {
 		);
 		const entry = readConfigFile(load()).decisionModels?.["typesafe/jev-1.13"];
 		expect(entry?.baseUrl).toBeUndefined();
+	});
+});
+
+describe("dialogue: decision providers and per-model pick", () => {
+	// The registry-reported provider for the per-model picker test.
+	const CATALOG: ClassifierProviderOption = {
+		provider: "typesafe",
+		label: "typesafe — TypeSafe",
+		displayName: "TypeSafe",
+		baseUrl: "https://api.typesafe.ai/v1/",
+		api: "typesafe-system-one",
+		models: ["jev-latest"],
+		local: false,
+		chatModels: 0,
+	};
+
+	const probeResult = (ok: boolean): ProbeResult => ({
+		ok,
+		answers: ok ? { choice: "sunny", score: 1, noul: true } : { score: 1 },
+		missing: ok ? [] : ["choice", "noul"],
+		ms: 42,
+	});
+
+	it("sets a decision model from the catalog and probes it right there", async () => {
+		seed(SAMPLE);
+		const probed: DecisionModelConfig[] = [];
+		await run(
+			new ScriptedUi({
+				select: [
+					MODEL_LABEL,
+					"Decision model: decision model ollama/tev1",
+					"typesafe/jev-latest - from the classifier catalog",
+					"Back",
+					"Done",
+				],
+				confirm: [true],
+			}),
+			undefined,
+			{
+				classifierProviders: [CATALOG],
+				probeClassifier: async (jev) => {
+						probed.push(jev);
+						return probeResult(true);
+					},
+			},
+		);
+		// The set is a plain address; pi resolves the endpoint from its catalog.
+		expect(readConfigFile(load()).models[0]?.decisionModel).toBe("typesafe/jev-latest");
+		expect(probed).toEqual([{ provider: "typesafe", id: "jev-latest" }]);
+	});
+
+	it("creates a provider entry when a virtual model adopts a new decision model", async () => {
+		seed(SAMPLE);
+		const probed: DecisionModelConfig[] = [];
+		// The endpoint is unknown to pi, so the model ids come from the server.
+		vi.stubGlobal("fetch", async () => ({
+			ok: true,
+			status: 200,
+			json: async () => ({ models: [{ name: "tev9", capabilities: ["decision", "completion"] }] }),
+		}));
+		try {
+			await run(
+				new ScriptedUi({
+					// provider (typed), baseUrl, apiKey action, model id (live list), then back out.
+					select: [
+						MODEL_LABEL,
+						"Decision model: decision model ollama/tev1",
+						"New decision model...",
+						"(no API key - local endpoint)",
+						"tev9",
+						"Back",
+						"Done",
+					],
+					input: ["gpu-ollama", "http://gpu:11434/v1"],
+					confirm: [true],
+				}),
+				undefined,
+				{
+						probeClassifier: async (jev) => {
+							probed.push(jev);
+							return probeResult(true);
+						},
+					},
+			);
+			const config = readConfigFile(load());
+			expect(config.models[0]?.decisionModel).toBe("gpu-ollama/tev9");
+			// The connection belongs to the provider, not the address: a second model
+			// on the same endpoint would need no further entry.
+			expect(config.decisionProviders?.["gpu-ollama"]).toEqual({
+				baseUrl: "http://gpu:11434/v1",
+				apiKey: "local",
+			});
+			expect(config.decisionModels?.["gpu-ollama/tev9"]).toBeUndefined();
+			expect(probed).toEqual([
+					{ provider: "gpu-ollama", id: "tev9", baseUrl: "http://gpu:11434/v1", apiKey: "local" },
+			]);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("keeps the old decision model when saving the new provider entry fails", async () => {
+		// The provider entry is the thing the wizard writes; if THAT save fails the
+		// adoption must stop - a follow-up save of the address alone would point the
+		// chain at a provider connection that just vanished with the revert.
+		seed(SAMPLE);
+		chmodSync(configPath(), 0o444);
+		try {
+			vi.stubGlobal("fetch", async () => ({
+				ok: true,
+				status: 200,
+				json: async () => ({ models: [{ name: "tev9", capabilities: ["decision", "completion"] }] }),
+			}));
+			const ui = new ScriptedUi({
+				select: [
+					MODEL_LABEL,
+					"Decision model: decision model ollama/tev1",
+					"New decision model...",
+					"(no API key - local endpoint)",
+					"tev9",
+					"Back",
+					"Back",
+					"Done",
+				],
+				input: ["gpu-ollama", "http://gpu:11434/v1"],
+			});
+			try {
+				await run(ui);
+			} finally {
+				vi.unstubAllGlobals();
+			}
+			expect(ui.notifications.some((n) => n.message.includes("not saved"))).toBe(true);
+			const config = readConfigFile(load());
+			expect(config.models[0]?.decisionModel).toBe("ollama/tev1");
+			expect(config.decisionProviders).toBeUndefined();
+		} finally {
+			chmodSync(configPath(), 0o666);
+		}
+	});
+
+	it("adds a decision provider from the main menu", async () => {
+		seed(SAMPLE);
+		await run(
+			new ScriptedUi({
+				select: [
+					"Decision providers (0)...",
+					"Add provider...",
+					"(no API key - local endpoint)",
+					"Back",
+					"Done",
+				],
+				input: ["ollama", "http://localhost:11434/v1"],
+			}),
+		);
+		expect(readConfigFile(load()).decisionProviders?.["ollama"]).toEqual({
+			baseUrl: "http://localhost:11434/v1",
+			apiKey: "local",
+		});
+	});
+
+	it("edits and deletes a provider entry, reporting who still uses it", async () => {
+		seed(
+			`${SAMPLE}decisionProviders:\n  gpu-ollama:\n    baseUrl: http://gpu:11434/v1\n    apiKey: local\n`,
+		);
+		const ui = new ScriptedUi({
+			select: [
+					"Decision providers (1)...",
+					"gpu-ollama - direct: http://gpu:11434/v1 (unused)",
+					"Edit connection (baseUrl, apiKey)",
+					"(no API key - local endpoint)",
+					"gpu-ollama - direct: http://gpu:11434/v1 (unused)",
+					"Delete",
+					"Back",
+					"Done",
+				],
+			input: ["http://gpu2:11434/v1"],
+			confirm: [true],
+		});
+		await run(ui);
+		expect(ui.notifications.some((n) => n.message.includes("provider gpu-ollama updated"))).toBe(true);
+		expect(readConfigFile(load()).decisionProviders).toBeUndefined();
 	});
 });
 

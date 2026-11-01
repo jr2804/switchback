@@ -12,11 +12,11 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { findUnresolvedDecisionModels } from "../packages/pi/src/decision-model-check.ts";
 import {
-	findUnresolvedDecisionModels,
-	referencedDecisionModels,
-	splitClassifierAddress,
-} from "../packages/pi/src/decision-model-check.ts";
+	referencedDecisionModelAddresses,
+	splitDecisionModelAddress,
+} from "../packages/core/src/classifier-connection.ts";
 import { resolveDecisionModel } from "../packages/core/src/config.ts";
 import type { ClassifierPort, HostModel } from "../packages/core/src/ports.ts";
 import type { ResolvedSwitchbackFileConfig } from "../packages/core/src/types.ts";
@@ -51,20 +51,20 @@ function configWith(...decisionModels: (string | undefined)[]): ResolvedSwitchba
 
 describe("decision-model check: address handling", () => {
 	it("splits provider/id and rejects malformed addresses", () => {
-		expect(splitClassifierAddress("typesafe/jev-latest")).toEqual({ provider: "typesafe", id: "jev-latest" });
-		expect(splitClassifierAddress("ollama/tev1:0.8b")).toEqual({ provider: "ollama", id: "tev1:0.8b" });
-		expect(splitClassifierAddress("noid")).toBeUndefined();
-		expect(splitClassifierAddress("/leading")).toBeUndefined();
-		expect(splitClassifierAddress("trailing/")).toBeUndefined();
+		expect(splitDecisionModelAddress("typesafe/jev-latest")).toEqual({ provider: "typesafe", id: "jev-latest" });
+		expect(splitDecisionModelAddress("ollama/tev1:0.8b")).toEqual({ provider: "ollama", id: "tev1:0.8b" });
+		expect(splitDecisionModelAddress("noid")).toBeUndefined();
+		expect(splitDecisionModelAddress("/leading")).toBeUndefined();
+		expect(splitDecisionModelAddress("trailing/")).toBeUndefined();
 	});
 
 	it("collects the referenced addresses, de-duplicated", () => {
 		const config = configWith("typesafe/jev-latest", "ollama/tev1", "typesafe/jev-latest");
-		expect(referencedDecisionModels(config)).toEqual(["typesafe/jev-latest", "ollama/tev1"]);
+		expect(referencedDecisionModelAddresses(config)).toEqual(["typesafe/jev-latest", "ollama/tev1"]);
 	});
 
 	it("returns nothing when no model references a decision model", () => {
-		expect(referencedDecisionModels(configWith(undefined, undefined))).toEqual([]);
+		expect(referencedDecisionModelAddresses(configWith(undefined, undefined))).toEqual([]);
 	});
 });
 
@@ -99,6 +99,32 @@ describe("decision-model check: resolution", () => {
 		const warnings = findUnresolvedDecisionModels(registryWith([]), configWith("noid"));
 		expect(warnings).toHaveLength(1);
 		expect(warnings[0]).toContain("malformed");
+	});
+
+	it("skips an address that carries connection details - it resolves itself", () => {
+		// A direct endpoint (own entry or provider section) publishes no model list,
+		// so the registry has nothing to say about it. The empty registry below would
+		// otherwise flag both addresses as missing.
+		const config = {
+			...configWith("gpu-ollama/tev9", "typesafe/jev-latest"),
+			decisionModels: { "gpu-ollama/tev9": { baseUrl: "http://gpu:11434/v1" } },
+			decisionProviders: { typesafe: { baseUrl: "https://api.typesafe.ai/v1/" } },
+		} as unknown as ResolvedSwitchbackFileConfig;
+		expect(findUnresolvedDecisionModels(registryWith([]), config)).toEqual([]);
+	});
+
+	it("treats an empty override as shadowing the provider entry (whole-entry precedence)", () => {
+		// `decisionModels: {"gpu-ollama/tev9": {}}` is not "fall through to the
+		// provider" - the override replaces the entry entirely, so the address is
+		// catalog-resolved again and the registry check DOES apply to it.
+		const config = {
+			...configWith("gpu-ollama/tev9"),
+			decisionModels: { "gpu-ollama/tev9": {} },
+			decisionProviders: { "gpu-ollama": { baseUrl: "http://gpu:11434/v1" } },
+		} as unknown as ResolvedSwitchbackFileConfig;
+		const warnings = findUnresolvedDecisionModels(registryWith([]), config);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain('"gpu-ollama/tev9" was not found');
 	});
 
 	it("keeps the address resolvable when the decisionModels map has no such entry (the integration seam)", () => {

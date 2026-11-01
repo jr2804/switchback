@@ -23,23 +23,46 @@ the command reports and exits without prompting.
   the ones already in the list are flagged `in the list`. Typing a complete
   `provider/id` and pressing `Enter` accepts it verbatim, which is how a model
   outside the catalog is added. At least one fallback is required.
-- **Decision models** — the reusable `decisionModels:` entries: add, edit
-  fields, rename (references in `models[].decisionModel` are rewritten in the same step),
-  delete. **The provider list is pi's own**: every provider the model registry
-  reports that ships at least one classifier model, with the registry's display
-  name, base URL and model ids. Switchback names no provider, no URL and no model
-  id itself, so whatever `/login` (or a provider's environment variable) made
-  available shows up here — that is the whole auth story for a catalog
-  classifier. `Other (type a provider id)...` is the escape hatch for an endpoint
-  pi does not know; the wizard then asks for its base URL, because there is no
-  catalog entry to prefill from.
+- **Decision model (per virtual model)** — a picker over every classifier
+  pi's registry knows, every address the config already names (labelled with
+  where each gets its endpoint: `direct`, `via <provider>` or
+  `from the classifier catalog`), plus `(none - report and cycle)` and
+  **New decision model...**, which runs the provider wizard below and writes a
+  `decisionProviders:` entry for the endpoint. After a set, the dialogue
+  offers the classifier test right there — the point of changing a decision
+  model interactively is proving it answers.
+- **Decision providers** — the reusable `decisionProviders:` entries (one
+  endpoint + credential per provider, serving every decision model of that
+  provider): add, edit connection, delete. Labels show the endpoint and how many
+  models use the provider. Deleting one (and clearing its connection in the
+  wizard with `-`) leaves the chain addresses and any per-address overrides
+  alone — every address of that provider goes back to catalog resolution.
+- **Decision model overrides** — the per-address `decisionModels:` entries: add,
+  edit connection, rename (references in `models[].decisionModel` are rewritten
+  in the same step), delete. An override replaces the provider entry as a
+  whole: one that carries a `baseUrl` beats it, an empty one deliberately
+  ignores it (that one address stays catalog-resolved). Deleting an entry
+  that is still referenced by a model is refused; re-point those models first.
+  Clearing a model's decision model makes it report and cycle without a
+  classifier. A secret entered here is stored under a name derived from the
+  *address* (`ollama-tev1-key`), just like the provider wizard derives it from
+  the provider name.
+- **The provider wizard** (shared by both menus) — **the provider list is
+  pi's own**: every provider the model registry reports that ships at least one
+  classifier model, with the registry's display name, base URL and model ids.
+  Switchback names no provider, no URL and no model id itself, so whatever
+  `/login` (or a provider's environment variable) made available shows up here —
+  that is the whole auth story for a catalog classifier.
+  `Other (type a provider id)...` is the escape hatch for an endpoint pi does
+  not know; the wizard then asks for its base URL, because there is no catalog
+  entry to prefill from.
   - **Base URL** — for a provider from pi's catalog the config normally carries
     **no** `baseUrl` at all (`Enter` keeps that): pi resolves the endpoint, the
     wire API and the credential. Typing one is an explicit override, and the
     wizard refuses it when pi already serves chat models under that provider id,
-    because registering a classifier there would replace them.
-    For an endpoint pi does not know the base URL is required.
-    `-` always means "no direct endpoint".
+    because registering a classifier there would replace them. For an endpoint
+    pi does not know the base URL is required. `-` always means "no direct
+    endpoint".
   - **Wire API** is not a question: a direct endpoint speaks exactly one
     (switchback's SystemOne transport), so it is written with the endpoint
     instead of offering a meaningless `(none)`.
@@ -49,12 +72,9 @@ the command reports and exits without prompting.
     pointed endpoint does not have to wait for a routing failure to reveal a
     wrong model id.
   - **API keys** are asked for only for a direct endpoint, and only as a value —
-    the store name is derived from the decision-model name (`dm2-key`), because
-    it is an internal detail of `secret:<name>`, so a single secret can be
-    re-keyed under the new name. A catalog classifier gets its credential from
-    pi. Deleting an entry that is still referenced
-    by a model is refused; re-point those models first. Clearing a model's
-    decision model makes it report and cycle without a classifier.
+    the store name is derived from the provider name (`ollama-key`), because it
+    is an internal detail of `secret:<name>`. A catalog classifier gets its
+    credential from pi.
 - **Classifier test** — after a decision model is saved (and from its menu
   later) switchback offers a **one-shot capability check**: a single SystemOne
   prompt carrying all three answer shapes a decision model must produce — a

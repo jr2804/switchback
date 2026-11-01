@@ -56,7 +56,7 @@ import {
 	type DialogueContext,
 	type DialogueSession,
 } from "./dialogue-ui.ts";
-import { decisionModelPicker, decisionModelsMenu } from "./dialogue-classifier.ts";
+import { decisionModelPicker, decisionModelsMenu, decisionProvidersMenu } from "./dialogue-classifier.ts";
 import type { SwitchbackConfig, SwitchbackFileConfig } from "switchback-core/types.ts";
 
 /**
@@ -117,9 +117,10 @@ async function mainMenu(ctx: DialogueContext, session: DialogueSession): Promise
 		const options: string[] = config.models.map((m) => `${m.id} - ${m.name}`);
 		const addOption = "Add virtual model...";
 		const debugOption = `Toggle debug (currently ${config.debug === true ? "on" : "off"})`;
-		const dmOption = `Decision models (${Object.keys(config.decisionModels ?? {}).length})...`;
+		const dmOption = `Decision model overrides (${Object.keys(config.decisionModels ?? {}).length})...`;
+		const dpOption = `Decision providers (${Object.keys(config.decisionProviders ?? {}).length})...`;
 		const doneOption = "Done";
-		options.push(addOption, debugOption, dmOption, doneOption);
+		options.push(addOption, debugOption, dpOption, dmOption, doneOption);
 
 		const choice = await ctx.ui.select(screenTitle(session.loaded, "switchback configuration"), options);
 		if (choice === undefined || choice === doneOption) return;
@@ -129,6 +130,10 @@ async function mainMenu(ctx: DialogueContext, session: DialogueSession): Promise
 		}
 		if (choice === dmOption) {
 			await decisionModelsMenu(ctx, session);
+			continue;
+		}
+		if (choice === dpOption) {
+			await decisionProvidersMenu(ctx, session);
 			continue;
 		}
 		if (choice === addOption) {

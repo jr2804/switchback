@@ -13,26 +13,21 @@
  * complete then) and warns once per unresolvable address. It never fails the
  * route: the router's no-classifier path - blind cycling on errors, clamping
  * the reasoning level - remains the deterministic fallback.
+ *
+ * An address that carries its own connection details (`decisionProviders:` or a
+ * `decisionModels:` entry with a `baseUrl`) is skipped entirely: it points at a
+ * SystemOne endpoint that publishes no model list, so the registry has nothing
+ * to say about it, and asking would produce a warning about a correctly
+ * configured classifier.
  */
 
 import type { ClassifierPort } from "switchback-core/ports.ts";
+import {
+	decisionModelConnection,
+	splitDecisionModelAddress,
+	referencedDecisionModelAddresses,
+} from "switchback-core/classifier-connection.ts";
 import type { ResolvedSwitchbackFileConfig } from "switchback-core/types.ts";
-
-/** Split a `provider/id` classifier address; undefined parts mean a malformed one. */
-export function splitClassifierAddress(address: string): { provider: string; id: string } | undefined {
-	const slash = address.indexOf("/");
-	if (slash <= 0 || slash === address.length - 1) return undefined;
-	return { provider: address.slice(0, slash), id: address.slice(slash + 1) };
-}
-
-/** The decision-model addresses the config references, de-duplicated (`provider/id`). */
-export function referencedDecisionModels(config: ResolvedSwitchbackFileConfig): string[] {
-	const addresses = new Set<string>();
-	for (const model of config.models) {
-		if (model.decisionModel !== undefined) addresses.add(`${model.decisionModel.provider}/${model.decisionModel.id}`);
-	}
-	return [...addresses];
-}
 
 /**
  * Check every referenced decision model against the host registry and return
@@ -44,12 +39,14 @@ export function findUnresolvedDecisionModels(
 	config: ResolvedSwitchbackFileConfig,
 ): string[] {
 	const warnings: string[] = [];
-	for (const address of referencedDecisionModels(config)) {
-		const parts = splitClassifierAddress(address);
+	for (const address of referencedDecisionModelAddresses(config)) {
+		const parts = splitDecisionModelAddress(address);
 		if (parts === undefined) {
 			warnings.push(`decision model "${address}" is malformed (expected provider/id) - classifying is disabled`);
 			continue;
 		}
+		// A direct endpoint needs no catalog entry: there is nothing to look up.
+		if (decisionModelConnection(config, address)?.baseUrl !== undefined) continue;
 		const found =
 			registry.findOfType("classifier", parts.provider, parts.id) ??
 			registry.findOfType("classifier", parts.provider, `${parts.id}:latest`);

@@ -5,9 +5,11 @@
  *
  * A decision model is addressed as `provider/model-id` - the same shape as a
  * fallback. The address alone is enough when the host can resolve it from its
- * classifier catalog; a `decisionModels` entry at the same address adds the
- * connection details (`baseUrl`, `apiKey`) that make a direct SystemOne endpoint
- * reachable from any host.
+ * classifier catalog; the connection details (`baseUrl`, `apiKey`) that make a
+ * direct SystemOne endpoint reachable from any host belong to the *provider*,
+ * in the top-level `decisionProviders:` section - one entry serves every model
+ * of that provider. A `decisionModels:` entry at an address is the narrow
+ * override for the rare case where one model of a provider lives elsewhere.
  *
  * Split out of `src/dialogue.ts` because it is the larger half and grew
  * independently: it is the only part that needs the provider catalog, the live
@@ -24,13 +26,18 @@
 
 import {
 	addDecisionModel,
+	addDecisionProvider,
 	countDecisionModelReferences,
+	countDecisionProviderReferences,
 	removeDecisionModel,
+	removeDecisionProvider,
 	renameDecisionModel,
 	setDecisionModel,
 	updateDecisionModel,
+	updateDecisionProvider,
 	type DecisionModelInput,
 	type DecisionModelPatch,
+	type DecisionProviderInput,
 } from "switchback-core/config-editor.ts";
 import {
 	classifierBaseUrlNote,
@@ -54,7 +61,8 @@ import {
 	type DialogueContext,
 	type DialogueSession,
 } from "./dialogue-ui.ts";
-import type { DecisionModelConfig, DecisionModelEntry } from "switchback-core/types.ts";
+import type { DecisionModelConfig, DecisionModelEntry, SwitchbackFileConfig } from "switchback-core/types.ts";
+import { decisionModelConnection, splitDecisionModelAddress } from "switchback-core/classifier-connection.ts";
 
 export async function decisionModelPicker(
 	ctx: DialogueContext,
@@ -69,8 +77,8 @@ export async function decisionModelPicker(
 		if (config === undefined) return;
 		const model = findModel(config, virtualId);
 		if (model === undefined) return;
-		const entries = Object.entries(config.decisionModels ?? {});
-		const labels = entries.map(([address, entry]) => describeEntry(address, entry));
+		const candidates = pickableAddresses(ctx, config, model.decisionModel);
+		const labels = candidates.map(({ address }) => describeAddress(address, config));
 		const choice = await ctx.ui.select(
 			screenTitle(
 				session.loaded,
@@ -88,26 +96,266 @@ export async function decisionModelPicker(
 			continue;
 		}
 		if (choice === newOption) {
-			const created = await decisionModelWizard(ctx, session);
-			if (created === undefined) continue;
-			setDecisionModel(session.loaded, virtualId, created.address);
+			// A new decision model means a provider that can reach a SystemOne
+			// endpoint: pi's catalog resolves most providers on its own, so this
+			// normally only has to add the connection details for a local server.
+			const address = await newProviderBackedAddress(ctx, session);
+			if (address === undefined) continue;
+			setDecisionModel(session.loaded, virtualId, address);
 			if (await saveOrRevert(ctx, session)) {
-				ctx.ui.notify(`${virtualId}: decision model ${created.address} created and set`, "info");
-				await offerClassifierTest(ctx, session, entryForInput(created), created.address);
+				ctx.ui.notify(`${virtualId}: decision model ${address} set`, "info");
+				await offerClassifierTest(ctx, session, entryForAddress(address, session), address);
 				return;
 			}
 			continue;
 		}
 		const index = labels.indexOf(choice);
-		const picked = index >= 0 ? entries[index] : undefined;
+		const picked = index >= 0 ? candidates[index] : undefined;
 		if (picked === undefined) continue;
-		setDecisionModel(session.loaded, virtualId, picked[0]);
+		setDecisionModel(session.loaded, virtualId, picked.address);
 		if (await saveOrRevert(ctx, session)) {
-			ctx.ui.notify(`${virtualId}: decision model ${picked[0]} set`, "info");
-			await offerClassifierTest(ctx, session, picked[1], picked[0]);
+			ctx.ui.notify(`${virtualId}: decision model ${picked.address} set`, "info");
+			// The point of setting it here rather than in the config file: prove the
+			// classifier answers before trusting it with every routing decision.
+			await offerClassifierTest(ctx, session, entryForAddress(picked.address, session), picked.address);
 			return;
 		}
 	}
+}
+
+/**
+ * The addresses a virtual model can be pointed at here: every classifier the
+ * host catalog knows, plus every address the config already names (an entry on
+ * disk can outlive the catalog model it pointed at, and the current choice is
+ * always offered so Enter keeps it).
+ */
+function pickableAddresses(
+	ctx: DialogueContext,
+	config: SwitchbackFileConfig,
+	current: string | undefined,
+): { address: string }[] {
+	const addresses = new Set<string>();
+	for (const option of ctx.classifierProviders ?? []) {
+		for (const id of option.models) addresses.add(`${option.provider}/${id}`);
+	}
+	for (const address of Object.keys(config.decisionModels ?? {})) addresses.add(address);
+	if (current !== undefined) addresses.add(current);
+	return [...addresses].sort().map((address) => ({ address }));
+}
+
+/** One line describing where an address gets its endpoint and key from. */
+function describeAddress(address: string, config: SwitchbackFileConfig): string {
+	const own = config.decisionModels?.[address];
+	const connection = decisionModelConnection(config, address);
+	const provider = address.slice(0, address.indexOf("/"));
+	if (own?.baseUrl !== undefined) return `${address} - direct: ${own.baseUrl}`;
+	if (connection?.baseUrl !== undefined) return `${address} - via ${provider}: ${connection.baseUrl}`;
+	return `${address} - from the classifier catalog`;
+}
+
+/** The connection an address resolves to, for the capability test. */
+function entryForAddress(address: string, session: DialogueSession): DecisionModelEntry {
+	const config = tryReadConfig(session.loaded);
+	const connection = config === undefined ? undefined : decisionModelConnection(config, address);
+	return connection ?? {};
+}
+
+/**
+ * Create the classifier a virtual model should use: pick a provider, give it an
+ * endpoint when it needs one, then name the model on it.
+ *
+ * Writes the *provider* entry (not a per-address one) because that is where a
+ * connection belongs: a second model on the same endpoint then needs nothing.
+ */
+async function newProviderBackedAddress(ctx: DialogueContext, session: DialogueSession): Promise<string | undefined> {
+	const option = await chooseClassifierProvider(ctx, session, undefined);
+	if (option === undefined) return undefined;
+	const baseUrl = await chooseBaseUrl(ctx, session, option, undefined);
+	if (baseUrl === undefined) return undefined;
+	// A local endpoint is the only kind that carries an apiKey, and it is
+	// required there: ask before the model id so a cancel writes nothing.
+	let pendingKey: ApiKeyAction = { kind: "local" };
+	if (baseUrl !== null) {
+		pendingKey = await apiKeyAction(ctx, session, undefined, option.provider);
+		if (pendingKey.kind === "cancel") return undefined;
+	}
+	const id = await chooseClassifierModel(ctx, session, option, undefined, baseUrl ?? option.baseUrl);
+	if (id === undefined) return undefined;
+
+	const config = tryReadConfig(session.loaded);
+	const alreadyConfigured = config?.decisionProviders?.[option.provider] !== undefined;
+	if (baseUrl !== null) {
+		let apiKeySecretName: string | null | undefined;
+		if (pendingKey.kind === "new") {
+			const committed = commitSecret(ctx, session, option.provider, pendingKey.value);
+			if (committed === undefined) return undefined;
+			apiKeySecretName = committed;
+		} else if (pendingKey.kind === "existing") {
+			apiKeySecretName = pendingKey.name;
+		} else {
+			// "no API key" is a decision, not an omission: clear any stored secret.
+			apiKeySecretName = null;
+		}
+		try {
+			if (alreadyConfigured) {
+				// A patch, so "local" can clear a secret the entry already carries.
+				updateDecisionProvider(session.loaded, option.provider, { baseUrl, apiKeySecretName });
+			} else {
+				addDecisionProvider(session.loaded, {
+					provider: option.provider,
+					baseUrl,
+					...(apiKeySecretName !== null && apiKeySecretName !== undefined
+						? { apiKeySecretName }
+						: {}),
+				});
+			}
+		} catch (error) {
+			ctx.ui.notify(errorMessage(error), "warning");
+			return undefined;
+		}
+	}
+	if (!(await saveOrRevert(ctx, session))) return undefined;
+	return `${option.provider}/${id}`;
+}
+
+export async function decisionProvidersMenu(ctx: DialogueContext, session: DialogueSession): Promise<void> {
+	const addOption = "Add provider...";
+	const backOption = "Back";
+	for (;;) {
+		const config = readConfigOrReport(ctx, session.loaded);
+		if (config === undefined) return;
+		const entries = Object.entries(config.decisionProviders ?? {});
+		const labels = entries.map(([provider, entry]) => describeProvider(provider, entry, config));
+		const choice = await ctx.ui.select(
+			screenTitle(
+				session.loaded,
+				"decision providers (one endpoint serves every decision model of that provider)",
+			),
+			[...labels, addOption, backOption],
+		);
+		if (choice === undefined || choice === backOption) return;
+		if (choice === addOption) {
+			await providerWizard(ctx, session, undefined);
+			continue;
+		}
+		const index = labels.indexOf(choice);
+		const picked = index >= 0 ? entries[index] : undefined;
+		if (picked !== undefined) await decisionProviderEntryMenu(ctx, session, picked[0], picked[1]);
+	}
+}
+
+async function decisionProviderEntryMenu(
+	ctx: DialogueContext,
+	session: DialogueSession,
+	provider: string,
+	entry: DecisionModelEntry,
+): Promise<void> {
+	const editOption = "Edit connection (baseUrl, apiKey)";
+	const deleteOption = "Delete";
+	const backOption = "Back";
+	for (;;) {
+		const config = readConfigOrReport(ctx, session.loaded);
+		if (config === undefined) return;
+		const current = (config.decisionProviders ?? {})[provider];
+		if (current === undefined) return; // deleted elsewhere in this session
+		const choice = await ctx.ui.select(
+			screenTitle(session.loaded, describeProvider(provider, current, config)),
+			[editOption, deleteOption, backOption],
+		);
+		if (choice === undefined || choice === backOption) return;
+		if (choice === editOption) {
+			const patch = await collectConnection(ctx, session, provider, current);
+			if (patch === undefined) continue;
+			updateDecisionProvider(session.loaded, provider, patch);
+			if (await saveOrRevert(ctx, session)) {
+				ctx.ui.notify(`provider ${provider} updated`, "info");
+			}
+			continue;
+		}
+		if (choice === deleteOption) {
+			const refs = countDecisionProviderReferences(session.loaded, provider);
+			const confirmed = await ctx.ui.confirm(
+				screenTitle(session.loaded, `delete provider ${provider}`),
+				`Delete ${provider} from ${session.loaded.path}?` +
+					(refs > 0
+						? ` ${refs} model(s) use it and will fall back to catalog resolution.`
+						: ""),
+			);
+			if (!confirmed) continue;
+			removeDecisionProvider(session.loaded, provider);
+			if (await saveOrRevert(ctx, session)) {
+				ctx.ui.notify(`deleted provider ${provider}`, "info");
+				return;
+			}
+		}
+	}
+}
+
+/** Add a provider entry, or edit one when `current` names an existing provider. */
+async function providerWizard(
+	ctx: DialogueContext,
+	session: DialogueSession,
+	current: string | undefined,
+): Promise<void> {
+	const option = await chooseClassifierProvider(ctx, session, current);
+	if (option === undefined) return;
+	const existing = tryReadConfig(session.loaded)?.decisionProviders?.[option.provider];
+	const baseUrl = await chooseBaseUrl(ctx, session, option, existing?.baseUrl);
+	if (baseUrl === undefined) return;
+	if (baseUrl === null) {
+		// "-" on an existing entry removes it (the catalog resolves the
+		// provider); with no entry there is nothing to do.
+		if (existing === undefined) {
+			ctx.ui.notify(
+				`${option.provider}: the catalog already resolves this provider - no connection details needed`,
+				"info",
+			);
+			return;
+		}
+		updateDecisionProvider(session.loaded, option.provider, { baseUrl: null });
+		if (await saveOrRevert(ctx, session)) {
+			ctx.ui.notify(`removed the ${option.provider} connection - the catalog resolves it`, "info");
+		}
+		return;
+	}
+	const patch: DecisionModelPatch = { baseUrl };
+	const key = await apiKeyAction(ctx, session, existing?.apiKey, option.provider);
+	if (key.kind === "cancel") return;
+	if (key.kind === "local") patch.apiKeySecretName = null;
+	else if (key.kind === "existing") patch.apiKeySecretName = key.name;
+	else if (key.kind === "new") {
+		const committedName = commitSecret(ctx, session, option.provider, key.value);
+		if (committedName === undefined) return;
+		patch.apiKeySecretName = committedName;
+	}
+	if (existing === undefined) {
+		const input: DecisionProviderInput = {
+			provider: option.provider,
+			baseUrl,
+			...(patch.apiKeySecretName !== null && patch.apiKeySecretName !== undefined
+				? { apiKeySecretName: patch.apiKeySecretName }
+				: {}),
+		};
+		try {
+			addDecisionProvider(session.loaded, input);
+		} catch (error) {
+			ctx.ui.notify(errorMessage(error), "warning");
+			return;
+		}
+	} else {
+		updateDecisionProvider(session.loaded, option.provider, patch);
+	}
+	if (await saveOrRevert(ctx, session)) {
+		ctx.ui.notify(`provider ${option.provider} saved`, "info");
+	}
+}
+
+function describeProvider(provider: string, entry: DecisionModelEntry, config: SwitchbackFileConfig): string {
+	const refs = config.models.filter((model) => model.decisionModel?.startsWith(`${provider}/`)).length;
+	const usage = refs === 0 ? "unused" : `${refs} model(s)`;
+	return entry.baseUrl === undefined
+		? `${provider} - from the classifier catalog (${usage})`
+		: `${provider} - direct: ${entry.baseUrl} (${usage})`;
 }
 
 export async function decisionModelsMenu(ctx: DialogueContext, session: DialogueSession): Promise<void> {
@@ -117,9 +365,9 @@ export async function decisionModelsMenu(ctx: DialogueContext, session: Dialogue
 		const config = readConfigOrReport(ctx, session.loaded);
 		if (config === undefined) return;
 		const entries = Object.entries(config.decisionModels ?? {});
-		const labels = entries.map(([address, entry]) => describeEntry(address, entry));
+		const labels = entries.map(([address, entry]) => describeEntry(address, entry, config));
 		const choice = await ctx.ui.select(
-			screenTitle(session.loaded, "decision models (address-keyed classifier connection details)"),
+			screenTitle(session.loaded, "decision model overrides (one address, own connection details)"),
 			[...labels, addOption, backOption],
 		);
 		if (choice === undefined || choice === backOption) return;
@@ -144,7 +392,7 @@ async function decisionModelEntryMenu(ctx: DialogueContext, session: DialogueSes
 		if (config === undefined) return;
 		const current = (config.decisionModels ?? {})[address];
 		if (current === undefined) return; // deleted elsewhere in this session
-		const choice = await ctx.ui.select(screenTitle(session.loaded, describeEntry(address, current)), [
+		const choice = await ctx.ui.select(screenTitle(session.loaded, describeEntry(address, current, config)), [
 			renameOption,
 			editOption,
 			...(ctx.probeClassifier !== undefined ? [testOption] : []),
@@ -211,9 +459,10 @@ async function decisionModelEntryMenu(ctx: DialogueContext, session: DialogueSes
 }
 
 /**
- * Collect a brand-new decision model entry. The order is provider -> baseUrl ->
- * model id -> apiKey -> address (last, prefilled). The address is the map key,
- * so it is asked after the connection details it describes.
+ * Collect a brand-new per-address override (the advanced case: this one model
+ * lives on a different endpoint than the rest of its provider). The order is
+ * provider -> baseUrl -> model id -> apiKey -> address (last, prefilled). The
+ * address is the map key, so it is asked after the connection it describes.
  */
 async function decisionModelWizard(
 	ctx: DialogueContext,
@@ -267,7 +516,7 @@ async function decisionModelWizard(
 		return undefined;
 	}
 	if (await saveOrRevert(ctx, session)) {
-		ctx.ui.notify(`decision model ${address} added`, "info");
+		ctx.ui.notify(`decision model override ${address} added`, "info");
 		await offerClassifierTest(ctx, session, entryForInput(input), address);
 		return input;
 	}
@@ -508,16 +757,14 @@ async function offerClassifierTest(
 	await runClassifierTest(ctx, session, entry, address);
 }
 
-function describeEntry(address: string, entry: DecisionModelEntry): string {
-	return entry.baseUrl === undefined
-		? `${address} - resolved from the classifier catalog`
-		: `${address} - direct: ${entry.baseUrl}`;
-}
-
-function splitAddress(address: string): { provider: string; id: string } | undefined {
-	const slash = address.indexOf("/");
-	if (slash <= 0 || slash === address.length - 1) return undefined;
-	return { provider: address.slice(0, slash), id: address.slice(slash + 1) };
+function describeEntry(address: string, entry: DecisionModelEntry, config: SwitchbackFileConfig): string {
+	// Same rule as the resolver: an empty override SHADOWS the provider entry
+	// (whole-entry precedence), so the label comes from decisionModelConnection.
+	const connection = decisionModelConnection(config, address);
+	if (entry.baseUrl !== undefined) return `${address} - direct: ${entry.baseUrl}`;
+	const provider = address.slice(0, address.indexOf("/"));
+	if (connection?.baseUrl !== undefined) return `${address} - via ${provider}: ${connection.baseUrl}`;
+	return `${address} - from the classifier catalog`;
 }
 
 /** The entry a wizard result describes, for the capability test. */
@@ -535,7 +782,7 @@ function probeConfig(
 	entry: DecisionModelEntry,
 	session: DialogueSession,
 ): DecisionModelConfig | undefined {
-	const parts = splitAddress(address);
+	const parts = splitDecisionModelAddress(address);
 	if (parts === undefined) return undefined;
 	let apiKey = entry.apiKey;
 	if (apiKey !== undefined && apiKey.startsWith("secret:")) {

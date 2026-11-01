@@ -24,6 +24,7 @@
  */
 
 import { Plugin } from "@opencode/plugin";
+import { findUnconnectedDecisionModels } from "./decision-model-check.ts";
 import {
 	annotateCrash,
 	clearDisabled,
@@ -37,7 +38,9 @@ import {
 	configFilePath,
 	createConfigWarningReporter,
 	loadConfig,
+	loadConfigFile,
 	readBlockedMap,
+	readConfigFile,
 	readCrashMap,
 	readDisabledMap,
 	resolveFallbacks,
@@ -285,7 +288,9 @@ export default Plugin.define({
 function readConfigOr(fallback: ResolvedSwitchbackFileConfig | undefined): ResolvedSwitchbackFileConfig | undefined {
 	try {
 		const loaded = loadConfig(envSecrets);
-		reportConfigWarnings(loaded.warnings, (message) => console.warn(message));
+		reportConfigWarnings([...loaded.warnings, ...findUnconnectedDecisionModels(loaded.config)], (message) =>
+			console.warn(message),
+		);
 		return loaded.config;
 	} catch {
 		return fallback;
@@ -296,7 +301,9 @@ function readConfigOr(fallback: ResolvedSwitchbackFileConfig | undefined): Resol
 function readConfig(ctx: Plugin.Context, sessionID: string): ResolvedSwitchbackFileConfig | undefined {
 	try {
 		const loaded = loadConfig(envSecrets);
-		reportConfigWarnings(loaded.warnings, (message) => notify(ctx, sessionID, message));
+		reportConfigWarnings([...loaded.warnings, ...findUnconnectedDecisionModels(loaded.config)], (message) =>
+			notify(ctx, sessionID, message),
+		);
 		return loaded.config;
 	} catch (error) {
 		notify(
@@ -625,6 +632,8 @@ async function guideState(ctx: Plugin.Context): Promise<{
 	}[];
 	models: readonly { address: string; name: string; contextWindow?: number; ready: boolean }[];
 	path: string;
+	providers: readonly { provider: string; baseUrl?: string; apiKey?: string }[];
+	modelConnections: readonly { address: string; baseUrl?: string; apiKey?: string }[];
 }> {
 	const chainRows: {
 		id: string;
@@ -663,7 +672,33 @@ async function guideState(ctx: Plugin.Context): Promise<{
 		// The guide must never offer a switchback chain as one of its own
 		// fallbacks: it would resolve to itself and re-enter the router.
 		.filter((model) => !model.address.startsWith(`${SWITCHBACK_PROVIDER_ID}/`));
-	return { chains: chainRows, models, path: configFilePath() };
+	// The connection rows carry the file's own key refs (`local` /
+	// `secret:<name>`), never resolved key material: this crosses the RPC
+	// boundary, and the resolved config's secrets must not leave the server.
+	// Read from the raw file, not the merged read above, for exactly that reason.
+	const providers: { provider: string; baseUrl?: string; apiKey?: string }[] = [];
+	const modelConnections: { address: string; baseUrl?: string; apiKey?: string }[] = [];
+	try {
+		const file = readConfigFile(loadConfigFile());
+		for (const [provider, entry] of Object.entries(file.decisionProviders ?? {})) {
+			providers.push({
+				provider,
+				...(entry.baseUrl === undefined ? {} : { baseUrl: entry.baseUrl }),
+				...(entry.apiKey === undefined ? {} : { apiKey: entry.apiKey }),
+			});
+		}
+		for (const [address, entry] of Object.entries(file.decisionModels ?? {})) {
+			modelConnections.push({
+				address,
+				...(entry.baseUrl === undefined ? {} : { baseUrl: entry.baseUrl }),
+				...(entry.apiKey === undefined ? {} : { apiKey: entry.apiKey }),
+			});
+		}
+	} catch {
+		// An unreadable file still gets a menu: the chains come from the last
+		// good read, and the connection lists read as empty until it is fixed.
+	}
+	return { chains: chainRows, models, path: configFilePath(), providers, modelConnections };
 }
 
 /** `/switchback-next`: advance the pin through (none, ...fallbacks) and wrap. */

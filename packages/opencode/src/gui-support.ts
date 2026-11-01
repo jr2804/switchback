@@ -14,10 +14,19 @@
  * bundle.
  */
 
+import { probeLocalClassifier } from "switchback-core";
 import type { NoticeVariant } from "./rpc.ts";
 import { readEdit, readGuideState, readNotice } from "./rpc.ts";
 import { runGuide } from "./tui-guide.ts";
-import type { GuideChain, GuideDialog, GuideModel, GuideOption, GuidePorts } from "./tui-guide.ts";
+import type {
+	GuideChain,
+	GuideConnections,
+	GuideDialog,
+	GuideModel,
+	GuideOption,
+	GuidePorts,
+	GuideProbe,
+} from "./tui-guide.ts";
 
 /**
  * The app's dialog surface, narrowed to what this plugin calls.
@@ -152,10 +161,12 @@ export interface GuiGuideDeps {
 	readonly reload?: () => Promise<void>;
 }
 
-/** The chains and models last read from the server, refreshed before every screen. */
+/** The chains, models and decision-model connections last read from the server, refreshed before every screen. */
 export interface GuideCache {
 	chains: readonly GuideChain[];
 	models: readonly GuideModel[];
+	/** Optional so pre-existing caches keep compiling; the guide tolerates its absence. */
+	connections?: GuideConnections;
 }
 
 /**
@@ -169,6 +180,7 @@ export async function refreshGuide(deps: GuiGuideDeps, cache: GuideCache): Promi
 	);
 	cache.chains = state.chains;
 	cache.models = state.models;
+	cache.connections = { providers: state.providers ?? [], overrides: state.modelConnections ?? [] };
 }
 
 /**
@@ -194,6 +206,16 @@ export async function openGuide(deps: GuiGuideDeps, cache: GuideCache = { chains
 			),
 		chains: () => cache.chains,
 		models: () => cache.models,
+		connections: () => cache.connections ?? { providers: [], overrides: [] },
+		// Probes run client-side against the endpoint the server reported; the
+		// key stays a `local` / `secret:<name>` ref until this binding resolves it.
+		probeClassifier: (connection: GuideProbe) =>
+			probeLocalClassifier({
+				baseUrl: connection.baseUrl,
+				apiKey: resolveProbeApiKey(connection.apiKey),
+				provider: connection.provider,
+				id: connection.id,
+			}),
 		// Both surfaces refresh from the server after an edit: the server owns the
 		// parse, and a stale menu would offer a chain that no longer exists.
 		reload: deps.reload ?? (() => refreshGuide(deps, cache)),
@@ -222,4 +244,20 @@ export async function attachNotices(rpc: GuiRpcClient, say: Say): Promise<() => 
 			// The server may already be gone; nothing to release.
 		});
 	};
+}
+
+/**
+ * The probe transport needs *some* bearer token. `local` entries and
+ * unresolvable `secret:<name>` refs probe with the "local" placeholder: a
+ * local server ignores the token, and a hosted one answers 401, which the
+ * probe report then shows. Resolvable refs read the environment when the GUI
+ * process has one; the TUI binding resolves the same way.
+ */
+function resolveProbeApiKey(apiKey: string | undefined): string {
+	if (apiKey === undefined || apiKey === "local") return "local";
+	if (apiKey.startsWith("secret:")) {
+		const env = typeof process === "undefined" ? undefined : process.env[apiKey.slice("secret:".length)];
+		return env ?? "local";
+	}
+	return apiKey;
 }

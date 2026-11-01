@@ -61,7 +61,9 @@ where OpenCode silently ran pi's chains.
   host-free logic: dialog adaptation, variant mapping, attach ordering),
   `tui-guide.ts` (guided menu over the config grammar, shared by both menus),
   `config-command.ts` (the `/switchback-config` grammar and
-  its single writer), `rpc.ts` (portable RPC definition + the readers that turn
+  its single writer), `decision-model-check.ts` (the host-capability check
+  that warns when a decision model has no connection details — OpenCode has no
+  classifier catalog, so unlike pi that is a real config gap here), `rpc.ts` (portable RPC definition + the readers that turn
   `unknown` wire payloads into typed shapes), `notices.ts` (notice channel and
   sink refcount), `fuzzy.ts` (picker filtering), `bridge.ts` (router↔route
   seam, `globalThis` symbol), `router.ts` (core `decide()` wiring, credentials,
@@ -73,13 +75,24 @@ where OpenCode silently ran pi's chains.
   `.agents/FILES.md`; the suites pinning the flow are
   `tests/opencode-adapter.test.ts`, `tests/opencode-config-command.test.ts`,
   `tests/opencode-notices.test.ts`, `tests/opencode-tui.test.ts`,
-  `tests/opencode-tui-guide.test.ts`, `tests/opencode-gui.test.ts`.
+  `tests/opencode-tui-guide.test.ts`, `tests/opencode-gui.test.ts`,
+`tests/opencode-decision-model-check.test.ts`.
 
 ## Local Contracts
 
 - **OpenCode V2 only.** `https://opencode.ai/v2/docs` is the only valid source;
   the V1 plugin API is a different, incompatible surface (`.agents/POLICIES.md`
   → Reference material).
+- **The guide's decision-model screens are connection-aware.** The menu
+  offers catalog/connected addresses plus a typed address, sets them through
+  the existing `decision-model` verb, and can probe a chosen classifier through
+  the `probeClassifier` port (bound to core `probeLocalClassifier` in both
+  `tui.ts` and `gui-support.ts`; `secret:` refs resolve through the env-backed
+  resolver). Connection rows travel on the RPC `state` method as
+  `providers[]`/`modelConnections[]` carrying RAW key refs (`local`,
+  `secret:<name>`) read from the file by the server — never resolved secrets —
+  and both fields stay optional + omitted-when-absent so older payloads (and
+  the readers' empty-state contract) keep parsing.
 - **The `retry` session hook cannot route.** It only runs when OpenCode's own
   policy already decided to retry, and OpenCode never retries quota errors —
   the retry-hook design (option B) is superseded. Do not reintroduce turn
@@ -208,7 +221,8 @@ where OpenCode silently ran pi's chains.
   served by a stubbed `globalThis.fetch`), `tests/opencode-config-command.test.ts`,
   `tests/opencode-notices.test.ts`, `tests/opencode-tui.test.ts`,
   `tests/opencode-tui-guide.test.ts` (drive `setup` with a structural fake TUI
-  context and a scripted dialog: no renderer, no host) and
+  context and a scripted dialog: no renderer, no host),
+  `tests/opencode-decision-model-check.test.ts` (the no-connection warning), and
   `tests/opencode-gui.test.ts` (drives the GUI logic through `gui-support.ts`,
   since the bundle itself needs Solid and a window).
 - The TUI entrypoint must not import `@opencode/plugin/tui`'s root: it pulls the

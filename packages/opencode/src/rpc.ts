@@ -49,11 +49,28 @@ export interface ModelState {
 	readonly ready: boolean;
 }
 
-/** What the guide's `state` call returns. */
+/** One `decisionProviders:` entry as the guide sees it (api key as written: `local` or `secret:<name>`). */
+export interface ProviderState {
+	readonly provider: string;
+	readonly baseUrl?: string;
+	readonly apiKey?: string;
+}
+
+/** One per-address `decisionModels:` connection entry, same key conventions. */
+export interface ModelConnectionState {
+	readonly address: string;
+	readonly baseUrl?: string;
+	readonly apiKey?: string;
+}
+
+/** What the guide's `state` call returns. The connection rows are optional so a
+ * state payload from a server that predates them still reads as "no connections". */
 export interface GuideState {
 	readonly chains: readonly ChainState[];
 	readonly models: readonly ModelState[];
 	readonly path: string;
+	readonly providers?: readonly ProviderState[];
+	readonly modelConnections?: readonly ModelConnectionState[];
 }
 
 /**
@@ -128,7 +145,44 @@ export function readGuideState(value: unknown): GuideState {
 			ready: (entry as Record<string, unknown>).ready === true,
 		});
 	}
-	return { chains, models, path: readString(row, "path") ?? "" };
+	// Connection rows: same optional baseUrl/apiKey fields, keyed by provider or
+	// address. Included only when the payload carried them, so a state reply from
+	// an older server reads as "no connections" rather than an empty claim.
+	const providers: ProviderState[] = [];
+	if (Array.isArray(row.providers)) {
+		for (const entry of row.providers) {
+			const provider = readString(entry, "provider");
+			if (provider === undefined) continue;
+			const baseUrl = readString(entry, "baseUrl");
+			const apiKey = readString(entry, "apiKey");
+			providers.push({
+				provider,
+				...(baseUrl === undefined ? {} : { baseUrl }),
+				...(apiKey === undefined ? {} : { apiKey }),
+			});
+		}
+	}
+	const modelConnections: ModelConnectionState[] = [];
+	if (Array.isArray(row.modelConnections)) {
+		for (const entry of row.modelConnections) {
+			const address = readString(entry, "address");
+			if (address === undefined) continue;
+			const baseUrl = readString(entry, "baseUrl");
+			const apiKey = readString(entry, "apiKey");
+			modelConnections.push({
+				address,
+				...(baseUrl === undefined ? {} : { baseUrl }),
+				...(apiKey === undefined ? {} : { apiKey }),
+			});
+		}
+	}
+	return {
+		chains,
+		models,
+		path: readString(row, "path") ?? "",
+		...(Array.isArray(row.providers) ? { providers } : {}),
+		...(Array.isArray(row.modelConnections) ? { modelConnections } : {}),
+	};
 }
 
 const emptyObject = {
@@ -170,6 +224,29 @@ const model = {
 	additionalProperties: false,
 } as const;
 
+// Both connection row shapes share their optional fields; only the id key differs.
+const providerConnection = {
+	type: "object",
+	properties: {
+		provider: { type: "string" },
+		baseUrl: { type: "string" },
+		apiKey: { type: "string" },
+	},
+	required: ["provider"],
+	additionalProperties: false,
+} as const;
+
+const modelConnection = {
+	type: "object",
+	properties: {
+		address: { type: "string" },
+		baseUrl: { type: "string" },
+		apiKey: { type: "string" },
+	},
+	required: ["address"],
+	additionalProperties: false,
+} as const;
+
 export const SwitchbackRpc = Rpc.define({
 	id: "switchback",
 	methods: {
@@ -200,6 +277,10 @@ export const SwitchbackRpc = Rpc.define({
 					models: { type: "array", items: model },
 					/** Absolute path of the config file the server is editing. */
 					path: { type: "string" },
+					/** `decisionProviders:` rows (api key as written, never resolved). */
+					providers: { type: "array", items: providerConnection },
+					/** Per-address `decisionModels:` connection rows. */
+					modelConnections: { type: "array", items: modelConnection },
 				},
 				required: ["chains", "models", "path"],
 				additionalProperties: false,

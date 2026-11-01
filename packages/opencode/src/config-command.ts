@@ -32,6 +32,11 @@
  *   idle-reset <id> <value>       never | 30m | 1h | 2h | 3h | 5h | 12h | 24h | classifier
  *   decision-model <id> <addr|off> classify this chain's failures with <addr>
  *
+ *   provider                      the configured decision-model connections
+ *   provider <id> [<id>]          ...or just the entries matching <id>
+ *   provider <id> <url> [key]     connect a provider's decision models (key: local | secret:<name>)
+ *   provider-remove <id>          remove a provider's connection
+ *
  *   debug <on|off>                the shared `debug:` flag
  *   reset                         delete the config file
  *
@@ -48,12 +53,15 @@
 
 import { existsSync, rmSync } from "node:fs";
 import {
+	addDecisionProvider,
 	addFallback,
 	addVirtualModel,
 	configFilePath,
+	countDecisionProviderReferences,
 	loadConfigFile,
 	moveFallback,
 	readConfigFile,
+	removeDecisionProvider,
 	removeFallback,
 	removeVirtualModel,
 	renameVirtualModel,
@@ -63,6 +71,7 @@ import {
 	setFallbacks,
 	setIdleReset,
 	setVirtualModelName,
+	updateDecisionProvider,
 	validateFileConfig,
 	IDLE_RESET_OPTIONS,
 	SWITCHBACK_PROVIDER,
@@ -94,6 +103,8 @@ export const CONFIG_VERBS = [
 	"chain-move",
 	"idle-reset",
 	"decision-model",
+	"provider",
+	"provider-remove",
 	"debug",
 	"reset",
 ] as const;
@@ -149,6 +160,9 @@ export async function runConfigCommand(
 export function execute(_sessionKey: string, parsed: ParsedConfigCommand): ConfigCommandResult {
 	const verb = parsed.verb;
 	if (verb === undefined || verb === "show") return showConfig(parsed.args);
+	// `provider` reads with no url (or a lone id, which filters) and mutates from
+	// two arguments on - the same shortest-useful-thing rule as `show`.
+	if (verb === "provider" && parsed.args.length < 2) return showProviders(parsed.args);
 	if (verb === "reset") return resetConfigFile();
 	try {
 		return mutate(verb, parsed.args);
@@ -274,6 +288,33 @@ function applyEdit(loaded: LoadedConfig, verb: ConfigVerb, args: readonly string
 			setDecisionModel(loaded, first, address);
 			return undefined;
 		}
+		case "provider": {
+			const [provider, baseUrl, key] = args;
+			if (provider === undefined || baseUrl === undefined) {
+				return usage(
+					"provider <provider> <url> [local | secret:<name>]",
+					'connects every decision model of <provider>; the key defaults to "local"',
+				);
+			}
+			const keyMode = parseApiKeyMode(key ?? "local");
+			if ("problem" in keyMode) return keyMode.problem;
+			const secretName = keyMode.secretName;
+			if (hasDecisionProvider(loaded, provider)) {
+				updateDecisionProvider(loaded, provider, { baseUrl, apiKeySecretName: secretName });
+			} else {
+				addDecisionProvider(loaded, {
+					provider,
+					baseUrl,
+					...(secretName === null ? {} : { apiKeySecretName: secretName }),
+				});
+			}
+			return undefined;
+		}
+		case "provider-remove": {
+			if (first === undefined) return usage("provider-remove <provider>");
+			removeDecisionProvider(loaded, first);
+			return undefined;
+		}
 		case "debug": {
 			const value = (first ?? "").toLowerCase();
 			if (value !== "on" && value !== "off") return usage("debug <on|off>");
@@ -332,6 +373,61 @@ function describeModel(model: SwitchbackFileConfig["models"][number]): string[] 
 	return rows;
 }
 
+/**
+ * The decision-provider report: one block per configured provider, in the same
+ * shape as a model's block. `countDecisionProviderReferences` reads the loaded
+ * document, so the report reuses the file load rather than re-reading it.
+ */
+function showProviders(args: readonly string[]): ConfigCommandResult {
+	const filter = args[0]?.toLowerCase();
+	const path = configFilePath();
+	if (!existsSync(path)) {
+		return {
+			ok: true,
+			text:
+				filter === undefined
+					? `switchback: no decision providers configured\nconfig file: ${path}\nadd one with /switchback-config provider <provider> <url> [local | secret:<name>]`
+					: `switchback: no decision provider matches "${filter}"`,
+		};
+	}
+	let loaded: LoadedConfig;
+	let config: SwitchbackFileConfig;
+	try {
+		loaded = loadConfigFile();
+		config = readConfigFile(loaded);
+	} catch (error) {
+		return { ok: false, text: `${path}\n  unreadable - ${errorText(error)}` };
+	}
+	const entries = Object.entries(config.decisionProviders ?? {}).filter(
+		([provider]) => filter === undefined || provider.toLowerCase().includes(filter),
+	);
+	if (entries.length === 0) {
+		return {
+			ok: true,
+			text:
+				filter === undefined
+					? `switchback: no decision providers configured\nconfig file: ${path}\nadd one with /switchback-config provider <provider> <url> [local | secret:<name>]`
+					: `switchback: no decision provider matches "${filter}"`,
+		};
+	}
+	const lines: string[] = [path];
+	for (const [provider, entry] of entries) lines.push(...describeProvider(loaded, provider, entry));
+	return { ok: true, text: lines.join("\n") };
+}
+
+/** One provider's block: endpoint, key, and how many models it serves. */
+function describeProvider(
+	loaded: LoadedConfig,
+	provider: string,
+	entry: NonNullable<SwitchbackFileConfig["decisionProviders"]>[string],
+): string[] {
+	const rows = [`  ${provider} - ${entry.baseUrl ?? "no baseUrl"}`];
+	rows.push(`    apiKey: ${entry.apiKey ?? "local"}`);
+	const usedBy = countDecisionProviderReferences(loaded, provider);
+	rows.push(`    used by: ${usedBy === 0 ? "no models yet" : `${usedBy} model${usedBy === 1 ? "" : "s"}`}`);
+	return rows;
+}
+
 /** Delete the config file, after confirming it parses (so we never delete a file we misread). */
 function resetConfigFile(): ConfigCommandResult {
 	const path = configFilePath();
@@ -386,6 +482,14 @@ function hasVirtualModel(loaded: LoadedConfig, id: string): boolean {
 	});
 }
 
+/** Whether the document already connects this decision provider. */
+function hasDecisionProvider(loaded: LoadedConfig, provider: string): boolean {
+	const providers = loaded.doc.get("decisionProviders");
+	if (providers === undefined || providers === null) return false;
+	const has = (providers as { has?: (key: string) => boolean }).has;
+	return typeof has === "function" ? has.call(providers, provider) === true : false;
+}
+
 /**
  * How many virtual models the edited document holds right now. Counts the raw
  * node list rather than the validated config, because a mid-edit document may
@@ -427,6 +531,12 @@ function describeChange(
 			return `switchback: ${id} idle-reset is ${args[1] ?? ""}`;
 		case "decision-model":
 			return `switchback: ${id} decision model is ${args[1] ?? ""}`;
+		case "provider": {
+			const existed = before?.decisionProviders?.[args[0] ?? ""] !== undefined;
+			return `switchback: ${existed ? "updated" : "added"} the decision-model connection for ${args[0] ?? ""}`;
+		}
+		case "provider-remove":
+			return `switchback: removed the decision-model connection for ${args[0] ?? ""}`;
 		case "debug":
 			return `switchback: debug ${args[0] ?? ""}`;
 		default: {
@@ -483,6 +593,22 @@ function parsePosition(input: string | undefined): number | undefined {
 function parseIdleReset(input: string): IdleResetConfig | undefined {
 	const value = input.trim();
 	return (IDLE_RESET_OPTIONS as readonly string[]).includes(value) ? (value as IdleResetConfig) : undefined;
+}
+
+/**
+ * An api key mode: `null` for "local", the secret's name for `secret:<name>`,
+ * or the problem that rejects it.
+ */
+function parseApiKeyMode(input: string): { secretName: string | null } | { problem: string } {
+	if (input === "local") return { secretName: null };
+	if (input.startsWith("secret:")) {
+		const name = input.slice("secret:".length);
+		if (name.length === 0) {
+			return { problem: 'switchback: "secret:" needs a name; use "local" or "secret:<name>"' };
+		}
+		return { secretName: name };
+	}
+	return { problem: `switchback: "${input}" is not an api key; use "local" or "secret:<name>"` };
 }
 
 /** A usage line, prefixed so every report is recognisably switchback's. */

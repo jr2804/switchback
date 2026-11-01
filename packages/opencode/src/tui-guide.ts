@@ -13,11 +13,13 @@
  *
  *     pick "raise fallback"  ->  `chain-move <id> <n> <n-1>`
  *     pick a catalog model   ->  `chain-add <id> <provider/model>`
+ *     connect a provider     ->  `provider <id> <url> [local | secret:<name>]`
  *
  * The module owns presentation and navigation only. It takes a `GuidePorts`
  * bundle - a dialog to ask with, the chains currently on disk, the catalog to
- * offer, a dispatcher, and a reload hook - so the whole flow is testable with a
- * scripted dialog and no TUI, no host, and no files.
+ * offer, the decision-model connections on file, a classifier probe, a
+ * dispatcher, and a reload hook - so the whole flow is testable with a
+ * scripted dialog and no TUI, no host, no network, and no files.
  *
  * Cancelling is never an error: Esc at any screen returns to the previous one,
  * and Esc from the top menu closes the guide having changed nothing. A rejected
@@ -25,7 +27,8 @@
  * guide re-reads the chains, because a failed save leaves the file untouched.
  */
 
-import { IDLE_RESET_OPTIONS } from "switchback-core";
+import { formatProbeReport, IDLE_RESET_OPTIONS, type ProbeResult } from "switchback-core";
+import { decisionModelConnection, splitDecisionModelAddress } from "switchback-core/classifier-connection.ts";
 import { fuzzyFilter } from "./fuzzy.ts";
 
 /** A chain as the guide shows it: identity plus the ordered fallbacks. */
@@ -47,6 +50,35 @@ export interface GuideModel {
 	readonly contextWindow?: number;
 	/** False when the provider is not authenticated (shown, never enforced). */
 	readonly ready: boolean;
+}
+
+/** One `decisionProviders:` entry: the connection every decision model of that provider shares. */
+export interface GuideProviderConnection {
+	readonly provider: string;
+	readonly baseUrl?: string;
+	/** As written in the file: "local" or "secret:<name>" - never a resolved key. */
+	readonly apiKey?: string;
+}
+
+/** One per-address `decisionModels:` entry, for a model that needs its own endpoint. */
+export interface GuideConnectionOverride {
+	readonly address: string;
+	readonly baseUrl?: string;
+	readonly apiKey?: string;
+}
+
+/** Every decision-model connection the config file declares right now. */
+export interface GuideConnections {
+	readonly providers: readonly GuideProviderConnection[];
+	readonly overrides: readonly GuideConnectionOverride[];
+}
+
+/** One classifier probe: the connection plus the model id to exercise. */
+export interface GuideProbe {
+	readonly baseUrl: string;
+	readonly apiKey?: string;
+	readonly provider: string;
+	readonly id: string;
 }
 
 /** The dialog surface the guide needs; OpenCode's `ui.dialog` satisfies it. */
@@ -87,6 +119,14 @@ export interface GuidePorts {
 	readonly chains: () => readonly GuideChain[];
 	/** The models the catalog offers, in catalog order. */
 	readonly models: () => readonly GuideModel[];
+	/** The decision-model connections the config file declares right now. */
+	readonly connections: () => GuideConnections;
+	/**
+	 * Probe one classifier connection: one SystemOne request exercising choice,
+	 * score and noul. Injected so tests script it and never touch the network;
+	 * hosts bind it to the core `probeLocalClassifier`.
+	 */
+	readonly probeClassifier: (connection: GuideProbe) => Promise<ProbeResult>;
 	/** Run one command verb, e.g. `chain-add auto zai/glm-5.3-flash`. */
 	readonly run: (verbText: string) => Promise<GuideEdit>;
 	/** Ask the server to republish providers after a successful edit. */
@@ -217,27 +257,199 @@ async function editIdleReset(ports: GuidePorts, chain: GuideChain): Promise<void
 	await dispatch(ports, `idle-reset ${chain.id} ${value}`);
 }
 
-/** The decision-model menu: pick a classifier from the catalog, or turn it off. */
+/** The decision-model picker's "type an address" escape (not a real address). */
+export const ENTER_ADDRESS = "__enter-address__";
+
+/** The top menu's decision-providers submenu sentinel (not a chain id). */
+export const PROVIDERS_MENU = "__decision-providers__";
+
+/**
+ * The guide's connection rows as the core resolver sees them, so "is this
+ * address connected?" cannot drift from what the router actually resolves.
+ */
+function connectionSource(connections: GuideConnections): {
+	readonly decisionModels?: Readonly<Record<string, { readonly baseUrl?: string }>>;
+	readonly decisionProviders?: Readonly<Record<string, { readonly baseUrl?: string }>>;
+} {
+	return {
+		...(connections.overrides.length === 0
+			? {}
+			: {
+					decisionModels: Object.fromEntries(
+						connections.overrides.map((entry) => [
+							entry.address,
+							{ ...(entry.baseUrl === undefined ? {} : { baseUrl: entry.baseUrl }) },
+						]),
+					),
+				}),
+		...(connections.providers.length === 0
+			? {}
+			: {
+					decisionProviders: Object.fromEntries(
+						connections.providers.map((entry) => [
+							entry.provider,
+							{ ...(entry.baseUrl === undefined ? {} : { baseUrl: entry.baseUrl }) },
+						]),
+				),
+			}),
+	};
+}
+
+/**
+ * The raw row an address resolves to: its own `decisionModels` entry first,
+ * else the provider's - the same precedence the core resolves with (an
+ * override wins wholly; it never merges with the provider row).
+ */
+function connectionRow(
+	connections: GuideConnections,
+	address: string,
+): GuideProviderConnection | GuideConnectionOverride | undefined {
+	const override = connections.overrides.find((entry) => entry.address === address);
+	if (override !== undefined) return override;
+	const slash = address.indexOf("/");
+	if (slash <= 0) return undefined;
+	const provider = address.slice(0, slash);
+	return connections.providers.find((entry) => entry.provider === provider);
+}
+
+/** One connection row's picker description. */
+function connectionDescription(entry: GuideProviderConnection | GuideConnectionOverride): string {
+	return [entry.baseUrl ?? "no baseUrl", `key ${entry.apiKey ?? "local"}`].join(" · ");
+}
+
+/**
+ * Picker options for addresses the catalog cannot offer but the file can
+ * still classify with: per-address `decisionModels` overrides, plus decision
+ * models already referenced by a chain whose provider has an entry. OpenCode
+ * has no classifier catalog, so without this row a connected address would be
+ * unreachable from the picker.
+ */
+function connectedOptions(ports: GuidePorts): GuideOption<string>[] {
+	const connections = ports.connections();
+	const known = new Set(ports.models().map((model) => model.address));
+	const options = new Map<string, GuideOption<string>>();
+	const add = (address: string, entry: GuideProviderConnection | GuideConnectionOverride) => {
+		if (known.has(address) || options.has(address)) return;
+		options.set(address, { title: address, value: address, description: connectionDescription(entry) });
+	};
+	for (const override of connections.overrides) add(override.address, override);
+	for (const chain of ports.chains()) {
+		const address = chain.decisionModel;
+		if (address === undefined) continue;
+		const slash = address.indexOf("/");
+		if (slash <= 0) continue;
+		const entry = connections.providers.find((provider) => provider.provider === address.slice(0, slash));
+		if (entry !== undefined) add(address, entry);
+	}
+	return [...options.values()];
+}
+
+/** Probe one address with its resolved connection and report the outcome. */
+async function probeAndReport(ports: GuidePorts, address: string): Promise<void> {
+	const parts = splitDecisionModelAddress(address);
+	if (parts === undefined) {
+		ports.say(`switchback: "${address}" is not a "provider/model" address`, "warning");
+		return;
+	}
+	const row = connectionRow(ports.connections(), address);
+	const baseUrl = row?.baseUrl;
+	if (baseUrl === undefined) {
+		ports.say(`switchback: ${address} has no baseUrl to test`, "warning");
+		return;
+	}
+	const apiKey = row?.apiKey;
+	let result: ProbeResult;
+	try {
+		result = await ports.probeClassifier({
+			baseUrl,
+			provider: parts.provider,
+			id: parts.id,
+			...(apiKey === undefined ? {} : { apiKey }),
+		});
+	} catch (error) {
+		ports.say(
+			`switchback: cannot reach ${baseUrl} - ${error instanceof Error ? error.message : String(error)}`,
+			"error",
+		);
+		return;
+	}
+	ports.say(
+		formatProbeReport({ label: `${parts.provider}/${parts.id} at ${baseUrl}`, result }),
+		result.ok ? "success" : "warning",
+	);
+}
+
+/**
+ * After a decision model lands, offer the quick capability check. A connected
+ * address gets one probe request; an address with no connection details gets a
+ * one-line warning that names the way out (the Decision providers menu),
+ * because OpenCode has no classifier catalog to resolve it.
+ */
+async function offerQuickProbe(ports: GuidePorts, address: string): Promise<void> {
+	const connection = decisionModelConnection(connectionSource(ports.connections()), address);
+	if (connection?.baseUrl === undefined) {
+		ports.say(
+			`switchback: ${address} has no connection details yet - OpenCode has no classifier catalog, so this address cannot classify; connect it under "Decision providers"`,
+			"warning",
+		);
+		return;
+	}
+	const confirmed = await ports.dialog.confirm({
+		title: `test ${address} now?`,
+		message: "one request exercises choice, score and noul against the configured endpoint.",
+	});
+	if (confirmed !== true) return;
+	await probeAndReport(ports, address);
+}
+
+/** The decision-model menu: pick a classifier, enter an address, or turn it off. */
 async function editDecisionModel(ports: GuidePorts, chain: GuideChain): Promise<void> {
 	const current = chain.decisionModel;
-	const address = await ports.dialog.select<string | null>({
+	const picked = await ports.dialog.select<string | null>({
 		title: `decision model for ${chain.id}`,
-		placeholder: "type to search models, or pick 'off'",
+		placeholder: "type to search, pick 'off', or enter an address",
 		options: [
 			{ title: "off", value: null, description: "cycle blindly when no classifier is configured" },
 			...modelOptions(ports.models()),
+			...connectedOptions(ports),
+			{ title: "Enter an address...", value: ENTER_ADDRESS, description: 'a "provider/model" id, e.g. ollama/jev' },
 		],
 		current: current ?? null,
 		search: (query, options) => {
 			if (query.trim().length === 0) return options;
-			// Keep the "off" escape hatch reachable whatever the query is.
-			const off = options.filter((option) => option.value === null);
-			const rest = options.filter((option) => option.value !== null) as readonly GuideOption<string>[];
-			return [...off, ...searchModelOptions(query, rest)];
+			// Keep the "off" escape and the address escape reachable whatever the query is.
+			const pinned = options.filter(
+				(option) => option.value === null || option.value === ENTER_ADDRESS,
+			);
+			const rest = options.filter(
+				(option) => option.value !== null && option.value !== ENTER_ADDRESS,
+			) as readonly GuideOption<string>[];
+			return [...pinned, ...searchModelOptions(query, rest)];
 		},
 	});
-	if (address === undefined) return;
-	await dispatch(ports, `decision-model ${chain.id} ${address ?? "off"}`);
+	if (picked === undefined) return;
+	if (picked === null) {
+		await dispatch(ports, `decision-model ${chain.id} off`);
+		return;
+	}
+	let address = picked;
+	if (picked === ENTER_ADDRESS) {
+		const typed = await ports.dialog.prompt({
+			title: "decision model address",
+			description: 'a "provider/model" id; connect the provider first when it is not in the catalog',
+			placeholder: "ollama/jev",
+			value: current ?? "",
+		});
+		if (typed === undefined) return;
+		const trimmed = typed.trim();
+		if (splitDecisionModelAddress(trimmed) === undefined) {
+			ports.say(`switchback: "${trimmed}" is not a "provider/model" address`, "warning");
+			return;
+		}
+		address = trimmed;
+	}
+	if (!(await dispatch(ports, `decision-model ${chain.id} ${address}`))) return;
+	await offerQuickProbe(ports, address);
 }
 
 /** Append one catalog model to a chain. */
@@ -456,10 +668,179 @@ export async function addChain(ports: GuidePorts): Promise<void> {
 	}
 }
 
-/** The top menu: pick a chain, add one, or leave. */
+/** One provider's summary line: endpoint, key, and how many models it serves. */
+function providerSummary(entry: GuideProviderConnection, usedBy: number): string {
+	return [
+		entry.baseUrl ?? "no baseUrl",
+		`key ${entry.apiKey ?? "local"}`,
+		usedBy === 0 ? "no models yet" : `used by ${usedBy} model${usedBy === 1 ? "" : "s"}`,
+	].join(" · ");
+}
+
+/** How many chains classify with a decision model from this provider. */
+function providerUseCount(chains: readonly GuideChain[], provider: string): number {
+	return chains.filter((chain) => {
+		const address = chain.decisionModel;
+		if (address === undefined) return false;
+		const slash = address.indexOf("/");
+		return slash > 0 && address.slice(0, slash) === provider;
+	}).length;
+}
+
+/**
+ * Ask for a connection's endpoint and api key mode, prefilled from `current`.
+ * Empty key input means "local"; shape errors are left to the verb, which owns
+ * validation - the menu never invents its own rules.
+ */
+async function promptConnection(
+	ports: GuidePorts,
+	current: GuideProviderConnection,
+): Promise<{ readonly baseUrl: string; readonly key: string } | undefined> {
+	const baseUrl = await ports.dialog.prompt({
+		title: "baseUrl",
+		description: "the SystemOne endpoint every decision model of this provider uses",
+		placeholder: "http://localhost:11434",
+		value: current.baseUrl ?? "",
+	});
+	if (baseUrl === undefined) return undefined;
+	const trimmedUrl = baseUrl.trim();
+	if (trimmedUrl.length === 0) {
+		ports.say("switchback: a baseUrl cannot be empty - a provider entry needs an endpoint", "warning");
+		return undefined;
+	}
+	const key = await ports.dialog.prompt({
+		title: "api key",
+		description: '"local" for a local server, or "secret:<name>" to read the key from the environment',
+		placeholder: "local",
+		value: current.apiKey ?? "local",
+	});
+	if (key === undefined) return undefined;
+	const trimmedKey = key.trim();
+	return { baseUrl: trimmedUrl, key: trimmedKey.length === 0 ? "local" : trimmedKey };
+}
+
+/** Create a provider connection: id, endpoint, then the api key mode. */
+async function addProvider(ports: GuidePorts): Promise<void> {
+	const provider = await ports.dialog.prompt({
+		title: "provider id",
+		description: 'the first half of a "provider/model" address, e.g. ollama',
+		placeholder: "ollama",
+	});
+	if (provider === undefined) return;
+	const trimmed = provider.trim();
+	if (trimmed.length === 0) {
+		ports.say("switchback: a provider id cannot be empty", "warning");
+		return;
+	}
+	const connection = await promptConnection(ports, { provider: trimmed });
+	if (connection === undefined) return;
+	await dispatch(ports, `provider ${trimmed} ${connection.baseUrl} ${connection.key}`);
+}
+
+/** Probe one model id against a provider's connection. */
+async function testProvider(ports: GuidePorts, entry: GuideProviderConnection): Promise<void> {
+	if (entry.baseUrl === undefined) {
+		ports.say(`switchback: ${entry.provider} has no baseUrl to test`, "warning");
+		return;
+	}
+	const typed = await ports.dialog.prompt({
+		title: `model id to test on ${entry.provider}`,
+		description: 'the id half of the address; a pasted "provider/model" works too',
+		placeholder: "jev",
+	});
+	if (typed === undefined) return;
+	let id = typed.trim();
+	if (id.startsWith(`${entry.provider}/`)) id = id.slice(entry.provider.length + 1);
+	if (id.length === 0 || id.includes("/")) {
+		ports.say(`switchback: "${typed.trim()}" is not a model id for ${entry.provider}`, "warning");
+		return;
+	}
+	await probeAndReport(ports, `${entry.provider}/${id}`);
+}
+
+/** One provider's menu: edit its connection, test it, or remove it. */
+async function editProvider(ports: GuidePorts, providerId: string): Promise<void> {
+	for (;;) {
+		const entry = ports.connections().providers.find((provider) => provider.provider === providerId);
+		if (entry === undefined) {
+			ports.say(`switchback: ${providerId} is no longer configured`, "warning");
+			return;
+		}
+		const action = await ports.dialog.select<"connection" | "test" | "remove" | "back">({
+			title: entry.provider,
+			options: [
+				{
+					title: "Edit connection",
+					value: "connection",
+					description: providerSummary(entry, providerUseCount(ports.chains(), entry.provider)),
+				},
+				{ title: "Test", value: "test", description: "probe one model id against this endpoint" },
+				{ title: "Remove", value: "remove" },
+				{ title: "Back", value: "back" },
+			],
+		});
+		if (action === undefined || action === "back") return;
+		switch (action) {
+			case "connection": {
+				const connection = await promptConnection(ports, entry);
+				if (connection !== undefined) {
+					await dispatch(ports, `provider ${entry.provider} ${connection.baseUrl} ${connection.key}`);
+				}
+				break;
+			}
+			case "test":
+				await testProvider(ports, entry);
+				break;
+			case "remove": {
+				const usedBy = providerUseCount(ports.chains(), entry.provider);
+				const confirmed = await ports.dialog.confirm({
+					title: `remove ${entry.provider}?`,
+					message:
+						usedBy === 0
+							? "its connection details will be removed from switchback.yaml."
+							: `${usedBy} model${usedBy === 1 ? "" : "s"} classify with ${entry.provider}; without the entry they cannot classify.`,
+				});
+				if (confirmed === true) {
+				await dispatch(ports, `provider-remove ${entry.provider}`);
+				return;
+				}
+				break;
+			}
+		}
+	}
+}
+
+/** The decision-providers submenu: list, add, then per-provider edit/test/remove. */
+export async function editProviders(ports: GuidePorts): Promise<void> {
+	for (;;) {
+		const providers = ports.connections().providers;
+		const choice = await ports.dialog.select<string>({
+			title: "decision providers",
+			placeholder: providers.length === 0 ? "no providers connected yet" : "type to filter providers",
+			options: [
+				...providers.map((entry) => ({
+					title: entry.provider,
+					value: entry.provider,
+					description: providerSummary(entry, providerUseCount(ports.chains(), entry.provider)),
+				})),
+				{ title: "Add a provider", value: "add", description: "connect a provider's decision models" },
+				{ title: "Back", value: "back" },
+			],
+		});
+		if (choice === undefined || choice === "back") return;
+		if (choice === "add") {
+			await addProvider(ports);
+			continue;
+		}
+		await editProvider(ports, choice);
+	}
+}
+
+/** The top menu: pick a chain, add one, manage connections, or leave. */
 export async function runGuide(ports: GuidePorts): Promise<void> {
 	for (;;) {
 		const chains = ports.chains();
+		const providers = ports.connections().providers;
 		const choice = await ports.dialog.select<string | null>({
 			title: "switchback configuration",
 			placeholder: chains.length === 0 ? "no chains configured yet" : "type to filter chains",
@@ -469,12 +850,26 @@ export async function runGuide(ports: GuidePorts): Promise<void> {
 					value: chain.id as string | null,
 					description: chainDescription(chain),
 				})),
+				{
+					title: "Decision providers",
+					value: PROVIDERS_MENU,
+					description:
+						providers.length === 0
+							? "no connections yet"
+							: `${providers.length} connected`,
+				},
 				{ title: "Add a chain", value: null, description: "create a new virtual model" },
 			],
 		});
 		if (choice === undefined) return;
 		if (choice === null) {
 			await addChain(ports);
+			continue;
+		}
+		// A chain named like the sentinel would shadow the submenu entry; the
+		// chains still open through the per-chain menu of any other chain.
+		if (choice === PROVIDERS_MENU && !chains.some((chain) => chain.id === PROVIDERS_MENU)) {
+			await editProviders(ports);
 			continue;
 		}
 		await editChain(ports, choice);

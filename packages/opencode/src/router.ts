@@ -34,6 +34,7 @@ import type { PhysicalEntry, RouteAnswer, RouteCall, SwitchbackBridge } from "./
 import { catalogPort, findInCatalog, opencodeThinkingSupport, providerModuleFor } from "./catalog.ts";
 import type { CatalogModel } from "./catalog.ts";
 import { publishNotice } from "./notices.ts";
+import { findUnconnectedDecisionModels } from "./decision-model-check.ts";
 
 /** `secret:<name>` refs resolve against the environment (no readable vault). */
 const envSecrets: SecretResolver = { get: (name) => process.env[name] };
@@ -64,7 +65,9 @@ export function createRouter(options: RouterOptions): SwitchbackBridge {
 		try {
 			const loaded = loadConfig(envSecrets);
 			configNotified = false;
-			reportConfigWarnings(loaded.warnings, (message) => notifyAll(message));
+			reportConfigWarnings([...loaded.warnings, ...findUnconnectedDecisionModels(loaded.config)], (message) =>
+				notifyAll(message),
+			);
 			return loaded.config;
 		} catch (error) {
 			if (!configNotified) {

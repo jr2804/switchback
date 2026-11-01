@@ -35,10 +35,13 @@
 | System One classifier transport (delegates to `@typesafe-ai/sdk`) | `packages/core/src/systemone.ts` |
 | Catalog validity (`resolveFallbacks`) | `packages/core/src/availability.ts` |
 | Config loader (YAML; the one shared file at `~/.config/switchback/switchback.yaml`) | `packages/core/src/config.ts` |
-| Config editor (comment-preserving YAML round-trip) | `packages/core/src/config-editor.ts` |
+| Decision-model connection resolution (address override → provider entry; `decisionModelConnection`) | `packages/core/src/classifier-connection.ts` |
+| Config editor (comment-preserving YAML round-trip; decision-model + provider CRUD) | `packages/core/src/config-editor.ts` |
 | Interactive config dialogue (`/switchback-config`) | `packages/pi/src/dialogue.ts` |
 | …its shared session, screen-title and prompt primitives | `packages/pi/src/dialogue-ui.ts` |
-| …its decision-model wizard (`decisionModel:` address picker, `decisionModels` map entry menu for rename/connection/probe/delete, `baseUrl` + API-key steps) | `packages/pi/src/dialogue-classifier.ts` |
+| …its decision-model wizard (`decisionModel:` address picker + probe, `decisionModels` overrides menu, `decisionProviders` provider menu) | `packages/pi/src/dialogue-classifier.ts` |
+| …pi-side unresolvable-address check (registry lookup, direct endpoints skipped) | `packages/pi/src/decision-model-check.ts` |
+| …OpenCode-side unconnected-address check (no catalog there) | `packages/opencode/src/decision-model-check.ts` |
 | Shared types | `packages/core/src/types.ts` |
 | Atomic store writes (per-write staging path, retried rename) | `packages/core/src/atomic-write.ts` |
 | Blocked-until store (atomic) | `packages/core/src/state.ts` |

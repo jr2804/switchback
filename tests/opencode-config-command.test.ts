@@ -359,6 +359,104 @@ describe("/switchback-config: failure handling", () => {
 	});
 });
 
+describe("/switchback-config: decision providers", () => {
+	beforeEach(() => {
+		// The file-level validator requires at least one model, so every provider
+		// mutation starts from a valid one-model file (a provider-first config is
+		// rejected by the loader, not by the verbs).
+		seedConfig();
+	});
+
+	it("adds a provider entry with the default local key", () => {
+		const text = run("provider ollama http://localhost:11434");
+		expect(text).toContain("added the decision-model connection for ollama");
+		const config = validateFileConfig(configYaml(), configFilePath()).config;
+		expect(config.decisionProviders?.["ollama"]).toEqual({ baseUrl: "http://localhost:11434", apiKey: "local" });
+	});
+
+	it("writes a secret:<name> key reference verbatim", () => {
+		run("provider ollama http://localhost:11434 secret:JEV_KEY");
+		const config = validateFileConfig(configYaml(), configFilePath()).config;
+		expect(config.decisionProviders?.["ollama"]?.apiKey).toBe("secret:JEV_KEY");
+	});
+
+	it("updates an existing provider instead of failing on the duplicate", () => {
+		run("provider ollama http://localhost:11434");
+		const text = run("provider ollama https://jev.example.com secret:JEV_KEY");
+		expect(text).toContain("updated the decision-model connection for ollama");
+		const config = validateFileConfig(configYaml(), configFilePath()).config;
+		expect(config.decisionProviders?.["ollama"]).toEqual({ baseUrl: "https://jev.example.com", apiKey: "secret:JEV_KEY" });
+	});
+
+	it("removes a provider entry", () => {
+		run("provider ollama http://localhost:11434");
+		expect(run("provider-remove ollama")).toContain("removed the decision-model connection for ollama");
+		const config = validateFileConfig(configYaml(), configFilePath()).config;
+		expect(config.decisionProviders).toBeUndefined();
+	});
+
+	it("reports usage for a truncated mutation and keeps the lone id a report", () => {
+		expect(run("provider-remove")).toContain("usage: /switchback-config provider-remove <provider>");
+		// A lone `provider <id>` shows that provider, it does not mutate.
+		expect(run("provider ollama")).toContain('no decision provider matches "ollama"');
+	});
+
+	it("lists the configured providers with their keys and use count", () => {
+		run("decision-model auto ollama/jev");
+		run("provider ollama http://localhost:11434 secret:JEV_KEY");
+		run("provider openrouter https://openrouter.ai/api/v1");
+		const text = run("provider");
+		expect(text).toContain("ollama - http://localhost:11434");
+		expect(text).toContain("apiKey: secret:JEV_KEY");
+		expect(text).toContain("used by: 1 model");
+		expect(text).toContain("openrouter - https://openrouter.ai/api/v1");
+		expect(text).toContain("used by: no models yet");
+		// The lone-id form filters to that provider.
+		expect(run("provider ollama")).toContain("ollama - http://localhost:11434");
+		expect(run("provider ollama")).not.toContain("openrouter");
+	});
+
+	it("reports an absent provider list as a hint, not an error", () => {
+		const text = run("provider");
+		expect(text).toContain("no decision providers configured");
+		expect(text).toContain("provider <provider> <url>");
+	});
+
+	it("rejects key modes that are neither local nor secret:<name>", () => {
+		const text = run("provider ollama http://localhost:11434 local2");
+		expect(text).toContain('"local2" is not an api key; use "local" or "secret:<name>"');
+		// The rejected edit never saves; the seeded file stays as it was.
+		expect(configYaml().decisionProviders).toBeUndefined();
+	});
+
+	it("rejects a secret: reference without a name", () => {
+		expect(run("provider ollama http://localhost:11434 secret:")).toContain('"secret:" needs a name');
+	});
+
+	it("routes a provider id containing a slash to the loader's message", () => {
+		const text = run("provider a/b http://localhost:11434");
+		expect(text).toContain('decisionProviders.a/b must be a provider id');
+		// The rejected edit leaves the seeded file without the new map.
+		expect(configYaml().decisionProviders).toBeUndefined();
+	});
+
+	it("routes an invalid url to the loader's message", () => {
+		const text = run("provider ollama nope");
+		expect(text).toContain("decisionProviders.ollama.baseUrl is not a valid URL: nope");
+	});
+
+	it("surfaces the editor's own message when removing an unknown provider", () => {
+		expect(run("provider-remove nosuch")).toContain("decisionProviders.nosuch not found");
+	});
+
+	it("keeps the file loadable after provider verbs", () => {
+		run("provider ollama http://localhost:11434");
+		run("provider-remove ollama");
+		const loaded = loadConfig({ get: () => undefined });
+		expect(loaded.config.decisionProviders).toBeUndefined();
+	});
+});
+
 describe("/switchback-config: sink", () => {
 	it("delivers the report through the sink and returns it", async () => {
 		seedConfig();

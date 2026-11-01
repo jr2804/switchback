@@ -253,10 +253,14 @@ a `decisionModels:` entry for it:
   catalog and supplies the endpoint, wire API and credential (whatever `/login`
   or the provider's environment variable configured). Switchback stores nothing
   and asks for nothing on this path. OpenCode has no classifier catalog, so the
-  same address reports a visible no-classifier cycle there instead.
+  same address reports a startup warning naming the missing piece (`decisionProviders.<provider>`)
+  instead of failing silently.
 - **Entry with `baseUrl` — a direct endpoint.** Switchback drives the endpoint
   itself over the SystemOne wire API, in both hosts. This is the case that needs
   a switchback-side credential.
+
+An address can also inherit its connection from a provider entry — see the
+decisionProviders section below. When both exist, the address-level entry wins.
 
 ### `decisionModels:` — connection details
 
@@ -279,10 +283,51 @@ non-space character is just text. Quoting is always safe and is what the
 Fields:
 
 - `baseUrl` — `http(s)` URL of the SystemOne endpoint. Optional: an entry
-  without one is catalog-only (and says so with a warning).
+  without one is an **empty override** — it shadows the provider entry
+  entirely and leaves the address catalog-resolved (see below).
 - `apiKey` — bearer token. **Required with `baseUrl`**; use `local` for
   endpoints that ignore the bearer token (Ollama), or `secret:<name>` to point
   at the encrypted store on pi.
+
+### `decisionProviders` — per-provider connections
+
+A provider's classifiers share one endpoint and one credential, so connection
+details can be declared once per provider instead of once per address. The
+`decisionProviders:` map is keyed by the **provider id** (no `/`, no model id):
+
+```yaml
+models:
+  - id: switchback/auto
+    name: Auto (Switchback)
+    fallbacks:
+      - ollama/minimax-m3
+    decisionModel: ollama/tev1:0.8b
+
+decisionProviders:
+  ollama:
+    baseUrl: http://localhost:11434/v1
+    apiKey: local
+```
+
+Every `ollama/*` address now resolves through that entry — a second model
+switching to `ollama/tev2` needs no further config. The fields and the strict
+rules are exactly the `decisionModels:` ones above, with one addition: a
+provider key containing `/` is an error (`must be a provider id (e.g.
+"ollama"), not a "provider/model" address`).
+
+Precedence (whole entry, not field-by-field): a `decisionModels:<address>`
+entry overrides the provider entry **in its entirety** — an empty override
+(`ollama/tev1: {}`) does not fall back to the provider for the missing
+fields; it puts that one address back on catalog resolution. The provider
+entry covers every address of the provider that has no own entry; addresses
+with neither resolve from the host catalog (pi) or report the OpenCode
+startup warning.
+
+When to use which: on **pi**, `decisionProviders` is only needed when the
+provider is not in pi's catalog (a local llama.cpp/Ollama box) — catalog
+addresses need nothing at all. On **OpenCode** it is the primary way to give a
+decision model a connection, because that host has no catalog to resolve
+from.
 
 The loader is deliberately strict about a half-configured entry and deliberately
 loud about a retired one. None of these are silent:
@@ -295,8 +340,12 @@ loud about a retired one. None of these are silent:
 | retired `jev:` block | warning: `use decisionModel: <provider>/<model-id> instead` |
 | retired `api:` field | warning: drop it — a `decisionModels` entry always speaks SystemOne |
 | list-form `decisionModels:` | warning; the list is ignored |
-| entry not referenced by any `models[].decisionModel` | warning; the entry is ignored |
-| entry with no connection details | warning: resolves from the classifier catalog only |
+| `decisionProviders` key containing `/` | error: `must be a provider id ... not a "provider/model" address` |
+
+An entry that carries no connection details is **not** a warning on pi: the
+address still resolves from the catalog, and an override may legitimately be
+waiting for a model to adopt it. On OpenCode the same situation leaves the
+address unusable, and the host check says so at startup (see below).
 
 ### When a decision model does not resolve
 
@@ -314,6 +363,18 @@ Routing continues deterministically while the warning stands: errors blind-cycle
 through the fallback list and the reasoning category is clamped to the routed
 model. When the model appears again (pulled into Ollama, catalog refreshed), the
 warning simply stops.
+
+Two cases never reach that check. An address with its own `baseUrl` (or a
+`decisionProviders` entry) points at a SystemOne endpoint that publishes no
+model list, so there is nothing to look up — the registry is not asked. And on
+OpenCode, where there is no registry at all, a referenced address without any
+connection details reports its own startup warning instead:
+
+```text
+switchback config: decision model "typesafe/jev-latest" has no connection
+details and OpenCode has no classifier catalog - add decisionProviders.typesafe
+(baseUrl + apiKey) or switchback cannot classify through it
+```
 
 ### Direct endpoints and pi's registry
 
@@ -342,9 +403,10 @@ would replace them with the classifier alone - pick a distinct provider id
 ("<provider>-<suffix>") instead.
 ```
 
-A `decisionModels:` entry that no virtual model references is reported with a
-warning and ignored — the entry is not registered and the router sees no
-classifier for that address. Entries can stay in the map while a model list is
+A `decisionModels:` entry that no virtual model references simply sits unused —
+it is not registered and the router sees no classifier for that address, but it
+stays available for a model to adopt later (the `/switchback-config` dialogue
+offers it in the picker). Entries can stay in the map while a model list is
 being edited.
 
 Example — pi's own catalog (no entry, no key in the config):

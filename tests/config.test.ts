@@ -243,7 +243,10 @@ describe("loadConfig - bare ids and decision-model addresses", () => {
 		expect(() => loadConfig()).toThrow(/decisionModel must be of the form "provider\/id"/);
 	});
 
-	it("warns about a decisionModels entry nothing names", () => {
+	it("keeps an unreferenced decisionModels entry without complaint", () => {
+		// An unused entry is harmless: it may be left over from a chain that was
+		// deleted, or added ahead of use. pi's config layer warned about it once and
+		// the warning read as an error although nothing was wrong.
 		writeWith(
 			`- id: auto
     name: Main
@@ -255,7 +258,7 @@ describe("loadConfig - bare ids and decision-model addresses", () => {
 `,
 		);
 		const { warnings } = loadConfig();
-		expect(warnings.join("\n")).toMatch(/not referenced by any models\[\]\.decisionModel/);
+		expect(warnings).toEqual([]);
 	});
 });
 
@@ -306,11 +309,15 @@ describe("loadConfig - decision model connection details", () => {
 		});
 	});
 
-	it("accepts an entry with no connection details (catalog resolution) and warns about it", () => {
+	it("accepts an entry with no connection details (catalog resolution) without a warning", () => {
+		// Catalog resolution is the normal case on pi: `typesafe/jev-latest` and
+		// `ollama/tev1` come from the host model registry, so having no baseUrl is
+		// not a fault. Hosts without a catalog report it themselves (packages/
+		// opencode/src/decision-model-check.ts).
 		writeDecisionConfig("    {}\n", "typesafe/jev-latest");
 		const { config, warnings } = loadConfig();
 		expect(config.models[0]?.decisionModel).toEqual({ provider: "typesafe", id: "jev-latest" });
-		expect(warnings.join("\n")).toMatch(/has no connection details/);
+		expect(warnings).toEqual([]);
 	});
 
 	it("accepts any provider id for a direct endpoint (no reserved list in the loader)", () => {
@@ -342,6 +349,120 @@ describe("loadConfig - decision model connection details", () => {
 	it("rejects a non-http(s) baseUrl", () => {
 		writeDecisionConfig("    baseUrl: ftp://localhost/v1\n    apiKey: local\n");
 		expect(() => loadConfig()).toThrow(/must be http\(s\)/);
+	});
+});
+
+describe("loadConfig - decisionProviders", () => {
+	const writeProviders = (providers: string, address = "ollama/tev1"): void => {
+		writeConfig(
+			`models:\n  - id: switchback/auto\n    name: Auto (Switchback)\n    fallbacks: ["zai/glm-5.3"]\n    decisionModel: ${address}\ndecisionProviders:\n${providers}`,
+		);
+	};
+
+	it("applies one provider entry to every model of that provider", () => {
+		// The point of the provider section: a direct endpoint is connection
+		// detail, not a model. Two models of the same provider share it.
+		writeConfig(
+			`models:
+  - id: switchback/auto
+    name: Auto (Switchback)
+    fallbacks: ["zai/glm-5.3"]
+    decisionModel: ollama/tev1
+  - id: switchback/coder
+    name: Coder (Switchback)
+    fallbacks: ["zai/glm-5.3"]
+    decisionModel: ollama/tinyjev
+decisionProviders:
+  ollama:
+    baseUrl: http://localhost:11434/v1
+    apiKey: local
+`,
+		);
+		const { config, warnings } = loadConfig();
+		expect(warnings).toEqual([]);
+		expect(config.models.map((m) => m.decisionModel?.baseUrl)).toEqual([
+			"http://localhost:11434/v1",
+			"http://localhost:11434/v1",
+		]);
+		expect(config.models.map((m) => m.decisionModel?.id)).toEqual(["tev1", "tinyjev"]);
+	});
+
+	it("lets a decisionModels entry override the provider's endpoint", () => {
+		writeConfig(
+			`models:
+  - id: switchback/auto
+    name: Auto (Switchback)
+    fallbacks: ["zai/glm-5.3"]
+    decisionModel: ollama/tev1
+decisionProviders:
+  ollama:
+    baseUrl: http://localhost:11434/v1
+    apiKey: local
+decisionModels:
+  ollama/tev1:
+    baseUrl: http://gpu-box:11434/v1
+    apiKey: local
+`,
+		);
+		const { config } = loadConfig();
+		expect(config.models[0]?.decisionModel?.baseUrl).toBe("http://gpu-box:11434/v1");
+	});
+
+	it("shadows the provider entry entirely when the override is empty", () => {
+		// Precedence is whole-entry, not field-by-field: an empty override does
+		// NOT fall through to the provider - the address is catalog-resolved
+		// again. This is the subtle half of the override rule, so it is pinned
+		// here (the pi/OpenCode checks build on the same semantics).
+		writeConfig(
+			`models:
+  - id: switchback/auto
+    name: Auto (Switchback)
+    fallbacks: ["zai/glm-5.3"]
+    decisionModel: ollama/tev1
+decisionProviders:
+  ollama:
+    baseUrl: http://localhost:11434/v1
+    apiKey: local
+decisionModels:
+  ollama/tev1: {}
+`,
+		);
+		const { config } = loadConfig();
+		expect(config.models[0]?.decisionModel).toEqual({ provider: "ollama", id: "tev1" });
+	});
+
+	it("resolves a secret reference in a provider entry", () => {
+		writeProviders("  ollama:\n    baseUrl: http://localhost:11434/v1\n    apiKey: secret:ollama-key\n");
+		const { config } = loadConfig({ get: (name) => (name === "ollama-key" ? "s3cret" : undefined) });
+		expect(config.models[0]?.decisionModel?.apiKey).toBe("s3cret");
+	});
+
+	it("accepts a provider entry with no connection details", () => {
+		// A named-but-empty provider is how the TUI records "use the catalog"; it
+		// must not be an error on a host that has one.
+		writeProviders("  ollama: {}\n");
+		const { config, warnings } = loadConfig();
+		expect(warnings).toEqual([]);
+		expect(config.models[0]?.decisionModel).toEqual({ provider: "ollama", id: "tev1" });
+	});
+
+	it("rejects a provider key that is really a model address", () => {
+		writeProviders("  ollama/tev1:\n    baseUrl: http://localhost:11434/v1\n    apiKey: local\n");
+		expect(() => loadConfig()).toThrow(/must be a provider id/);
+	});
+
+	it("warns (not fails) about an unknown top-level key", () => {
+		writeConfig(
+			`models:
+  - id: switchback/auto
+    name: Auto (Switchback)
+    fallbacks: ["zai/glm-5.3"]
+decisionProvider:
+  ollama: {}
+`,
+		);
+		const { warnings } = loadConfig();
+		expect(warnings.join("\n")).toMatch(/config\.decisionProvider is not a switchback config key/);
 	});
 });
 

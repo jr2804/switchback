@@ -31,16 +31,29 @@ export interface DecisionModelConfig {
 }
 
 /**
- * Connection details for one decision-model address - a `decisionModels:` map
- * value. `baseUrl` and `apiKey` come as a pair: a direct endpoint needs a bearer
- * token even when the endpoint ignores it (`apiKey: local`).
+ * Connection details for one classifier provider - a `decisionProviders:` map
+ * value, and also the shape of a per-address `decisionModels:` override.
+ * `baseUrl` and `apiKey` come as a pair: a direct endpoint needs a bearer token
+ * even when the endpoint ignores it (`apiKey: local`).
+ *
+ * The provider map is the normal place to put these: one entry serves every
+ * decision model of that provider (`ollama/tev1`, `ollama/tev1:0.8b`, ...), so a
+ * chain only names `provider/model` and no longer repeats endpoint details per
+ * model.
  */
-export interface DecisionModelEntry {
+export interface DecisionProviderEntry {
 	/** Direct SystemOne endpoint (http/https). */
 	baseUrl?: string;
 	/** Bearer token, or `secret:<name>`. Required with `baseUrl`. */
 	apiKey?: string;
 }
+
+/**
+ * Connection details for one decision-model address - a `decisionModels:` map
+ * value, and the per-address override that wins over `decisionProviders:`.
+ * Same shape as a provider entry; see `DecisionProviderEntry`.
+ */
+export type DecisionModelEntry = DecisionProviderEntry;
 
 /**
  * A config entry after address resolution: `decisionModel` is always the
@@ -51,11 +64,20 @@ export type ResolvedSwitchbackConfig = Omit<SwitchbackConfig, "decisionModel"> &
 	decisionModel?: DecisionModelConfig;
 };
 
+/** A classifier provider's connection details after secret resolution. */
+export type DecisionProviderConfig = DecisionProviderEntry;
+
 /** A config file after aggregation and address resolution. */
 export interface ResolvedSwitchbackFileConfig {
 	models: ResolvedSwitchbackConfig[];
 	/** Resolved `decisionModels:` entries, keyed by their address. */
 	decisionModels?: Record<DecisionModelId, DecisionModelConfig>;
+	/**
+	 * Resolved `decisionProviders:` entries, keyed by provider id. Copied into
+	 * every `models[].decisionModel` of that provider during resolution, so the
+	 * router only ever reads a fully connected descriptor.
+	 */
+	decisionProviders?: Record<string, DecisionProviderConfig>;
 	debug?: boolean;
 }
 
@@ -75,9 +97,9 @@ export interface SwitchbackConfig {
 	/** Ordered preference of physical models ("provider/id"). First entry is the preferred model. */
 	fallbacks: ModelId[];
 	/**
-	 * Decision model as "provider/model-id". Connection details for direct
-	 * endpoints live in the top-level `decisionModels:` map under the same
-	 * address. Absent: report and blind-cycle.
+	 * Decision model as "provider/model-id". Connection details for a direct
+	 * endpoint come from `decisionProviders:` (or a `decisionModels:` entry at
+	 * this exact address, which wins). Absent: report and blind-cycle.
 	 */
 	decisionModel?: DecisionModelId;
 	/** Return to the head of the list after this much idle time (default `never`). */
@@ -88,9 +110,16 @@ export interface SwitchbackConfig {
 export interface SwitchbackFileConfig {
 	models: SwitchbackConfig[];
 	/**
-	 * Connection details for decision-model addresses that need a direct
-	 * SystemOne endpoint, keyed by the same "provider/model-id" address a chain
-	 * names in `decisionModel:`.
+	 * Connection details for classifier providers that need a direct SystemOne
+	 * endpoint, keyed by provider id. One entry covers every decision model of
+	 * that provider, so `decisionModel: ollama/tev1` inherits
+	 * `decisionProviders.ollama`. This is the normal place for endpoint + token.
+	 */
+	decisionProviders?: Record<string, DecisionProviderEntry>;
+	/**
+	 * Per-address connection overrides, keyed by "provider/model-id". Only needed
+	 * when one model of a provider talks to a different endpoint than its
+	 * provider entry; it wins over `decisionProviders:` for that address.
 	 */
 	decisionModels?: Record<DecisionModelId, DecisionModelEntry>;
 	/**

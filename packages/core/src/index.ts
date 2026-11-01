@@ -97,19 +97,24 @@ export {
 export type { SwitchbackConfig, SwitchbackFileConfig, DecisionModelConfig, SecretResolver } from "./config.ts";
 export type {
 	DecisionModelEntry,
+	DecisionProviderConfig,
+	DecisionProviderEntry,
 	DecisionModelId,
 	ResolvedSwitchbackConfig,
 	ResolvedSwitchbackFileConfig,
 } from "./types.ts";
 export {
 	addDecisionModel,
+	addDecisionProvider,
 	addFallback,
 	addVirtualModel,
 	countDecisionModelReferences,
+	countDecisionProviderReferences,
 	loadConfigFile,
 	moveFallback,
 	readConfigFile,
 	removeDecisionModel,
+	removeDecisionProvider,
 	removeFallback,
 	removeVirtualModel,
 	renameDecisionModel,
@@ -121,14 +126,27 @@ export {
 	setIdleReset,
 	setVirtualModelName,
 	updateDecisionModel,
+	updateDecisionProvider,
 } from "./config-editor.ts";
-export type { DecisionModelInput, DecisionModelPatch, LoadedConfig } from "./config-editor.ts";
+export type {
+	DecisionModelInput,
+	DecisionModelPatch,
+	DecisionProviderInput,
+	DecisionProviderPatch,
+	LoadedConfig,
+} from "./config-editor.ts";
 export {
 	buildClassifierProviders,
 	classifierBaseUrlNote,
 	defaultDecisionModelName,
 	directEndpointWouldClobber,
 } from "./classifier-catalog.ts";
+export {
+	decisionModelConnection,
+	decisionModelsWithoutConnection,
+	referencedDecisionModelAddresses,
+	splitDecisionModelAddress,
+} from "./classifier-connection.ts";
 export type {
 	ClassifierModelSummary,
 	ClassifierProviderOption,

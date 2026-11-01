@@ -38,12 +38,15 @@
 # clamps when the classifier is unavailable.
 #
 # Decision models: a chain names its classifier by address, exactly like a
-# fallback - `decisionModel: provider/model-id`. The optional `decisionModels:`
-# map is keyed by the same address and carries connection details (`baseUrl`,
-# `apiKey`). An address with no entry resolves from pi's classifier catalog;
-# an entry with a `baseUrl` is a direct System One endpoint (Ollama v0.35+)
-# that switchback drives itself. Unknown or retired keys are reported as
-# warnings, never silently ignored.
+# fallback - `decisionModel: provider/model-id`. Connection details live in the
+# optional `decisionModels:` map (keyed by the same address) or the
+# `decisionProviders:` map (keyed by provider id alone, one entry serving every
+# model of that provider; an address-level entry overrides it). An address with
+# no connection resolves from pi's classifier catalog; a `baseUrl` is a direct
+# System One endpoint (Ollama v0.35+) that switchback drives itself. OpenCode
+# has no catalog - there every referenced address needs a provider entry or an
+# override. Unknown or retired keys are reported as warnings, never silently
+# ignored.
 #
 # The `fallbacks` list below is the ordered preference. Each id was verified to
 # resolve in the catalog at the time of writing (2026-10-04) using a credentialed
@@ -94,18 +97,29 @@ models:
       - ollama-cloud/glm-5.3-flash
       - opencode-go/mimo-v2.6-flash
 
-# Connection details for direct endpoints, keyed by the same address a chain
-# names in `decisionModel:`. Entries without `baseUrl` are unnecessary (the
-# catalog resolves the address) and warn "catalog only".
+# Connection details for direct endpoints. Two maps, one rule: `decisionModels:`
+# is keyed by the full address (a one-off override), `decisionProviders:` by the
+# provider id (covers every model of that provider). An override replaces the
+# provider entry as a whole: an empty override is not "inherit the rest" - it
+# puts that address back on catalog resolution.
 #
-# decisionModels:
-#   "ollama/tev1:0.8b":
+# decisionProviders:
+#   ollama:
 #     baseUrl: http://localhost:11434/v1
 #     apiKey: local            # local servers ignore the token, but the
 #                              # transport refuses to send without one; use
 #                              # secret:<name> for a real key.
-#   typesafe/jev-1.13:
-#     apiKey: secret:typesafe-fb   # stored encrypted under switchback/secrets.json
-#                                  #   (managed via /switchback-config or the
-#                                  #    secrets store directly).
-</content>
+#
+# decisionModels:
+#   "ollama/tev1:0.8b":
+#     baseUrl: http://localhost:11434/v1   # a one-off override for one address
+#     apiKey: local                        # required with baseUrl
+#   "ollama/tev2:0.8b": {}                 # empty override: this one address
+#                                          #   ignores the provider entry and
+#                                          #   stays catalog-resolved
+#   "gpu-ollama/tev9":
+#     baseUrl: http://gpu:11434/v1         # a one-off direct endpoint
+#     apiKey: secret:gpu-key               # stored encrypted under
+#                                          #   switchback/secrets.json (managed
+#                                          #   via /switchback-config or the
+#                                          #    secrets store directly).

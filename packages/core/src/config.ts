@@ -40,6 +40,8 @@ import type {
 	DecisionModelConfig,
 	DecisionModelEntry,
 	DecisionModelId,
+	DecisionProviderConfig,
+	DecisionProviderEntry,
 	ModelId,
 	ResolvedSwitchbackConfig,
 	ResolvedSwitchbackFileConfig,
@@ -53,7 +55,7 @@ const VIRTUAL_ID = "auto";
 const CONFIG_BASENAME = "switchback";
 
 /** Recognised keys, per level. Anything else is reported as a warning, not an error. */
-const FILE_KEYS = ["models", "decisionModels", "debug"] as const;
+const FILE_KEYS = ["models", "decisionProviders", "decisionModels", "debug"] as const;
 const MODEL_KEYS = ["id", "name", "fallbacks", "decisionModel", "idleReset"] as const;
 const DECISION_MODEL_KEYS = ["baseUrl", "apiKey"] as const;
 
@@ -141,6 +143,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Validate a provider id: a single YAML map key that names a provider, without
+ * the "/" a decision-model address has (the model id is the second half of the
+ * address and never part of the provider key).
+ */
+function parseProviderId(value: string, where: string): string {
+	if (value.length === 0) throw new ConfigError(`${where} must be a non-empty provider id`, where);
+	if (value.includes("/")) {
+		throw new ConfigError(
+			`${where} must be a provider id (e.g. "ollama"), not a "provider/model" address - the model id belongs in models[].decisionModel`,
+			where,
+		);
+	}
+	if (/\s/u.test(value)) throw new ConfigError(`${where} must not contain whitespace`, where);
+	return value;
+}
+
 function parseModelId(value: unknown, where: string): ModelId {
 	if (typeof value !== "string") throw new ConfigError(`${where} must be a string (e.g. "provider/id")`, where);
 	if (value.indexOf("/") <= 0) throw new ConfigError(`${where} must be of the form "provider/id"`, where);
@@ -190,8 +209,97 @@ function splitAddress(address: DecisionModelId, where: string): { provider: stri
 }
 
 /**
- * Parse the `decisionModels:` map. Each key is a decision-model address; the
- * value carries the connection details for a direct SystemOne endpoint.
+ * Validate one connection-details map value. `baseUrl` and `apiKey` come as a
+ * pair: a direct endpoint needs a bearer token even when the endpoint ignores it
+ * (`apiKey: local`), and a token without an endpoint would be dead weight.
+ *
+ * No warning is emitted when both are absent: the address then resolves through
+ * the host's classifier catalog, which is a perfectly valid configuration (pi
+ * does exactly that). Whether that is a problem is a *host* question - pi has a
+ * catalog, OpenCode does not - so it is answered where the host knows, not here.
+ */
+function parseConnectionEntry(
+	rawEntry: unknown,
+	where: string,
+	path: string,
+	warnings: string[],
+): DecisionModelEntry {
+	if (!isRecord(rawEntry)) throw new ConfigError(`${where} must be an object with baseUrl and apiKey`, path);
+	noteUnknownKeys(rawEntry, DECISION_MODEL_KEYS, where, warnings);
+
+	const rawBaseUrl = rawEntry["baseUrl"];
+	let baseUrl: string | undefined;
+	if (rawBaseUrl !== undefined) {
+		if (typeof rawBaseUrl !== "string" || rawBaseUrl.length === 0) {
+			throw new ConfigError(`${where}.baseUrl must be a non-empty URL string`, path);
+		}
+		let parsed: URL;
+		try {
+			parsed = new URL(rawBaseUrl);
+		} catch {
+			throw new ConfigError(`${where}.baseUrl is not a valid URL: ${rawBaseUrl}`, path);
+		}
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+			throw new ConfigError(`${where}.baseUrl must be http(s), got ${parsed.protocol}`, path);
+		}
+		baseUrl = rawBaseUrl;
+	}
+
+	const rawApiKey = rawEntry["apiKey"];
+	let apiKey: string | undefined;
+	if (rawApiKey !== undefined) {
+		if (typeof rawApiKey !== "string" || rawApiKey.length === 0) {
+			throw new ConfigError(`${where}.apiKey must be a non-empty string`, path);
+		}
+		apiKey = rawApiKey;
+	}
+	if (baseUrl !== undefined && apiKey === undefined) {
+		throw new ConfigError(
+			`${where}.apiKey is required with baseUrl - use "local" for endpoints that ignore the bearer token`,
+			path,
+		);
+	}
+	if (apiKey !== undefined && baseUrl === undefined) {
+		throw new ConfigError(`${where}.apiKey requires ${where}.baseUrl`, path);
+	}
+	return {
+		...(baseUrl !== undefined ? { baseUrl } : {}),
+		...(apiKey !== undefined ? { apiKey } : {}),
+	};
+}
+
+/**
+ * Parse the `decisionProviders:` map: connection details keyed by provider id,
+ * shared by every decision model of that provider.
+ */
+function parseDecisionProviders(
+	value: unknown,
+	path: string,
+	warnings: string[],
+): Record<string, DecisionProviderEntry> | undefined {
+	if (value === undefined) return undefined;
+	if (Array.isArray(value)) {
+		warnings.push(
+			`decisionProviders is a map keyed by provider id (e.g. ollama: { baseUrl, apiKey }); the list form was ignored (${path})`,
+		);
+		return undefined;
+	}
+	if (!isRecord(value)) throw new ConfigError("decisionProviders must be an object keyed by provider id", path);
+	const entries: Record<string, DecisionProviderEntry> = {};
+	for (const [provider, rawEntry] of Object.entries(value)) {
+		const where = `decisionProviders.${provider}`;
+		parseProviderId(provider, where);
+		entries[provider] = parseConnectionEntry(rawEntry, where, path, warnings);
+	}
+	return entries;
+}
+
+/**
+ * Parse the `decisionModels:` map: per-address connection overrides. Each key is
+ * a decision-model address; the value carries the connection details for a
+ * direct SystemOne endpoint. Normally the same details live once in
+ * `decisionProviders:` instead; this map exists for the one-model-of-a-provider
+ * case and for files written before the provider section existed.
  */
 function parseDecisionModels(
 	value: unknown,
@@ -210,64 +318,17 @@ function parseDecisionModels(
 	for (const [address, rawEntry] of Object.entries(value)) {
 		const where = `decisionModels.${address}`;
 		parseModelId(address, where);
-		if (!isRecord(rawEntry)) throw new ConfigError(`${where} must be an object with baseUrl and apiKey`, path);
-		noteUnknownKeys(rawEntry, DECISION_MODEL_KEYS, where, warnings);
-
-		const rawBaseUrl = rawEntry["baseUrl"];
-		let baseUrl: string | undefined;
-		if (rawBaseUrl !== undefined) {
-			if (typeof rawBaseUrl !== "string" || rawBaseUrl.length === 0) {
-				throw new ConfigError(`${where}.baseUrl must be a non-empty URL string`, path);
-			}
-			let parsed: URL;
-			try {
-				parsed = new URL(rawBaseUrl);
-			} catch {
-				throw new ConfigError(`${where}.baseUrl is not a valid URL: ${rawBaseUrl}`, path);
-			}
-			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-				throw new ConfigError(`${where}.baseUrl must be http(s), got ${parsed.protocol}`, path);
-			}
-			baseUrl = rawBaseUrl;
-		}
-
-		const rawApiKey = rawEntry["apiKey"];
-		let apiKey: string | undefined;
-		if (rawApiKey !== undefined) {
-			if (typeof rawApiKey !== "string" || rawApiKey.length === 0) {
-				throw new ConfigError(`${where}.apiKey must be a non-empty string`, path);
-			}
-			apiKey = rawApiKey;
-		}
-		if (baseUrl !== undefined && apiKey === undefined) {
-			// A direct endpoint needs a bearer token to send. Local servers ignore
-			// it, but the token is still the thing that makes "direct endpoint"
-			// explicit rather than a silent default.
-			throw new ConfigError(
-				`${where}.apiKey is required with baseUrl - use "local" for endpoints that ignore the bearer token`,
-				path,
-			);
-		}
-		if (apiKey !== undefined && baseUrl === undefined) {
-			throw new ConfigError(`${where}.apiKey requires ${where}.baseUrl`, path);
-		}
-		if (baseUrl === undefined) {
-			warnings.push(
-				`${where} has no connection details; it can only resolve through a classifier catalog (pi has one, OpenCode does not)`,
-			);
-		}
-		entries[address] = {
-			...(baseUrl !== undefined ? { baseUrl } : {}),
-			...(apiKey !== undefined ? { apiKey } : {}),
-		};
+		entries[address] = parseConnectionEntry(rawEntry, where, path, warnings);
 	}
 	return entries;
 }
 
 /**
- * Resolve a chain's `decisionModel:` address against the `decisionModels:` map.
+ * Resolve a chain's `decisionModel:` address against the config's connection
+ * details.
  *
- * A map entry with a `baseUrl` pins the endpoint. Without one the address stays
+ * Precedence: a `decisionModels:` entry at the exact address wins, otherwise the
+ * provider's `decisionProviders:` entry applies. With neither the address stays
  * catalog-resolved, which pi can do and OpenCode cannot - that stays a visible
  * "no classifier" cycle there instead of a load error, because the same file is
  * valid on pi.
@@ -275,10 +336,11 @@ function parseDecisionModels(
 export function resolveDecisionModel(
 	decisionModels: Record<DecisionModelId, DecisionModelConfig> | undefined,
 	address: DecisionModelId | undefined,
+	decisionProviders?: Record<string, DecisionProviderConfig>,
 ): DecisionModelConfig | undefined {
 	if (address === undefined) return undefined;
 	const { provider, id } = splitAddress(address, "decisionModel");
-	const entry = decisionModels?.[address];
+	const entry = decisionModels?.[address] ?? decisionProviders?.[provider];
 	return {
 		provider,
 		id,
@@ -292,6 +354,8 @@ export type {
 	SwitchbackFileConfig,
 	DecisionModelConfig,
 	DecisionModelEntry,
+	DecisionProviderEntry,
+	DecisionProviderConfig,
 	DecisionModelId,
 } from "./types.ts";
 
@@ -365,11 +429,28 @@ export function resolveSecretApiKey(
 	return value;
 }
 
-/** Resolve every chain's `decisionModel:` address against the map, and the map's secret refs. */
+/**
+ * Resolve the config into what the router consumes: provider/address connection
+ * details with their secret refs resolved, and every chain's address merged with
+ * the connection details it inherits (address override first, then provider).
+ */
 function resolveFile(
 	file: SwitchbackFileConfig,
 	secrets: { get(name: string): string | undefined } | undefined = undefined,
 ): ResolvedSwitchbackFileConfig {
+	const resolvedDecisionProviders: Record<string, DecisionProviderConfig> | undefined =
+		file.decisionProviders === undefined
+			? undefined
+			: Object.fromEntries(
+					Object.entries(file.decisionProviders).map(([provider, entry]) => {
+						const apiKey = resolveSecretApiKey(entry.apiKey, secrets);
+						const descriptor: DecisionProviderConfig = {
+							...(entry.baseUrl !== undefined ? { baseUrl: entry.baseUrl } : {}),
+							...(apiKey !== undefined ? { apiKey } : {}),
+						};
+						return [provider, descriptor];
+					}),
+				);
 	const resolvedDecisionModels: Record<DecisionModelId, DecisionModelConfig> | undefined =
 		file.decisionModels === undefined
 			? undefined
@@ -389,9 +470,12 @@ function resolveFile(
 	return {
 		models: file.models.map((model) => {
 			const { decisionModel, ...rest } = model;
-			const resolved = resolveDecisionModel(resolvedDecisionModels, decisionModel);
+			const resolved = resolveDecisionModel(resolvedDecisionModels, decisionModel, resolvedDecisionProviders);
 			return resolved === undefined ? rest : { ...rest, decisionModel: resolved };
 		}),
+		...(resolvedDecisionProviders !== undefined && Object.keys(resolvedDecisionProviders).length > 0
+			? { decisionProviders: resolvedDecisionProviders }
+			: {}),
 		...(resolvedDecisionModels !== undefined && Object.keys(resolvedDecisionModels).length > 0
 			? { decisionModels: resolvedDecisionModels }
 			: {}),
@@ -432,21 +516,15 @@ function parseFileConfig(value: unknown, path: string, warnings: string[]): Swit
 	if (rawDebug !== undefined && typeof rawDebug !== "boolean") {
 		throw new ConfigError("debug must be a boolean", path);
 	}
+	const decisionProviders = parseDecisionProviders(value["decisionProviders"], path, warnings);
 	const decisionModels = parseDecisionModels(value["decisionModels"], path, warnings);
-	// A `decisionModels` entry no chain references is harmless but almost always a
-	// leftover: warn (do not fail) so the block does not quietly rot.
-	if (decisionModels !== undefined) {
-		const referenced = new Set(parsed.map((model) => model.decisionModel).filter((id) => id !== undefined));
-		for (const address of Object.keys(decisionModels)) {
-			if (!referenced.has(address)) {
-				warnings.push(
-					`decisionModels.${address} is not referenced by any models[].decisionModel and was ignored`,
-				);
-			}
-		}
-	}
+	// Unreferenced connection details are not a problem: a provider entry is shared
+	// by every model of that provider (and may be prepared before a chain names
+	// one), so nothing is "ignored" and nothing can rot. The earlier warning here
+	// read like a failure report for a perfectly valid config.
 	return {
 		models: parsed,
+		...(decisionProviders !== undefined ? { decisionProviders } : {}),
 		...(decisionModels !== undefined ? { decisionModels } : {}),
 		...(rawDebug !== undefined ? { debug: rawDebug } : {}),
 	};
@@ -499,8 +577,11 @@ export interface SecretResolver {
  * `createSecretStore()`; tests pass a fake or leave it undefined.
  *
  * `warnings` carries recognised-but-suspicious findings (unknown keys, retired
- * keys, unreferenced decision models). They never fail the load: a host shows
- * them through its own notify channel.
+ * keys, malformed optional values). They never fail the load: a host shows them
+ * through its own notify channel. Host *capability* findings are deliberately
+ * not here - a decision model that relies on a classifier catalog is fine on pi
+ * and impossible on OpenCode, so that judgement belongs to the host
+ * (`packages/opencode/src/decision-model-check.ts`).
  */
 export function loadConfig(secrets?: SecretResolver): {
 	config: ResolvedSwitchbackFileConfig;

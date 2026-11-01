@@ -224,9 +224,9 @@ export function moveFallback(loaded: LoadedConfig, virtualId: string, from: numb
 /**
  * Set or clear a model's decision model. `null` clears the key (the model then
  * reports and blind-cycles without classifying). The value is a decision-model
- * address ("provider/model-id"); connection details, when the address needs a
- * direct endpoint, live in the top-level `decisionModels:` map under the same
- * address.
+ * address ("provider/model-id"); the connection details it inherits live in
+ * `decisionProviders:` under the provider, or in a `decisionModels:` entry at
+ * the same address when that one model needs its own endpoint.
  */
 export function setDecisionModel(loaded: LoadedConfig, virtualId: string, address: string | null): void {
 	const { node } = findModelNode(loaded, virtualId);
@@ -362,6 +362,114 @@ export function countDecisionModelReferences(loaded: LoadedConfig, address: stri
 	for (const item of requireModelsSeq(loaded).items) {
 		if (item === null || !isMap(item)) continue;
 		if (item.get("decisionModel") === address) count += 1;
+	}
+	return count;
+}
+
+/** A `decisionProviders:` map value as the editor accepts it. */
+export interface DecisionProviderInput {
+	/** Provider id - the map key, and the first half of a decision-model address. */
+	provider: string;
+	/** Direct SystemOne endpoint; omit for catalog resolution. */
+	baseUrl?: string;
+	/**
+	 * Secret-store name, written as `secret:<name>`. Omit for an endpoint that
+	 * ignores the bearer token; the entry then carries `apiKey: local`.
+	 */
+	apiKeySecretName?: string;
+}
+
+/** Field-level patch for an existing provider; `null` clears the field. */
+export type DecisionProviderPatch = DecisionModelPatch;
+
+function requireDecisionProvidersMap(loaded: LoadedConfig): YAMLMap {
+	const map = loaded.doc.get("decisionProviders");
+	if (map === undefined || map === null) {
+		const created = loaded.doc.createNode({}) as YAMLMap;
+		loaded.doc.set("decisionProviders", created);
+		return created;
+	}
+	if (!isMap(map)) throw new ConfigError("decisionProviders must be a map keyed by provider id", loaded.path);
+	return map;
+}
+
+/** Find a decisionProviders entry node by provider id (the map key). */
+function findDecisionProviderNode(loaded: LoadedConfig, provider: string): { map: YAMLMap; node: YAMLMap } {
+	const map = requireDecisionProvidersMap(loaded);
+	const node = map.get(provider, true);
+	if (node === undefined || node === null || !isMap(node)) {
+		throw new ConfigError(`decisionProviders.${provider} not found`, loaded.path);
+	}
+	return { map, node };
+}
+
+/**
+ * Add a provider's connection details. One entry serves every decision model of
+ * that provider, so this is what a new decision model normally needs - not a
+ * `decisionModels` entry per model.
+ */
+export function addDecisionProvider(loaded: LoadedConfig, input: DecisionProviderInput): void {
+	const map = requireDecisionProvidersMap(loaded);
+	if (map.has(input.provider)) {
+		throw new ConfigError(`decisionProviders already contains "${input.provider}"`, loaded.path);
+	}
+	map.set(
+		input.provider,
+		decisionModelToNode(loaded.doc, {
+			address: input.provider,
+			...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
+			...(input.apiKeySecretName !== undefined ? { apiKeySecretName: input.apiKeySecretName } : {}),
+		}),
+	);
+}
+
+/** Patch one provider's connection details. */
+export function updateDecisionProvider(
+	loaded: LoadedConfig,
+	provider: string,
+	patch: DecisionProviderPatch,
+): void {
+	const { map, node } = findDecisionProviderNode(loaded, provider);
+	if (patch.baseUrl !== undefined) {
+		if (patch.baseUrl === null) {
+			node.delete("baseUrl");
+			// apiKey is only valid alongside baseUrl; clearing baseUrl clears it.
+			node.delete("apiKey");
+		} else {
+			node.set("baseUrl", patch.baseUrl);
+			if (!node.has("apiKey")) node.set("apiKey", "local");
+		}
+	}
+	if (patch.apiKeySecretName !== undefined) {
+		node.set("apiKey", patch.apiKeySecretName === null ? "local" : `secret:${patch.apiKeySecretName}`);
+	}
+	// An update that clears the whole connection would leave an empty `{}`
+	// behind; drop the key instead, like removeDecisionProvider does.
+	if (node.get("baseUrl") === undefined && node.get("apiKey") === undefined) {
+		map.delete(provider);
+		if (map.items.length === 0) loaded.doc.delete("decisionProviders");
+	}
+}
+
+/**
+ * Remove a provider's connection details. Per-address `decisionModels` entries
+ * are left alone (they may carry their own endpoint), and chains are not
+ * rewritten: their addresses simply fall back to catalog resolution.
+ */
+export function removeDecisionProvider(loaded: LoadedConfig, provider: string): void {
+	const { map } = findDecisionProviderNode(loaded, provider);
+	map.delete(provider);
+	// An empty map is litter: drop the key so the file reads as if no entry was ever made.
+	if (map.items.length === 0) loaded.doc.delete("decisionProviders");
+}
+
+/** How many configured models use a decision model from this provider. */
+export function countDecisionProviderReferences(loaded: LoadedConfig, provider: string): number {
+	let count = 0;
+	for (const item of requireModelsSeq(loaded).items) {
+		if (item === null || !isMap(item)) continue;
+		const address = item.get("decisionModel");
+		if (typeof address === "string" && address.slice(0, address.indexOf("/")) === provider) count += 1;
 	}
 	return count;
 }

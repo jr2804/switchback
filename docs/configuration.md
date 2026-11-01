@@ -298,6 +298,23 @@ loud about a retired one. None of these are silent:
 | entry not referenced by any `models[].decisionModel` | warning; the entry is ignored |
 | entry with no connection details | warning: resolves from the classifier catalog only |
 
+### When a decision model does not resolve
+
+An address can be well-formed and still name nothing: a typo (`tev2` for
+`tev1`), a model deleted from the local Ollama, a catalog rename. On the first
+route of a session switchback checks every referenced decision model against
+the host registry and warns once per unresolvable address:
+
+```text
+switchback decision model "ollama/tev2" was not found - switchback falls back to
+blind cycling and level clamping until it resolves
+```
+
+Routing continues deterministically while the warning stands: errors blind-cycle
+through the fallback list and the reasoning category is clamped to the routed
+model. When the model appears again (pulled into Ollama, catalog refreshed), the
+warning simply stops.
+
 ### Direct endpoints and pi's registry
 
 With `baseUrl` present, switchback registers the provider through pi-ai's

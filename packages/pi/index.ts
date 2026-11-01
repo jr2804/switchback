@@ -105,6 +105,10 @@ export default function (pi: ExtensionAPI) {
 	// affected route but does not kill the session.
 	let lastGoodConfig: ResolvedSwitchbackFileConfig = initial.config;
 
+	// Decision-model warnings already emitted this session, keyed by message: a
+	// repeated warning on every route would bury the conversation. A model that
+	// appears later (Ollama pulled, catalog refreshed) simply stops warning.
+	const decisionModelWarned = new Set<string>();
 	for (const modelConfig of modelConfigs) {
 		const fullVirtualId = modelConfig.id;
 		pi.registerVirtualModel<SwitchbackState>({

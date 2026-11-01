@@ -52,6 +52,21 @@ creates a commit" rule above still holds, and no manifest in git is
 rewritten. A tag that is not CalVer fails the stamp step rather than
 publishing a guessed version.
 
+It also **pins every sibling workspace dependency to that exact tag**. The
+adapters declare `switchback-core` as a dependency, and stamping only their own
+`version` left that range at the scaffolded caret (`^2026.10.1`), which permits
+any `2026.x`. npm could then resolve an older core than the adapter imports
+from: `pi-switchback` shipped importing `createConfigWarningReporter`, resolved
+a core from before that export, and the extension failed to load with
+`(0, _config.createConfigWarningReporter) is not a function`. Publishing core
+first does not prevent that on its own - it only guarantees the core *exists*,
+not that the adapter gets the matching one. The pin makes the pair exact:
+`pi-switchback@2026.11.1` depends on `switchback-core@2026.11.1`.
+
+If an adapter is ever republished against an older core, that core has to be
+published (or already present) at the pinned version, which is the intended
+trade-off: releases move together and a mismatched pair cannot be shipped.
+
 Publishing authenticates by **npm trusted publishing** (OIDC,
 [docs.npmjs.com/trusted-publishers](https://docs.npmjs.com/trusted-publishers)),
 not by a token: there is no `NPM_TOKEN` secret. The publish jobs grant

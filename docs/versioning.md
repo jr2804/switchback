@@ -19,6 +19,12 @@ is the first release of October 2026.
   `publish-npm.yml` (see below). It does NOT create commits (no
   `package.json` bumping), so it cannot retrigger itself.
 - Branch filter is `[main]`. Tag pushes are not retried.
+- A head commit message containing `[skip release]` (e.g.
+  `docs: tweak wording [skip release]`) skips that push's release entirely;
+  the next push without the marker releases normally and carries the skipped
+  commits with it. This is separate from GitHub's built-in `[skip ci]`
+  markers, which suppress every workflow run on the push, not just the
+  release.
 - Tag-push races (two pushes in the same month) are tolerated via an
   exists-check that exits 0 silently.
 

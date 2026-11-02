@@ -3,6 +3,7 @@ name: calver-release
 # CalVer release workflow (calver.org YYYY.0M.MICRO convention).
 #
 # On every push to main:
+#   - Unless the head commit message contains "[skip release]".
 #   - Compute the current calver month prefix (YYYY.0M, zero-padded).
 #   - Find existing tags matching that prefix, take the max numeric suffix,
 #     increment by 1. If no tags for this month, start at 1.
@@ -64,6 +65,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+
+          # 0. Explicit opt-out: a head commit message containing "[skip release]"
+          #    leaves the release machinery alone. Deliberately NOT one of the
+          #    built-in [skip ci] markers: those suppress EVERY workflow run
+          #    for the push (CI included); this marker skips only the release.
+          if git log -1 --format=%B "${GITHUB_SHA}" | grep -Fq "[skip release]"; then
+            echo "Head commit carries [skip release]; skipping release."
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           # 1. If HEAD already has a vX tag, this is a tag-push replay (race).
           #    Skip and exit cleanly.

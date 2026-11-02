@@ -55,6 +55,7 @@
 | Command-output snapshots | `tests/__snapshots__/commands.test.ts.snap` |
 | CalVer release tagging (tag + GitHub Release on every push to main) | `.github/workflows/calver-release.yml` |
 | npm publishing (tag push → `switchback-core`, `pi-switchback`, `opencode-switchback`) | `.github/workflows/publish-npm.yml`, `scripts/set-package-version.mjs` |
+| CalVer release automation (auto-tag on push, `[skip release]` opt-out, manual `mise run release`) | `.github/workflows/calver-release.yml`, `scripts/release.mjs`, `.config/mise/conf.d/release.toml`, `docs/versioning.md` |
 | User-facing docs (quickstart, commands, config pointer) | `README.md` |
 | Docs site — User guide (Home, Configuration, Configuration dialogue, Classifier, License) | `docs/{index,configuration,configuration-dialogue,classifier,license}.md` |
 | Docs site — Development (Overview, Architecture, Crash collection, Versioning, Issue tracking, Contributing) | `docs/{development,architecture,crash-collection,versioning,issue-tracking,contributing}.md` |

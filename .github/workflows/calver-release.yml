@@ -30,6 +30,12 @@ name: calver-release
 # no tag to publish.
 
 on:
+  # Manual trigger is the local escape hatch: `mise run release` (scripts/
+  # release.mjs) dispatches this workflow after checking locally that the tree
+  # is clean and everything is pushed. A dispatch overrides "[skip release]" -
+  # it is explicit human intent to release THIS tip.
+  workflow_dispatch:
+
   push:
     branches:
       - main
@@ -70,7 +76,10 @@ jobs:
           #    leaves the release machinery alone. Deliberately NOT one of the
           #    built-in [skip ci] markers: those suppress EVERY workflow run
           #    for the push (CI included); this marker skips only the release.
-          if git log -1 --format=%B "${GITHUB_SHA}" | grep -Fq "[skip release]"; then
+          #    A manual dispatch (workflow_dispatch) is exempt: running it is
+          #    the explicit decision to release despite the marker.
+          if [ "${GITHUB_EVENT_NAME}" = "push" ] \
+            && git log -1 --format=%B "${GITHUB_SHA}" | grep -Fq "[skip release]"; then
             echo "Head commit carries [skip release]; skipping release."
             echo "tag=" >> "$GITHUB_OUTPUT"
             exit 0

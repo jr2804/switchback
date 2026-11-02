@@ -1,0 +1,7 @@
+# Manual release trigger: dispatches calver-release.yml on origin/main and
+# watches it through tag + GitHub release + npm publish. The script refuses to
+# run on a dirty tree or with unpushed commits. This is the escape hatch when
+# the tip commit says "[skip release]" (a dispatch overrides the marker).
+[tasks.release]
+description = "Tag and release origin/main via the CalVer workflow (guards: clean tree, nothing unpushed)"
+run = "node scripts/release.mjs"

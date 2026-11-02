@@ -25,6 +25,14 @@ is the first release of October 2026.
   commits with it. This is separate from GitHub's built-in `[skip ci]`
   markers, which suppress every workflow run on the push, not just the
   release.
+- **Manual release from the repo**: `mise run release` (scripts/release.mjs
+  - .config/mise/conf.d/release.toml) dispatches `calver-release.yml` on
+  `origin/main` and watches the run through tag, release and publish. It
+  first refuses to run on a dirty tree, off-branch, or with unpushed or
+  unpulled commits - whatever CI releases must be exactly what was verified
+  locally - and it tells you to re-publish instead when HEAD already carries
+  a CalVer tag. A dispatch is exempt from `[skip release]`: running it *is*
+  the explicit decision to release that tip.
 - Tag-push races (two pushes in the same month) are tolerated via an
   exists-check that exits 0 silently.
 
@@ -105,6 +113,16 @@ workflow"); its `dry_run` input defaults to `true` and adds `--dry-run` to each
 publish.
 
 To recover a failed publish, dispatch the same workflow with the tag as its
-`tag` input and `dry_run` off. Re-running `calver-release.yml` will not do it:
-that workflow sees a `v*` tag already on `HEAD` and exits cleanly without
-publishing, so the tag input is the repair path.
+`tag` input and `dry_run` off - **but** note that npm validates the *calling*
+workflow filename, and the packages' trusted-publisher registrations currently
+name `calver-release.yml` only: a direct `publish-npm.yml` run (tag push or
+dispatch) can fail at the publish step with `E404 Not Found - PUT`, which is
+npm's way of saying "no registration matches this workflow". When the tag
+never published, prefer `mise run release` (or delete tag + release and
+re-dispatch `calver-release.yml`, which is not blocked: it only exits early
+when HEAD *already* carries a `v*` tag). Re-running
+`calver-release.yml` on an unchanged HEAD will not re-publish either - the
+HEAD-tag check exits cleanly - so the tag input is the repair path *when the
+direct registration exists*. To make the direct path work as well, add a
+second trusted-publisher entry per package naming workflow filename
+`publish-npm.yml` on npmjs.com.

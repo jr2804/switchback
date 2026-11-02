@@ -20,9 +20,27 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+
+// Atomic-write seam for deterministic save-failure injection. chmodSync-ing the
+// config read-only does NOT work cross-platform: writeFileAtomic stages a temp
+// file and renames it onto the target, and POSIX rename ignores the target's
+// own write bit (only the directory matters), so the save would succeed on
+// Linux CI runners. saveConfigFile funnels every write through this one
+// function, so one switch covers every editor save path.
+const atomicFailure = vi.hoisted(() => ({ inject: false }));
+vi.mock("../packages/core/src/atomic-write.ts", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../packages/core/src/atomic-write.ts")>();
+	return {
+		...actual,
+		writeFileAtomic: (path: string, contents: string): void => {
+			if (atomicFailure.inject) throw new Error("injected write failure");
+			actual.writeFileAtomic(path, contents);
+		},
+	};
+});
 import {
 	addDecisionModel,
 	addFallback,
@@ -777,7 +795,7 @@ describe("dialogue: decision providers and per-model pick", () => {
 		// adoption must stop - a follow-up save of the address alone would point the
 		// chain at a provider connection that just vanished with the revert.
 		seed(SAMPLE);
-		chmodSync(configPath(), 0o444);
+		atomicFailure.inject = true;
 		try {
 			vi.stubGlobal("fetch", async () => ({
 				ok: true,
@@ -807,7 +825,7 @@ describe("dialogue: decision providers and per-model pick", () => {
 			expect(config.models[0]?.decisionModel).toBe("ollama/tev1");
 			expect(config.decisionProviders).toBeUndefined();
 		} finally {
-			chmodSync(configPath(), 0o666);
+			atomicFailure.inject = false;
 		}
 	});
 

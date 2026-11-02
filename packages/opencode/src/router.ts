@@ -117,7 +117,10 @@ export function createRouter(options: RouterOptions): SwitchbackBridge {
 		const providerSettings = (await ctx.provider.list()).data.find((p) => p.id === address.provider)?.settings;
 		let apiKey: string | undefined;
 		try {
-			const connection = await ctx.integration.connection.active(address.provider);
+			// integration is host-optional: without it there is simply no stored
+			// connection to consult - config/settings carry the key (or the request
+			// fails visibly at dispatch), so absence is not an error to log.
+			const connection = await ctx.integration?.connection?.active(address.provider);
 			if (connection === undefined) {
 				console.error(`[switchback] no active connection for ${address.provider}`);
 			}

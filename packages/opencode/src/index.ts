@@ -24,6 +24,8 @@
  */
 
 import { Plugin } from "@opencode/plugin";
+import { watch } from "node:fs";
+import { basename } from "node:path";
 import { findUnconnectedDecisionModels } from "./decision-model-check.ts";
 import {
 	annotateCrash,
@@ -36,6 +38,7 @@ import {
 	isDisabled,
 	isValidAnnotationClass,
 	configFilePath,
+	configOverlayPath,
 	createConfigWarningReporter,
 	loadConfig,
 	loadConfigFile,
@@ -46,6 +49,7 @@ import {
 	resolveFallbacks,
 	setPinnedModel,
 	shortHash,
+	switchbackConfigDir,
 	unblockModel,
 	SWITCHBACK_THINKING_LEVELS,
 } from "switchback-core";
@@ -277,7 +281,13 @@ export default Plugin.define({
 			});
 		});
 
+		// Hand-edits to the YAML (outside the config command) republish the
+		// selector entries without a restart; routing re-reads per request
+		// regardless, so this only keeps the selector list fresh.
+		const stopWatching = watchConfigFiles(ctx);
+
 		return () => {
+			stopWatching();
 			clearBridge();
 			resetNoticeChannel();
 		};
@@ -287,7 +297,7 @@ export default Plugin.define({
 /** Read the shared config; a failure is reported lazily by the router. */
 function readConfigOr(fallback: ResolvedSwitchbackFileConfig | undefined): ResolvedSwitchbackFileConfig | undefined {
 	try {
-		const loaded = loadConfig(envSecrets);
+		const loaded = loadConfig(envSecrets, "opencode");
 		reportConfigWarnings([...loaded.warnings, ...findUnconnectedDecisionModels(loaded.config)], (message) =>
 			console.warn(message),
 		);
@@ -300,7 +310,7 @@ function readConfigOr(fallback: ResolvedSwitchbackFileConfig | undefined): Resol
 /** Read the shared config once per command; on a config failure the notice is fan-out-safe. */
 function readConfig(ctx: Plugin.Context, sessionID: string): ResolvedSwitchbackFileConfig | undefined {
 	try {
-		const loaded = loadConfig(envSecrets);
+		const loaded = loadConfig(envSecrets, "opencode");
 		reportConfigWarnings([...loaded.warnings, ...findUnconnectedDecisionModels(loaded.config)], (message) =>
 			notify(ctx, sessionID, message),
 		);
@@ -619,6 +629,46 @@ async function sayNow(ctx: Plugin.Context, sessionID: string, text: string): Pro
 async function republish(ctx: Plugin.Context): Promise<void> {
 	await ctx.provider.reload();
 	await ctx.model.reload();
+}
+
+/**
+ * Watch the config directory for hand-edits to the base file or either
+ * overlay, and republish the selector entries when one lands (debounced: one
+ * save can fire several events, and the editor writes atomically via tmp +
+ * rename). Routing already re-reads the files per request, so this only keeps
+ * the selector list fresh. Best effort throughout: a missing directory or a
+ * failed reload leaves routing untouched. The caller owns the returned
+ * stop function.
+ */
+export function watchConfigFiles(ctx: Plugin.Context): () => void {
+	const names = new Set(
+		[configFilePath(), configOverlayPath("pi"), configOverlayPath("opencode")].map((p) => basename(p)),
+	);
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let watcher: ReturnType<typeof watch> | undefined;
+	try {
+		watcher = watch(switchbackConfigDir(), (_event, filename) => {
+			if (typeof filename !== "string" || !names.has(filename)) return;
+			if (timer !== undefined) clearTimeout(timer);
+			timer = setTimeout(() => {
+				timer = undefined;
+				void republish(ctx).catch(() => {
+					// Same best-effort rule as the config command's republish.
+				});
+			}, 750);
+			timer.unref?.();
+		});
+	} catch {
+		return () => {};
+	}
+	const active = watcher;
+	return () => {
+		if (timer !== undefined) {
+			clearTimeout(timer);
+			timer = undefined;
+		}
+		active.close();
+	};
 }
 
 /** Read the chains and the catalog for the interactive guide's menu. */

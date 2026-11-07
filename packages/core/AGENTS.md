@@ -39,14 +39,18 @@ the `src/index.ts` barrel. The OpenCode adapter lives in `packages/opencode`.
   Hand-mirroring those shapes into core-owned types was considered and deferred
   (drift risk over packaging weight). Adding a *new* host type to a core module is
   still a boundary change, not a detail.
-- **Exactly one config file** (`switchback-wix.12`, user decision m08294).
-  `loadConfig(secrets?)` reads `configFilePath()` =
+- **One base file plus optional per-host overlays** (`switchback-wix.12` as amended;
+  user decision m00151). `loadConfig(secrets?, host?)` reads `configFilePath()` =
   `~/.config/switchback/switchback.yaml` (`SWITCHBACK_CONFIG_DIR` relocates the
-  directory). There are no layers, no aggregation, and no host or project
-  candidate: `~/.pi/agent/switchback.yaml` and `<cwd>/.pi/switchback.yaml` are
-  ignored even when present. Do not reintroduce either — the hosts do not share
-  a model catalog, so divergent copies leave one host with dead fallbacks. State
-  (`switchbackStateDir()`) is separate and still lives under `piConfigDir()`.
+  directory) and, when `host` is `"pi"` or `"opencode"`, merges that host's
+  overlay (`switchback.pi.yaml` / `switchback.oc.yaml`, `configOverlayPath()`)
+  on top: same-id model entries replace, new ids append, `decisionProviders` /
+  `decisionModels` merge per key with the overlay winning. Overlay files are
+  optional and every overlay section is optional, so the base alone is still a
+  complete config. There are still no project-local candidates:
+  `~/.pi/agent/switchback.yaml` and `<cwd>/.pi/switchback.yaml` are ignored
+  even when present. State (`switchbackStateDir()`) is separate and still lives
+  under `piConfigDir()`.
 - **Narrow, consumed ports.** A port names the slice the core reads, never the
   whole host object, and arrives with the seam that uses it — no port for a
   boundary nothing implements yet (`src/ports.ts` header owns the rule and

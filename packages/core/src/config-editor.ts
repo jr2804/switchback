@@ -21,9 +21,12 @@
  * job via the encrypted store (`packages/pi/src/secrets.ts`). The type shape makes a
  * literal key unrepresentable at this boundary.
  *
- * One file: `configFilePath()` (`~/.config/switchback/switchback.yaml`), the same
- * config both hosts read. There are no host-specific or per-project layers to
- * choose between (`switchback-wix.12`).
+ * One base file, optional per-host overlays: `configFilePath()`
+ * (`~/.config/switchback/switchback.yaml`) is the shared base both hosts read,
+ * and `configOverlayPath(host)` (`switchback.pi.yaml` / `switchback.oc.yaml`)
+ * layers host-only entries on top at load time (`switchback-wix.12` as amended).
+ * The dialogue edits the base file; overlays are hand-edited partial files.
+ * There are no per-project layers to choose between.
  *
  * Writes are atomic - tmp file + rename, the `state.ts` pattern - and the
  * parent directory is created on demand, so a first save into a fresh install
@@ -424,11 +427,7 @@ export function addDecisionProvider(loaded: LoadedConfig, input: DecisionProvide
 }
 
 /** Patch one provider's connection details. */
-export function updateDecisionProvider(
-	loaded: LoadedConfig,
-	provider: string,
-	patch: DecisionProviderPatch,
-): void {
+export function updateDecisionProvider(loaded: LoadedConfig, provider: string, patch: DecisionProviderPatch): void {
 	const { map, node } = findDecisionProviderNode(loaded, provider);
 	if (patch.baseUrl !== undefined) {
 		if (patch.baseUrl === null) {

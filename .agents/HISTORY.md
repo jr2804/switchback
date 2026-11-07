@@ -4,6 +4,30 @@ Durable decisions, recorded with git refs. Add new entries at the top.
 Routine history stays in `git log`; only decisions that changed the
 project's direction, contract, or policy belong here.
 
+## 2026-11-07 — OpenCode config watcher: hand-edits republish without restart
+
+Routing in both hosts already re-read the config per request; only OpenCode's
+selector list went stale on hand-edits (command edits republished, file edits
+did not). `watchConfigFiles` (`packages/opencode/src/index.ts`) watches the
+config dir for the base file and both overlays and republishes (debounced,
+best effort, stopped on plugin cleanup). pi needs no change: its route already
+reloads per request, with new chain ids the only restart case (virtual models
+register at setup).
+
+## 2026-11-07 — Per-host config overlays amend the one-file rule (switchback-wix.12)
+
+The user asked for per-host config (`switchback.pi.yaml` / `switchback.oc.yaml`)
+after hitting the exact pain the one-file rule dismissed: entries that resolve
+in only one host's catalog (a Typesafe classifier endpoint only OpenCode can
+reach, chains built on catalog-only models) were either dead fallbacks on the
+other host or forced the shared file to the lowest common denominator.
+`loadConfig(secrets?, host?)` now merges an optional partial overlay over the
+shared base (same-id models replace, new ids append, decision sections merge
+per key with the overlay winning); no host arg still reads the base alone, and
+the dialogue keeps editing the base file. The project-local candidates stay
+ignored — the amendment is one bounded host layer, not a return to layered
+lookup.
+
 ## 2026-10-28 — OpenCode adapter rebuilt on provider architecture (retry hook abandoned)
 
 The OpenCode port shipped as an option-B plugin: it listened on the `retry` hook,

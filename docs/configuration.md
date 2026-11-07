@@ -27,24 +27,33 @@ parses a user-supplied JSON config.
 
 ## The config file
 
-There is exactly **one** user config file:
+There is one shared base config file:
 
 ```text
 ~/.config/switchback/switchback.yaml
 ```
 
-Both pi and the [OpenCode plugin](opencode.md) read it, and it is the only
-place config is read from. There is no per-host and no per-project config:
+Both pi and the [OpenCode plugin](opencode.md) read it. Either host may
+additionally keep a **host-only overlay** next to it — `switchback.pi.yaml`
+for pi, `switchback.oc.yaml` for OpenCode — for entries that only resolve in
+that host (a classifier endpoint only one host can reach, chains built on
+models only one host's catalog carries). At load time the host's overlay, when
+present, merges over the base: a model entry whose `id` is already in the base
+replaces it, a new `id` is appended, and `decisionProviders` / `decisionModels`
+merge per key with the overlay winning. Every overlay section is optional, so
+an overlay can hold a single extra chain or a single endpoint override, and a
+missing overlay file is simply skipped. There is still no per-project config:
 `~/.pi/agent/switchback.yaml` and `<cwd>/.pi/switchback.yaml` are **ignored**,
-even if they exist. With no file present, the built-in `DEFAULT_CONFIG` (empty
-fallback list — surfaces a `ConfigError` pointing the user at this section; see
-below) applies.
+even if they exist. With no base file present (and no overlay), the built-in
+`DEFAULT_CONFIG` (empty fallback list — surfaces a `ConfigError` pointing the
+user at this section; see below) applies.
 
-A single file is a deliberate simplification, not an oversight. The two hosts do
-not share a model catalog, so a per-host overlay let them disagree about the
-chain set — and an entry one host could resolve became a dead fallback on the
-other. One file means one chain list, one truth, and no question about which copy
-is in effect.
+Overlays exist because the two hosts do not share a model catalog: an entry one
+host can resolve becomes a dead fallback on the other. Keep the shared chains
+in the base file and put host-only entries in that host's overlay, so neither
+host carries chains it can never serve. One base means one shared truth, and
+the overlay mechanism keeps the host-specific exceptions explicit instead of
+forking the whole file.
 
 `SWITCHBACK_CONFIG_DIR` moves the directory (used by tests and portable
 installs); the file name stays `switchback.yaml`. A file that exists but fails
@@ -61,9 +70,26 @@ the file still loads and the warning tells you what to remove. The
 duplicate, so the dialogue never reintroduces the problem.
 
 The repo ships only `switchback.yaml.example` as the template. Copy it to the
-path above. `/switchback-config` (in both hosts) edits that same file and shows
+path above. `/switchback-config` (in both hosts) edits the base file and shows
 its path before anything else, so an edit never lands somewhere unexpected (see
-[Configuration dialogue](configuration-dialogue.md)).
+[Configuration dialogue](configuration-dialogue.md)). Overlays are hand-edited;
+the dialogue does not touch them.
+
+## Hot reload
+
+No restart is needed for config changes. Both hosts re-read the base file and
+their overlay on every request: pi's route reloads per route and falls back to
+the last good config (with a warning) when an edit breaks parsing, so fallback
+edits, classifier endpoint changes and the `debug` flag take effect on the next
+request. OpenCode's bridge does the same per route call, and additionally
+watches the config directory: a hand-edit to any of the three files republishes
+the selector entries (debounced), while edits made through `/switchback-config`
+republish immediately. A broken edit never kills a session in either host — the
+previous good config keeps serving until the file parses again.
+
+One exception: pi registers each chain as a virtual model once at startup, so
+adding a brand-new chain `id` needs a session restart before that chain can be
+selected. Editing the fallbacks or settings of an existing chain is live.
 
 ## Diagnostics (`debug`)
 
@@ -98,8 +124,9 @@ any given moment.
 
 `switchback.yaml.example` carries the 4-provider fallback list as the
 template; a copy of it at `~/.config/switchback/switchback.yaml` is what fills
-`DEFAULT_CONFIG` in practice, for both hosts. There is no per-project and no
-per-agent override — that one file is the whole config.
+`DEFAULT_CONFIG` in practice, for both hosts. There is no per-project override —
+the base file plus that host's overlay (`switchback.pi.yaml` /
+`switchback.oc.yaml`) is the whole config.
 It contains only model ids and a classifier reference — no API keys, no
 tokens, no account identifiers. Credentials are read from environment
 variables by pi itself, not by switchback.

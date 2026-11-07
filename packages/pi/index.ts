@@ -132,7 +132,7 @@ export default function (pi: ExtensionAPI) {
 				// warn once; the broken edit does not break the session.
 				let activeConfig: ResolvedSwitchbackFileConfig;
 				try {
-					const reloaded = loadConfig(secrets);
+					const reloaded = loadConfig(secrets, "pi");
 					lastGoodConfig = reloaded.config;
 					activeConfig = reloaded.config;
 					reportConfigWarnings(reloaded.warnings, (message) => notify(message, "warning"));
@@ -197,7 +197,7 @@ export default function (pi: ExtensionAPI) {
 					if (handledFailures.has(hashSample(errorMessage))) continue;
 					let config: ResolvedSwitchbackFileConfig;
 					try {
-						config = loadConfig(secrets).config;
+						config = loadConfig(secrets, "pi").config;
 					} catch {
 						// A broken config must not turn a provider error into an
 						// extension throw; the router will report it on the next route.
@@ -710,7 +710,7 @@ function safeLoad(
 	source: string;
 } {
 	try {
-		const loaded = loadConfig(secrets);
+		const loaded = loadConfig(secrets, "pi");
 		// Suspicions the loader accepted with a warning (unknown keys, repeated
 		// model ids, ...) instead of failing. Deduplicated by the reporter so the
 		// hot reload path does not repeat the same finding per request.

@@ -63,7 +63,7 @@ export function createRouter(options: RouterOptions): SwitchbackBridge {
 
 	const loadConfigSafe = (): ResolvedSwitchbackFileConfig | undefined => {
 		try {
-			const loaded = loadConfig(envSecrets);
+			const loaded = loadConfig(envSecrets, "opencode");
 			configNotified = false;
 			reportConfigWarnings([...loaded.warnings, ...findUnconnectedDecisionModels(loaded.config)], (message) =>
 				notifyAll(message),

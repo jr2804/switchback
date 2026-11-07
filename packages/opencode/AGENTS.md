@@ -46,11 +46,12 @@ Config, block state, crash corpus and the configured classifier are shared with
 the pi adapter unchanged (`switchback-core`'s one config file, default state dir,
 `SWITCHBACK_DIR` override) — root AGENTS.md project rule 3 owns the location.
 
-**Both hosts read exactly one config file** (`switchback-wix.12`, user decision
-m08294): `~/.config/switchback/switchback.yaml`. OpenCode adds no candidate of
-its own, and pi's `~/.pi/agent/switchback.yaml` is ignored. Do not "fix" a
-missing-config report by adding a host-specific path — that reintroduces the bug
-where OpenCode silently ran pi's chains.
+**One base file plus per-host overlays** (`switchback-wix.12` as amended, user
+decision m00151): `~/.config/switchback/switchback.yaml` plus this host's
+`switchback.oc.yaml` (see `packages/core/AGENTS.md`). OpenCode adds no other
+candidate of its own, and pi's `~/.pi/agent/switchback.yaml` is ignored. Do not
+"fix" a missing-config report by adding a host-specific path — that reintroduces
+the bug where OpenCode silently ran pi's chains.
 
 ## Ownership
 
@@ -204,9 +205,10 @@ where OpenCode silently ran pi's chains.
   makes belongs in `packages/core`. A new host capability needs both an
   integration here and a `fakeCtx` row in `tests/opencode-adapter.test.ts` or
   it is untested.
-- The chain config is read once at plugin setup and on provider reload; the
-  catalog and block state are read per decision — do not snapshot either in
-  shared state.
+- The chain config is re-read from disk on every route call, and a directory
+-   watcher (`watchConfigFiles` in `src/index.ts`) republishes the selector on
+-   hand-edits; the catalog and block state are read per decision — do not
+-   snapshot either in shared state.
 - Iterating against the installed host: copy `src/*.ts` into the cache package
   directory npm created for the globally installed `opencode-switchback`, then
   `opencode service restart` (the service keeps old modules until restarted;

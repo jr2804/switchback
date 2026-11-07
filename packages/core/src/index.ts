@@ -88,13 +88,21 @@ export {
 	piConfigDir,
 	switchbackConfigDir,
 	configFilePath,
+	configOverlayPath,
+	mergeFileConfigs,
 	switchbackStateDir,
 	resolveDecisionModel,
 	resolveSecretApiKey,
 	validateFileConfig,
 	createConfigWarningReporter,
 } from "./config.ts";
-export type { SwitchbackConfig, SwitchbackFileConfig, DecisionModelConfig, SecretResolver } from "./config.ts";
+export type {
+	SwitchbackConfig,
+	SwitchbackFileConfig,
+	DecisionModelConfig,
+	SecretResolver,
+	SwitchbackHost,
+} from "./config.ts";
 export type {
 	DecisionModelEntry,
 	DecisionProviderConfig,

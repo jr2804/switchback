@@ -1,12 +1,15 @@
 /**
  * User-facing switchback config loader.
  *
- * Config file (YAML, optional): `~/.config/switchback/switchback.yaml`, one file
- * shared by every host. There are no host-specific or per-project layers: a
- * host-specific overlay would let the two hosts disagree about the chain set,
- * and they do not share a model catalog, so an entry one host cannot resolve
- * would become a dead fallback on the other (`switchback-wix.12`). When the file
- * is absent, the built-in DEFAULT_CONFIG applies.
+ * Config files (YAML): `~/.config/switchback/switchback.yaml` is the shared
+ * base read by every host, with optional per-host overlays applied on top:
+ * `switchback.pi.yaml` for pi, `switchback.oc.yaml` for OpenCode. A host that
+ * passes its overlay to `loadConfig()` reads base + its own overlay merged;
+ * a host that passes nothing reads the base alone. Overlays are partial files
+ * (every section optional): models with an id already in the base replace
+ * that entry, new ids are appended; `decisionProviders`/`decisionModels`
+ * merge per key with the overlay winning; `debug` in the overlay wins when
+ * present. Overlay files are optional and missing files are simply skipped.
  *
  * The location is `~/.config/switchback/` - not a host's private directory - so
  * the same config serves pi and OpenCode. Override the directory with
@@ -130,13 +133,31 @@ export function switchbackStateDir(): string {
 }
 
 /**
- * Where the user config lives. One file, shared by every host:
- * `~/.config/switchback/switchback.yaml`. There are no host-specific or
- * project-local files - a host that reads switchback reads exactly this file
- * (`switchback-wix.12`).
+ * Where the user config lives. The shared base every host reads:
+ * `~/.config/switchback/switchback.yaml`. Per-host overlays
+ * (`configOverlayPath()`) layer on top of this file - see `loadConfig()`.
  */
 export function configFilePath(): string {
 	return join(switchbackConfigDir(), `${CONFIG_BASENAME}.yaml`);
+}
+
+/** Which host's overlay to apply in `loadConfig()`. */
+export type SwitchbackHost = "pi" | "opencode";
+
+/** Overlay filenames, per host. Optional partial files merged over the base. */
+const OVERLAY_BASENAMES: Record<SwitchbackHost, string> = {
+	pi: `${CONFIG_BASENAME}.pi`,
+	opencode: `${CONFIG_BASENAME}.oc`,
+};
+
+/**
+ * Where a host's overlay lives, when it has one:
+ * `~/.config/switchback/switchback.pi.yaml` for pi,
+ * `~/.config/switchback/switchback.oc.yaml` for OpenCode.
+ * The file is optional - absence means "no overlay".
+ */
+export function configOverlayPath(host: SwitchbackHost): string {
+	return join(switchbackConfigDir(), `${OVERLAY_BASENAMES[host]}.yaml`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -218,12 +239,7 @@ function splitAddress(address: DecisionModelId, where: string): { provider: stri
  * does exactly that). Whether that is a problem is a *host* question - pi has a
  * catalog, OpenCode does not - so it is answered where the host knows, not here.
  */
-function parseConnectionEntry(
-	rawEntry: unknown,
-	where: string,
-	path: string,
-	warnings: string[],
-): DecisionModelEntry {
+function parseConnectionEntry(rawEntry: unknown, where: string, path: string, warnings: string[]): DecisionModelEntry {
 	if (!isRecord(rawEntry)) throw new ConfigError(`${where} must be an object with baseUrl and apiKey`, path);
 	noteUnknownKeys(rawEntry, DECISION_MODEL_KEYS, where, warnings);
 
@@ -530,6 +546,93 @@ function parseFileConfig(value: unknown, path: string, warnings: string[]): Swit
 	};
 }
 
+/**
+ * Parse a per-host overlay file. Unlike the base, every section is optional:
+ * an overlay may carry only `decisionModels`, only extra `models`, or any
+ * combination. Model entries follow the same rules as the base file.
+ */
+function parseOverlayFileConfig(value: unknown, path: string, warnings: string[]): SwitchbackFileConfig {
+	if (value === null || value === undefined) return { models: [] };
+	if (!isRecord(value)) throw new ConfigError("root must be an object", path);
+	noteUnknownKeys(value, FILE_KEYS, "config", warnings);
+	const models = value["models"];
+	const parsedAll = models === undefined ? [] : parseOverlayModels(models, path, warnings);
+	const rawDebug = value["debug"];
+	if (rawDebug !== undefined && typeof rawDebug !== "boolean") {
+		throw new ConfigError("debug must be a boolean", path);
+	}
+	const decisionProviders = parseDecisionProviders(value["decisionProviders"], path, warnings);
+	const decisionModels = parseDecisionModels(value["decisionModels"], path, warnings);
+	return {
+		models: parsedAll,
+		...(decisionProviders !== undefined ? { decisionProviders } : {}),
+		...(decisionModels !== undefined ? { decisionModels } : {}),
+		...(rawDebug !== undefined ? { debug: rawDebug } : {}),
+	};
+}
+
+function parseOverlayModels(value: unknown, path: string, warnings: string[]): SwitchbackConfig[] {
+	if (!Array.isArray(value)) throw new ConfigError("models must be an array", path);
+	return value.map((entry, i) => parseSwitchbackModel(entry, i, warnings));
+}
+
+/**
+ * Merge a host overlay over the base config. Models match by id: an overlay
+ * entry with an id already in the base replaces it in place, a new id is
+ * appended. `decisionProviders`/`decisionModels` merge per key with the
+ * overlay winning; `debug` in the overlay wins when present.
+ */
+export function mergeFileConfigs(base: SwitchbackFileConfig, overlay: SwitchbackFileConfig): SwitchbackFileConfig {
+	const merged = base.models.slice();
+	const indexById = new Map(merged.map((m, i) => [m.id, i]));
+	for (const model of overlay.models) {
+		const at = indexById.get(model.id);
+		if (at === undefined) {
+			indexById.set(model.id, merged.length);
+			merged.push(model);
+		} else {
+			merged[at] = model;
+		}
+	}
+	return {
+		models: merged,
+		...(base.decisionProviders !== undefined || overlay.decisionProviders !== undefined
+			? { decisionProviders: { ...base.decisionProviders, ...overlay.decisionProviders } }
+			: {}),
+		...(base.decisionModels !== undefined || overlay.decisionModels !== undefined
+			? { decisionModels: { ...base.decisionModels, ...overlay.decisionModels } }
+			: {}),
+		...(overlay.debug !== undefined
+			? { debug: overlay.debug }
+			: base.debug !== undefined
+				? { debug: base.debug }
+				: {}),
+	};
+}
+
+function readAndParseOverlay(host: SwitchbackHost, warnings: string[]): SwitchbackFileConfig | undefined {
+	const path = configOverlayPath(host);
+	if (!existsSync(path)) return undefined;
+	return parseOverlay(path, warnings);
+}
+
+function parseOverlay(path: string, warnings: string[]): SwitchbackFileConfig {
+	if (path.endsWith(".json")) {
+		throw new ConfigError("switchback user config is YAML only; rename to switchback.oc.yaml", path);
+	}
+	const text = readFileSync(path, "utf8");
+	let raw: unknown;
+	try {
+		raw = parseYaml(text);
+	} catch (error) {
+		throw new ConfigError(
+			`switchback config is not valid YAML: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`,
+			path,
+		);
+	}
+	return parseOverlayFileConfig(raw, path, warnings);
+}
+
 function readAndParse(path: string, warnings: string[]): SwitchbackFileConfig {
 	// The only .json file in this project's surface is the simulate fixture;
 	// anything else ending in .json is a user config mistake.
@@ -553,14 +656,12 @@ function readAndParse(path: string, warnings: string[]): SwitchbackFileConfig {
 }
 
 /**
- * Load the active switchback configuration from `configFilePath()`.
- *
- * Exactly one file is read. There is no aggregation and no precedence: a
- * host-specific overlay would let the two hosts disagree about the chain set,
- * and they do not share a model catalog, so an entry one host cannot resolve
- * would become a dead fallback on the other. A file that exists but fails to
- * parse or validate throws immediately. With no file present, DEFAULT_CONFIG
- * (empty fallbacks, fail-fast) applies and `source` is `<default>`.
+ * Load the active switchback configuration: the shared base
+ * (`configFilePath()`) plus, when `host` is given, that host's overlay
+ * (`configOverlayPath(host)`) merged on top. A missing overlay is skipped;
+ * a present-but-broken one throws, like the base. With no base file present
+ * (and no overlay), DEFAULT_CONFIG (empty fallbacks, fail-fast) applies and
+ * `source` is `<default>`; otherwise `source` names the files that were read.
  */
 
 /** A store capable of resolving `secret:<name>` apiKey references. */
@@ -583,17 +684,30 @@ export interface SecretResolver {
  * and impossible on OpenCode, so that judgement belongs to the host
  * (`packages/opencode/src/decision-model-check.ts`).
  */
-export function loadConfig(secrets?: SecretResolver): {
+export function loadConfig(
+	secrets?: SecretResolver,
+	host?: SwitchbackHost,
+): {
 	config: ResolvedSwitchbackFileConfig;
 	source: string;
 	warnings: string[];
 } {
 	const path = configFilePath();
-	if (!existsSync(path)) return { config: DEFAULT_CONFIG, source: "<default>", warnings: [] };
-
+	const hasBase = existsSync(path);
 	const warnings: string[] = [];
-	const parsed = readAndParse(path, warnings);
-	return { config: resolveFile(parsed, secrets), source: resolve(path), warnings };
+	const base = hasBase ? readAndParse(path, warnings) : undefined;
+	const overlay = host === undefined ? undefined : readAndParseOverlay(host, warnings);
+	if (base === undefined && overlay === undefined)
+		return { config: DEFAULT_CONFIG, source: "<default>", warnings: [] };
+
+	const merged = base !== undefined && overlay !== undefined ? mergeFileConfigs(base, overlay) : (base ?? overlay)!;
+	const source =
+		base !== undefined && overlay !== undefined
+			? `${resolve(path)}+${resolve(configOverlayPath(host!))}`
+			: base !== undefined
+				? resolve(path)
+				: resolve(configOverlayPath(host!));
+	return { config: resolveFile(merged, secrets), source, warnings };
 }
 
 /**

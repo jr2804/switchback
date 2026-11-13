@@ -175,7 +175,7 @@ over the same RPC, so the three surfaces stay in step.
 |---|---|
 | Resolves `secret:` refs via the encrypted DPAPI store | Resolves `secret:` refs against environment variables (OpenCode exposes no readable vault) |
 | Interactive dialogue with multi-field wizard screens | Guided menu over the same command grammar, in both the TUI and the desktop app, plus the typed command itself |
-| Reasoning levels chosen from the model's own scale | Classification and routing identical; the settled level is applied on the wire for models that accept an `effort` part |
+| Reasoning levels chosen from the model's own scale | Classification and routing identical; the settled level rides `providerOptions` under the key each protocol decodes (`effort` for the messages families, `reasoningEffort` otherwise) |
 
 OpenCode-side behaviors switchback cannot influence:
 

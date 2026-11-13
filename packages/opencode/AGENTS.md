@@ -122,11 +122,16 @@ the bug where OpenCode silently ran pi's chains.
   decision, the router cycles to the next effective model without writing the
   block map (the universal baseline, root AGENTS.md rule 1); dispatch failures
   that reach the last entry surface to the user.
-- **The router's settled reasoning level is applied on the wire.** Core resolves
-  the level (`dispatch.ts`); `route.ts` `appliedLevel()` appends it as an
-  `effort` content part, because the host only emits `effort` parts for variants
-  it recognizes as its own effort names, while switchback's variants are its
-  category scale. `off` appends nothing (the provider default).
+- **The router's settled reasoning level rides `providerOptions`, never a message.**
+  Core resolves the level (`dispatch.ts`); `route.ts` `appliedLevel()` puts it in
+  the request's `providerOptions` under the key the *physical protocol* decodes
+  (`reasoningEffort` for the chat/responses families, `effort` for
+  `anthropic-messages`-style protocols), and `off` omits the key. An `effort`
+  message part is not an alternative: only `anthropic-messages` and
+  `openai-responses` accept it, and the host strips it for other routes inside
+  its own `prepareRequest` — a step this delegation bypasses by compiling the
+  physical route itself, so an unfiltered part made every chat protocol reject
+  the request and the cascade hung instead of failing over.
 - **Session state is per-session and process-lifetime.** `router.ts` keys
   `SwitchbackState` by `sessionKey`; a restart re-derives it from disk state and
   the config, as pi does across a fresh branch.

@@ -52,6 +52,7 @@ interface RouteRequestLike {
 	readonly http?: { readonly headers?: Readonly<Record<string, string>> } | undefined;
 	readonly promptCacheKey?: string | undefined;
 	readonly messages?: readonly unknown[] | undefined;
+	readonly providerOptions?: Readonly<Record<string, unknown>> | undefined;
 }
 
 /**
@@ -66,15 +67,14 @@ interface RouteRequestLike {
  * The two host classes this module instantiates, resolved at load time.
  *
  * Where they live depends on the host version: `@opencode/ai` 2.1.x re-exports
- * `LanguageModel` and `Message` from its root barrel, while 2.2.x dropped both
- * from the root and publishes them through the `./effect` entrypoint instead.
- * A static import therefore typechecks against exactly one of the two (and
- * fails at runtime against the other), so both specifiers are probed at load
- * time and the first module that actually exports `LanguageModel` wins.
+ * `LanguageModel` from its root barrel, while 2.2.x dropped it and publishes it
+ * through the `./effect` entrypoint instead. A static import therefore
+ * typechecks against exactly one of the two (and fails at runtime against the
+ * other), so both specifiers are probed at load time and the first module that
+ * actually exports `LanguageModel` wins.
  */
 interface AiValues {
 	readonly LanguageModel: new (input: { id: string; provider: string; route: unknown }) => unknown;
-	readonly Message: { readonly effort?: (input: { effort: unknown }) => unknown } | undefined;
 }
 
 async function resolveAi(): Promise<AiValues> {
@@ -86,10 +86,7 @@ async function resolveAi(): Promise<AiValues> {
 				Message?: unknown;
 			};
 			if (typeof mod.LanguageModel === "function") {
-				return {
-					LanguageModel: mod.LanguageModel as AiValues["LanguageModel"],
-					Message: mod.Message as AiValues["Message"],
-				};
+				return { LanguageModel: mod.LanguageModel as AiValues["LanguageModel"] };
 			}
 			failures.push(`${specifier}: no LanguageModel export`);
 		} catch (error) {
@@ -307,7 +304,7 @@ function preparedFor(
 				);
 			}
 			const phys = mod.model(entry.modelID, { ...entry.settings });
-			const local = localizeRequest(request, entry, level);
+			const local = localizeRequest(request, entry, level, phys.route.protocol);
 			const body = await toAwaitable(phys.route.body.from(local));
 			const prepared = await toAwaitable(phys.route.prepareTransport(body, local, options));
 			return { route: phys.route, prepared };
@@ -326,7 +323,12 @@ function preparedFor(
  * Wrapping the same route in OUR LanguageModel keeps every value identical
  * while satisfying the realm check; everything else is structural.
  */
-function localizeRequest(request: RouteRequestLike, entry: PhysicalEntry, level: string): RouteRequestLike {
+function localizeRequest(
+	request: RouteRequestLike,
+	entry: PhysicalEntry,
+	level: string,
+	protocol: string,
+): RouteRequestLike {
 	const model = (request as { model?: { id: unknown; provider: unknown; route: unknown } }).model;
 	if (model === undefined || model.route === undefined) return request;
 	// The wire request must carry the PHYSICAL model id/provider, not the virtual
@@ -339,29 +341,52 @@ function localizeRequest(request: RouteRequestLike, entry: PhysicalEntry, level:
 		provider: (provider ?? model.provider) as never,
 		route: model.route as never,
 	});
+	const options = appliedLevel(request, level, protocol);
 	return {
 		...(request as object),
 		model: localModel,
-		...(appliedLevel(request, level) !== undefined ? { messages: appliedLevel(request, level) } : {}),
+		...(options === undefined ? {} : { providerOptions: options }),
 	} as RouteRequestLike;
 }
 
 /**
- * The reasoning level the router settled on must reach the wire. The host only
- * emits `effort` content parts for variants it recognizes as its own effort
- * names (`session/runner/to-llm-message.ts` `variantEffort`), and our variants
- * are switchback's category scale, so the settled level is appended here as a
- * protocol-neutral `effort` part - exactly the shape every protocol reads.
- * `off` means "no reasoning": no part is appended, which is how a provider's
+ * Protocols that read the settled level from `providerOptions.effort` instead
+ * of `providerOptions.reasoningEffort`. Every other protocol either reads
+ * `reasoningEffort` (openai/open-responses/zai/mistral/venice chat families) or
+ * ignores both keys, which `providerOptions` decoding tolerates field by field.
+ */
+const EFFORT_KEY_PROTOCOLS: ReadonlySet<string> = new Set([
+	"anthropic-messages",
+	"bedrock-converse",
+	"alibaba-messages",
+	"zai-messages",
+]);
+
+/**
+ * The reasoning level the router settled on must reach the wire, and
+ * `providerOptions` is where a host request carries it: every protocol decodes
+ * that object itself (`LLMRequest.providerOptions`), so the level travels
+ * exactly like a host-built request's would.
+ *
+ * It must NOT be sent as an `effort` message part. That part is a
+ * cache-preserving protocol only `anthropic-messages`/`openai-responses` routes
+ * accept, and the host strips it for every other route inside its own
+ * `prepareRequest` - a step this delegation bypasses by compiling the physical
+ * route itself. An unfiltered part makes every chat protocol reject the whole
+ * request ("system messages only support text content for now"), so each
+ * fallback hop failed while compiling instead of failing over.
+ *
+ * `off` means "no reasoning": the key is omitted, which is how a provider's
  * default (or its disabled-thinking path) is expressed.
  */
-export function appliedLevel(request: RouteRequestLike, level: string): readonly unknown[] | undefined {
-	if (level === "off") return request.messages;
-	const messages = request.messages;
-	if (messages === undefined) return undefined;
-	const make = ai.Message?.effort;
-	if (typeof make !== "function") return messages;
-	return [...messages, make({ effort: level })];
+export function appliedLevel(
+	request: RouteRequestLike,
+	level: string,
+	protocol: string,
+): Record<string, unknown> | undefined {
+	if (level === "off") return undefined;
+	const key = EFFORT_KEY_PROTOCOLS.has(protocol) ? "effort" : "reasoningEffort";
+	return { ...(request.providerOptions ?? {}), [key]: level };
 }
 
 /** Best-effort debug trace: stderr only, never throws - diagnostics must not break routing. */

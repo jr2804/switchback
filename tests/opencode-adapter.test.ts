@@ -400,16 +400,31 @@ describe("commands", () => {
 });
 
 describe("reasoning level application", () => {
-	it("appends the settled level as an effort part, and passes `off` through unchanged", () => {
-		const messages = [{ role: "user", content: [{ type: "text", text: "hi" }] }];
-		const applied = appliedLevel({ messages }, "high");
-		expect(applied).toHaveLength(2);
-		const part = (applied![1] as { content: { type: string; effort: string }[] }).content[0]!;
-		expect(part).toMatchObject({ type: "effort", effort: "high" });
+	it("carries the settled level in providerOptions, and omits it for `off`", () => {
+		// The level must ride `providerOptions`, never a message part: a message
+		// part is a cache-preserving protocol only some routes accept, and the
+		// host strips it for every other route inside its own prepareRequest - a
+		// step this delegation bypasses. An unfiltered part made every fallback
+		// hop fail while compiling, so the cascade never produced a frame.
+		expect(appliedLevel({ messages: [] }, "high", "openai-chat")).toEqual({ reasoningEffort: "high" });
 		// `off` means "no reasoning": the request passes through untouched.
-		expect(appliedLevel({ messages }, "off")).toBe(messages);
-		// A request with no message array is left alone rather than guessed at.
-		expect(appliedLevel({}, "high")).toBeUndefined();
+		expect(appliedLevel({ messages: [] }, "off", "openai-chat")).toBeUndefined();
+	});
+
+	it("keys the level the way the physical protocol decodes it", () => {
+		// Chat/responses families read `reasoningEffort`.
+		for (const protocol of ["openai-chat", "openai-compatible-chat", "open-responses", "zai-chat", "mistral-chat", "venice-chat"]) {
+			expect(appliedLevel({}, "medium", protocol)).toEqual({ reasoningEffort: "medium" });
+		}
+		// Anthropic-and-friends read `effort`.
+		for (const protocol of ["anthropic-messages", "bedrock-converse", "alibaba-messages", "zai-messages"]) {
+			expect(appliedLevel({}, "medium", protocol)).toEqual({ effort: "medium" });
+		}
+	});
+
+	it("preserves providerOptions the host already set", () => {
+		const providerOptions = { store: false, reasoningEffort: "minimal" };
+		expect(appliedLevel({ providerOptions }, "high", "openai-chat")).toEqual({ store: false, reasoningEffort: "high" });
 	});
 });
 

@@ -93,6 +93,9 @@ export {
 	switchbackStateDir,
 	resolveDecisionModel,
 	resolveSecretApiKey,
+	resolveDebug,
+	debugFlag,
+	SWITCHBACK_DEBUG_ENV,
 	validateFileConfig,
 	createConfigWarningReporter,
 } from "./config.ts";

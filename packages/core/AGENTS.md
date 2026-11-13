@@ -57,6 +57,14 @@ the `src/index.ts` barrel. The OpenCode adapter lives in `packages/opencode`.
   `baseUrl` and every other decision model stays usable. Only structural
   problems (an `apiKey` without a `baseUrl`, an unknown key) fail the load. A
   host with no vault at all is a normal case, not a broken file.
+- **Diagnostics resolve once, in core.** `resolveDebug(configured, env?)` is the
+  one answer to "is `debug:` on": `SWITCHBACK_DEBUG` overrides the config value
+  (`debugFlag()`: `0`/`false`/`off`/`no` disable, anything else enables, empty
+  means no override). Both hosts and every surface that reports the flag read
+  it here, so the documented env override cannot silently apply to one adapter
+  only. Host traces are opt-in: a routine event (a benign absent connection, a
+  failure the cascade already reported) belongs behind this flag, never on
+  everyone's stderr.
 - **Narrow, consumed ports.** A port names the slice the core reads, never the
   whole host object, and arrives with the seam that uses it — no port for a
   boundary nothing implements yet (`src/ports.ts` header owns the rule and

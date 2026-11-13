@@ -32,6 +32,7 @@ import {
 	createConfigWarningReporter,
 	findModelConfig,
 	loadConfig,
+	resolveDebug,
 } from "switchback-core/config.ts";
 import { runDialogue } from "./src/dialogue.ts";
 import { createSecretStore } from "./src/secrets.ts";
@@ -81,7 +82,7 @@ export default function (pi: ExtensionAPI) {
 	const modelConfigs = initial.config.models;
 	// Diagnostic switch notifications: the config's `debug: true`, overridden by the
 	// SWITCHBACK_DEBUG environment variable for quick toggling without a config edit.
-	const debug = debugFlag(process.env["SWITCHBACK_DEBUG"]) ?? initial.config.debug ?? false;
+	const debug = resolveDebug(initial.config.debug);
 
 	// A classifier that names its own endpoint (decisionModel.baseUrl) is registered here, so
 	// switchback can classify through a local System One server (e.g. Ollama
@@ -687,12 +688,6 @@ async function probeClassifierConfig(ctx: ExtensionContext, decisionModel: Decis
 	const started = Date.now();
 	const result = await ctx.modelRegistry.classify(handle, buildProbeContext());
 	return summarizeProbe(result, Date.now() - started);
-}
-
-function debugFlag(value: string | undefined): boolean | undefined {
-	const v = value?.trim().toLowerCase();
-	if (v === undefined || v === "") return undefined;
-	return !(v === "0" || v === "false" || v === "off" || v === "no");
 }
 
 /**

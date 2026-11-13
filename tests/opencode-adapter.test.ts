@@ -29,7 +29,7 @@ import { join } from "node:path";
 import { tmpdir as osTmpdir } from "node:os";
 import plugin from "opencode-switchback";
 import { readBridge } from "../packages/opencode/src/bridge.ts";
-import { appliedLevel } from "../packages/opencode/src/route.ts";
+import { appliedLevel, debugLog } from "../packages/opencode/src/route.ts";
 import { SWITCHBACK_DIR_ENV } from "switchback-core/config.ts";
 import { pinFilePath, stateFilePath } from "switchback-core";
 
@@ -522,5 +522,53 @@ describe("conversation-derived routing inputs", () => {
 		history.set("ses-l", [{ time: { created: Date.now() - 45 * 60_000 } }]);
 		const idle = await bridge.route({ chainId: "switchback/auto", sessionKey: "ses-l", reason: "user" });
 		expect(idle).toMatchObject({ status: "ok", current: "alpha-corp/alpha-model" });
+	});
+});
+
+describe("diagnostics stay quiet unless asked", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		delete process.env["SWITCHBACK_DEBUG"];
+	});
+
+	it("writes nothing to stderr for a provider with no stored connection", async () => {
+		// The host's integration store is optional, and `opencode.json` keys never
+		// create one. Resolving entries therefore has to stay silent: the line this
+		// replaced fired once per model per TTL on a perfectly healthy install.
+		await setup();
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const entries = await readBridge()!.entries("switchback/auto");
+		expect(entries).toHaveLength(2);
+		expect(error).not.toHaveBeenCalled();
+	});
+
+	it("keeps the failover trace off by default and prints it under `debug:`", async () => {
+		// A failed hop is the expected steady state of a cascade, so the stack trace
+		// is diagnostics rather than an error: it follows the same switch as the
+		// switch notifications, and the notice the cascade emits already tells the
+		// user what happened.
+		await setup();
+		const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+		expect(readBridge()!.debug()).toBe(false);
+		debugLog("tripwire", new Error("boom"));
+		expect(quiet).not.toHaveBeenCalled();
+
+		writeConfig("debug: true\n");
+		const loud = vi.spyOn(console, "error").mockImplementation(() => {});
+		expect(readBridge()!.debug()).toBe(true);
+		debugLog("tripwire", new Error("boom"));
+		expect(loud).toHaveBeenCalledTimes(1);
+		expect(String(loud.mock.calls[0]![0])).toContain("[switchback] tripwire");
+	});
+
+	it("honours SWITCHBACK_DEBUG over the config, as the docs promise", async () => {
+		// pi has always read this variable; OpenCode ignored it while the shared
+		// documentation promised both hosts honour it.
+		await setup();
+		expect(readBridge()!.debug()).toBe(false);
+		process.env["SWITCHBACK_DEBUG"] = "1";
+		expect(readBridge()!.debug()).toBe(true);
+		process.env["SWITCHBACK_DEBUG"] = "0";
+		expect(readBridge()!.debug()).toBe(false);
 	});
 });

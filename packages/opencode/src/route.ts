@@ -389,9 +389,19 @@ export function appliedLevel(
 	return { ...(request.providerOptions ?? {}), [key]: level };
 }
 
-/** Best-effort debug trace: stderr only, never throws - diagnostics must not break routing. */
+/**
+ * Best-effort debug trace: stderr only, and only when diagnostics are on.
+ *
+ * The flag is the config's `debug:` (or `SWITCHBACK_DEBUG`), read through the
+ * bridge so the trace follows the same switch as the switch notifications.
+ * Off by default: a failing attempt is reported to the user by the notice the
+ * cascade already emits, and an unconditional stack trace on stderr reads like
+ * a crash in a host where a failed hop is the expected steady state. Never
+ * throws - diagnostics must not break routing.
+ */
 export function debugLog(message: string, error?: unknown): void {
 	try {
+		if (readBridge()?.debug() !== true) return;
 		console.error(
 			`[switchback] ${message}${error === undefined ? "" : ` :: ${String((error as Error)?.stack ?? error)}`}`,
 		);

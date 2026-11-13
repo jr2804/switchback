@@ -65,6 +65,7 @@ import {
 	removeFallback,
 	removeVirtualModel,
 	renameVirtualModel,
+	resolveDebug,
 	saveConfigFile,
 	setDebug,
 	setDecisionModel,
@@ -358,7 +359,7 @@ function showConfig(args: readonly string[]): ConfigCommandResult {
 	}
 	lines.push(path);
 	for (const model of models) lines.push(...describeModel(model));
-	if (config.debug === true) lines.push("  debug: on");
+	if (resolveDebug(config.debug)) lines.push("  debug: on");
 	return { ok: true, text: lines.join("\n") };
 }
 

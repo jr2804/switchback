@@ -109,10 +109,23 @@ config entry, so a session can be diagnosed without a config edit:
 
 ```bash
 SWITCHBACK_DEBUG=1 pi --model switchback/auto
+SWITCHBACK_DEBUG=1 opencode run --model switchback/auto "hello"
 ```
 
-With the flag off (the default) switches are silent; the no-classifier warning
-is always shown, regardless of this flag.
+Both hosts read the override through the same core helper, so it means the same
+thing everywhere. The flag covers the adapter's own stderr traces too (for
+OpenCode: a failed dispatch, a failed request compile, a credential lookup that
+threw), which are opt-in for the same reason — a failed hop is a cascade's
+expected steady state and already reaches you as a switch line, and a stack
+trace on every attempt trains you to ignore `[switchback]`.
+
+With the flag off (the default) switches and traces are silent; the
+no-classifier warning is always shown, regardless of this flag.
+
+A missing credential reference is not diagnostics: an unresolvable
+`secret:<name>` always warns with the entry it belongs to, because silently
+dropping a key would leave a classifier that looks configured but cannot
+authenticate.
 
 ## `DEFAULT_CONFIG` and the empty-fallbacks design
 

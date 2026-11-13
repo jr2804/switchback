@@ -285,6 +285,19 @@ describe("/switchback-config: per-model options", () => {
 	it("rejects a debug value that is neither on nor off", () => {
 		expect(run("debug maybe")).toContain("usage: /switchback-config debug <on|off>");
 	});
+
+	it("reports the env override in `show`, matching what routing does", () => {
+		// `show` is the surface that tells the user what the router will do, so it has
+		// to answer with the same flag the bridge uses - not the raw file value.
+		run("debug off");
+		expect(run("show")).not.toContain("debug: on");
+		process.env["SWITCHBACK_DEBUG"] = "1";
+		try {
+			expect(run("show")).toContain("debug: on");
+		} finally {
+			delete process.env["SWITCHBACK_DEBUG"];
+		}
+	});
 });
 
 describe("/switchback-config: reset", () => {

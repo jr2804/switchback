@@ -17,10 +17,13 @@ import {
 	decide,
 	effectiveIds,
 	findModelConfig,
+	debugFlag,
 	loadConfig,
 	readBlockedMap,
 	readDisabledMap,
+	resolveDebug,
 	resolveFallbacks,
+	SWITCHBACK_DEBUG_ENV,
 	systemOneClassifierPort,
 } from "switchback-core";
 import type {
@@ -44,6 +47,25 @@ const reportConfigWarnings = createConfigWarningReporter();
 
 /** How long a resolved credential/provider-settings pair is reused. */
 const ENTRY_TTL_MS = 60_000;
+
+/**
+ * The adapter's own stderr traces: off unless diagnostics are on.
+ *
+ * Resolved exactly like the switch notifications (`resolveDebug`, so the config's
+ * `debug:` and `SWITCHBACK_DEBUG` both count) but loaded *quietly* - a trace
+ * check must never publish config warnings as a side effect. Callers that
+ * already hold the loaded config pass it to avoid a second parse; a config that
+ * will not load is not a reason to lose the env flag, so that case falls back
+ * to it.
+ */
+const debugEnabled = (loaded?: ResolvedSwitchbackFileConfig): boolean => {
+	if (loaded !== undefined) return resolveDebug(loaded.debug);
+	try {
+		return resolveDebug(loadConfig(envSecrets, "opencode").config.debug);
+	} catch {
+		return debugFlag(process.env[SWITCHBACK_DEBUG_ENV]) ?? false;
+	}
+};
 
 export interface RouterOptions {
 	readonly ctx: Plugin.Context;
@@ -119,16 +141,19 @@ export function createRouter(options: RouterOptions): SwitchbackBridge {
 		try {
 			// integration is host-optional: without it there is simply no stored
 			// connection to consult - config/settings carry the key (or the request
-			// fails visibly at dispatch), so absence is not an error to log.
+			// fails visibly at dispatch), so absence is not an error to log. Most
+			// chained providers are keyed in `opencode.json`, which never creates a
+			// connection here; logging it once per model per TTL was the loudest
+			// thing the adapter did on a healthy install.
 			const connection = await ctx.integration?.connection?.active(address.provider);
-			if (connection === undefined) {
-				console.error(`[switchback] no active connection for ${address.provider}`);
-			}
 			const credential =
 				connection === undefined ? undefined : await ctx.integration.connection.resolve(connection);
 			if (credential?.type === "key") apiKey = credential.key;
 		} catch (error) {
-			console.error(`[switchback] credential lookup failed for ${address.provider}:`, error);
+			// A failed lookup is a real event but not a decision input: the request
+			// still dispatches with config/settings credentials, so it stays behind
+			// the diagnostics flag rather than on everyone's stderr.
+			if (debugEnabled()) console.error(`[switchback] credential lookup failed for ${address.provider}:`, error);
 			// No stored connection: config/settings carry the key or the request
 			// fails visibly at dispatch - nothing to fabricate here.
 		}
@@ -183,7 +208,7 @@ export function createRouter(options: RouterOptions): SwitchbackBridge {
 				support: opencodeThinkingSupport(catalog),
 				notify: (message, type) => bridge.notify(call.sessionKey, message, type),
 				...((await contextTokensFor(ctx, call.sessionKey)) ?? {}),
-				...(config.debug === true ? { debug: true } : {}),
+				...(debugEnabled(config) ? { debug: true } : {}),
 			});
 			if (outcome.decision.kind === "config-invalid") {
 				const resolved = resolveFallbacks(chain.fallbacks, registry);
@@ -248,7 +273,7 @@ export function createRouter(options: RouterOptions): SwitchbackBridge {
 			});
 		},
 
-		debug: () => loadConfigSafe()?.debug === true,
+		debug: debugEnabled,
 	};
 	return bridge;
 }

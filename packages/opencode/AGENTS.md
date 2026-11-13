@@ -122,11 +122,16 @@ the bug where OpenCode silently ran pi's chains.
   decision, the router cycles to the next effective model without writing the
   block map (the universal baseline, root AGENTS.md rule 1); dispatch failures
   that reach the last entry surface to the user.
-- **The router's settled reasoning level is applied on the wire.** Core resolves
-  the level (`dispatch.ts`); `route.ts` `appliedLevel()` appends it as an
-  `effort` content part, because the host only emits `effort` parts for variants
-  it recognizes as its own effort names, while switchback's variants are its
-  category scale. `off` appends nothing (the provider default).
+- **The router's settled reasoning level rides `providerOptions`, never a message.**
+  Core resolves the level (`dispatch.ts`); `route.ts` `appliedLevel()` puts it in
+  the request's `providerOptions` under the key the *physical protocol* decodes
+  (`reasoningEffort` for the chat/responses families, `effort` for
+  `anthropic-messages`-style protocols), and `off` omits the key. An `effort`
+  message part is not an alternative: only `anthropic-messages` and
+  `openai-responses` accept it, and the host strips it for other routes inside
+  its own `prepareRequest` — a step this delegation bypasses by compiling the
+  physical route itself, so an unfiltered part made every chat protocol reject
+  the request and the cascade hung instead of failing over.
 - **Session state is per-session and process-lifetime.** `router.ts` keys
   `SwitchbackState` by `sessionKey`; a restart re-derives it from disk state and
   the config, as pi does across a fresh branch.
@@ -201,6 +206,16 @@ the bug where OpenCode silently ran pi's chains.
   `slash`), so ephemeral toasts and the interactive config dialogue ship there.
   `credential` is still `Pick<CredentialApi,"activate">` (no write, no
   read-back), so `secret:` refs stay env-backed.
+- **Diagnostics are opt-in and shared.** The adapter's own stderr traces
+  (`debugLog` in `src/route.ts`, credential-lookup failures in `src/router.ts`)
+  print only when `bridge.debug()` is true, and every switch-notification site
+  uses the same answer. That answer is core `resolveDebug()`: the config's
+  `debug:`, overridden by `SWITCHBACK_DEBUG` — the env override is a property
+  of the config surface, so no adapter may quietly ignore it. A failed hop is
+  the expected steady state of a cascade and already reaches the user as a
+  notice; writing a stack trace unconditionally trained users to ignore
+  `[switchback]` lines. Same rule for a provider with no stored
+  `ctx.integration` connection: routine, silent.
 - Build the GUI bundle with `npm run build -w opencode-switchback` (also wired
   as `prepack`); verify it with `npm pack --dry-run -w opencode-switchback`,
   which must list `dist/gui-experimental.cjs`. The root `.gitignore` ignores

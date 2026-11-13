@@ -109,6 +109,11 @@ The physical models switchback dispatches to are a different matter: their
 credentials come from OpenCode's own connection store, so whatever you
 configured there is what the fallback call uses.
 
+Diagnostics: the shared `debug:` flag (and the `SWITCHBACK_DEBUG` override)
+works here exactly as it does in pi, and it also governs the plugin's own stderr
+traces. With it off — the default — advance, block and exhaustion notices are
+the only switchback output you see; failed hops are not echoed as stack traces.
+
 ## Commands
 
 All of them are slash commands in the TUI. The non-interactive
@@ -176,7 +181,7 @@ over the same RPC, so the three surfaces stay in step.
 |---|---|
 | Resolves `secret:` refs via the encrypted DPAPI store | Resolves `secret:` refs against environment variables (OpenCode exposes no readable vault) |
 | Interactive dialogue with multi-field wizard screens | Guided menu over the same command grammar, in both the TUI and the desktop app, plus the typed command itself |
-| Reasoning levels chosen from the model's own scale | Classification and routing identical; the settled level is applied on the wire for models that accept an `effort` part |
+| Reasoning levels chosen from the model's own scale | Classification and routing identical; the settled level rides `providerOptions` under the key each protocol decodes (`effort` for the messages families, `reasoningEffort` otherwise) |
 
 OpenCode-side behaviors switchback cannot influence:
 

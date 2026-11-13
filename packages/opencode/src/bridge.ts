@@ -87,7 +87,7 @@ export interface SwitchbackBridge {
 	entries(chainId: string): Promise<readonly PhysicalEntry[]>;
 	/** Chat-side notice. Best effort; must never throw. */
 	notify(sessionKey: string, message: string, type: "info" | "warning" | "error"): void;
-	/** True when `debug:` is set in the shared config. */
+	/** True when diagnostics are on: the shared `debug:` or `SWITCHBACK_DEBUG`. */
 	debug(): boolean;
 }
 

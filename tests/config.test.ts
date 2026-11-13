@@ -13,6 +13,7 @@ import {
 	findModelConfig,
 	loadConfig,
 	ConfigError,
+	resolveDebug,
 	SWITCHBACK_PROVIDER,
 	SWITCHBACK_VIRTUAL_ID,
 } from "switchback-core/config.ts";
@@ -288,6 +289,26 @@ describe("loadConfig - debug flag", () => {
 		);
 		const { config } = loadConfig();
 		expect(config.debug).toBe(false);
+	});
+});
+
+describe("resolveDebug - the shared diagnostics answer", () => {
+	it("falls back to the config when the env says nothing", () => {
+		expect(resolveDebug(true, {})).toBe(true);
+		expect(resolveDebug(false, {})).toBe(false);
+		expect(resolveDebug(undefined, {})).toBe(false);
+		expect(resolveDebug(undefined, { SWITCHBACK_DEBUG: "  " })).toBe(false);
+	});
+
+	it("lets the env override the config in both directions", () => {
+		expect(resolveDebug(false, { SWITCHBACK_DEBUG: "1" })).toBe(true);
+		expect(resolveDebug(true, { SWITCHBACK_DEBUG: "0" })).toBe(false);
+		for (const off of ["false", "FALSE", "off", "no", " 0 "]) {
+			expect(resolveDebug(true, { SWITCHBACK_DEBUG: off })).toBe(false);
+		}
+		for (const on of ["true", "yes", "2", "anything"]) {
+			expect(resolveDebug(false, { SWITCHBACK_DEBUG: on })).toBe(true);
+		}
 	});
 });
 

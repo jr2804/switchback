@@ -118,6 +118,36 @@ export const SWITCHBACK_CONFIG_DIR_ENV = "SWITCHBACK_CONFIG_DIR";
 /** Env override naming the shared switchback state directory outright. */
 export const SWITCHBACK_DIR_ENV = "SWITCHBACK_DIR";
 
+/** Env override for the `debug:` flag: any value but 0/false/off/no enables it. */
+export const SWITCHBACK_DEBUG_ENV = "SWITCHBACK_DEBUG";
+
+/**
+ * Read an environment override for the config's `debug:` flag.
+ *
+ * An empty or absent value means "no override" (`undefined`) so the config
+ * decides; `0`/`false`/`off`/`no` (any case) disable, anything else enables.
+ * Shared by both hosts: the documented `SWITCHBACK_DEBUG=1` override is a
+ * property of the config surface, not of one adapter.
+ */
+export function debugFlag(value: string | undefined): boolean | undefined {
+	const v = value?.trim().toLowerCase();
+	if (v === undefined || v === "") return undefined;
+	return !(v === "0" || v === "false" || v === "off" || v === "no");
+}
+
+/**
+ * The effective diagnostics switch: `SWITCHBACK_DEBUG` when it says anything,
+ * otherwise the config's `debug:`, otherwise off. Both hosts resolve it here so
+ * the env override cannot drift between them (pi shipped it, OpenCode silently
+ * ignored it while the docs promised both).
+ */
+export function resolveDebug(
+	configured: boolean | undefined,
+	env: Record<string, string | undefined> = process.env,
+): boolean {
+	return debugFlag(env[SWITCHBACK_DEBUG_ENV]) ?? configured ?? false;
+}
+
 /**
  * The shared switchback state directory: blocks.json, crashes.json,
  * pin.json, secrets.json. Runtime files live here so they are account-scoped,

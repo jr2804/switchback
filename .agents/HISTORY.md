@@ -4,6 +4,53 @@ Durable decisions, recorded with git refs. Add new entries at the top.
 Routine history stays in `git log`; only decisions that changed the
 project's direction, contract, or policy belong here.
 
+## 2026-11-07 — Diagnostics are opt-in and resolved once, in core
+
+The adapter wrote two classes of stderr line that no flag could silence: the
+benign `no active connection for <provider>` (a provider keyed in
+`opencode.json` never acquires a stored connection) and a full stack trace from
+`debugLog()` on every failed dispatch and failed request compile. A failed hop
+is the expected steady state of a cascade, already reported as a switch notice,
+so the traces read as crashes and trained users to ignore `[switchback]`.
+
+Both now gate on `bridge.debug()`. The flag itself moved into core
+(`resolveDebug()` / `debugFlag()` / `SWITCHBACK_DEBUG_ENV` in
+`packages/core/src/config.ts`) because `SWITCHBACK_DEBUG=1` was a documented
+config-surface promise that only pi honoured — OpenCode's adapter read the YAML
+`debug:` key alone and never looked at the environment, while
+`docs/configuration.md`, `docs/architecture.md` and the `DebugOptions` type all
+claimed the override. One helper, two hosts: the override cannot drift again.
+The env flag also feeds the `debug:` answer handed to `decide()`, so it turns on
+switch notifications and traces together instead of only one of the two.
+
+## 2026-11-07 — Credentials fail per entry; the settled level rides `providerOptions`
+
+Two defects made the OpenCode plugin useless after 2026.11.2/3 while pi stayed
+healthy, and both were contract bugs rather than host quirks.
+
+`appliedLevel()` appended the settled reasoning level as an `effort` **message
+part**. Only `anthropic-messages` and `openai-responses` accept that part; every
+other protocol lowers system messages to text-only and rejects the request
+(`system messages only support text content for now`). The host normally strips
+such a part in its own `prepareRequest` (`applyEffortUpdates`), but the adapter
+compiles the physical route itself and so bypassed that filter — every fallback
+hop died while compiling, and the cascade hung instead of failing over. The
+level now goes into `providerOptions` under the key each protocol decodes
+(`reasoningEffort` for the chat/responses families, `effort` for
+`anthropic-messages`-style ones), and `off` omits the key.
+
+`resolveSecretApiKey()` **threw** on any unresolvable `secret:<name>` reference,
+which failed the whole `loadConfig()` and left the plugin with no classifier at
+all. One unset environment variable is a routine state — OpenCode's only store
+is `process.env` — so the loader now pushes a warning and drops that one key:
+the entry keeps its `baseUrl`, the remaining decision models stay usable, and the
+host reports the warning through its own channel. Only structural problems
+(`apiKey` without `baseUrl`, an unknown key) still fail the load.
+
+The rule is now explicit in `packages/core/AGENTS.md` (credentials fail per
+entry, never per file) so a future host store cannot reintroduce the
+whole-file abort.
+
 ## 2026-11-07 — OpenCode config watcher: hand-edits republish without restart
 
 Routing in both hosts already re-read the config per request; only OpenCode's

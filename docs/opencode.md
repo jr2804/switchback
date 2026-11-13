@@ -102,8 +102,9 @@ Secrets: OpenCode has no readable secret vault (its credential store
 activates stored profiles and never returns key material), so the OpenCode
 plugin resolves `secret:`-prefixed `decisionModels[].apiKey` references against
 environment variables: `secret:MY_KEY` reads `MY_KEY` from the environment.
-A reference that does not resolve disables the plugin for that attempt with
-a visible notice — the same failure mode as pi, against a different store.
+A reference that does not resolve never disables the plugin: the key is dropped
+and one warning names it (the endpoint and every other decision model stay
+usable), so a single unset variable costs one classifier, not the whole config.
 The physical models switchback dispatches to are a different matter: their
 credentials come from OpenCode's own connection store, so whatever you
 configured there is what the fallback call uses.
@@ -175,7 +176,7 @@ over the same RPC, so the three surfaces stay in step.
 |---|---|
 | Resolves `secret:` refs via the encrypted DPAPI store | Resolves `secret:` refs against environment variables (OpenCode exposes no readable vault) |
 | Interactive dialogue with multi-field wizard screens | Guided menu over the same command grammar, in both the TUI and the desktop app, plus the typed command itself |
-| Reasoning levels chosen from the model's own scale | Classification and routing identical; the settled level rides `providerOptions` under the key each protocol decodes (`effort` for the messages families, `reasoningEffort` otherwise) |
+| Reasoning levels chosen from the model's own scale | Classification and routing identical; the settled level is applied on the wire for models that accept an `effort` part |
 
 OpenCode-side behaviors switchback cannot influence:
 

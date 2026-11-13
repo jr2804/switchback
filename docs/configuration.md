@@ -367,6 +367,7 @@ loud about a retired one. None of these are silent:
 | retired `jev:` block | warning: `use decisionModel: <provider>/<model-id> instead` |
 | retired `api:` field | warning: drop it — a `decisionModels` entry always speaks SystemOne |
 | list-form `decisionModels:` | warning; the list is ignored |
+| `secret:<name>` that does not resolve | warning naming the entry; the key is dropped, the load continues |
 | `decisionProviders` key containing `/` | error: `must be a provider id ... not a "provider/model" address` |
 
 An entry that carries no connection details is **not** a warning on pi: the
@@ -500,3 +501,15 @@ Under OpenCode there is no encrypted store (the host exposes no readable
 vault); the OpenCode plugin resolves the same `secret:<name>` references
 against environment variables instead — see
 [OpenCode → Secrets](opencode.md#configuration).
+
+A reference that does not resolve is a warning, not a failed load: the entry
+keeps its `baseUrl`, its `apiKey` is omitted, and the host reports
+
+```text
+decisionModels.my-provider/my-model.apiKey "secret:my-provider-key" does not
+resolve (secret "my-provider-key" is not in the store) - the key is ignored
+```
+
+One unavailable credential therefore costs that one classifier rather than the
+whole config, which is what makes an unset environment variable on OpenCode a
+routine state instead of a plugin that refuses to start.

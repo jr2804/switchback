@@ -437,6 +437,25 @@ decisionModels:
 		expect(config.models[0]?.decisionModel?.apiKey).toBe("s3cret");
 	});
 
+	// An unavailable credential must not disable the whole config: dropping the
+	// one key keeps the endpoint and every other decision model usable, which is
+	// exactly the OpenCode case (refs resolve against the environment, so an
+	// unset variable is routine rather than a broken file).
+	it("warns and drops a secret reference that the store cannot resolve", () => {
+		writeProviders("  ollama:\n    baseUrl: http://localhost:11434/v1\n    apiKey: secret:missing-key\n");
+		const { config, warnings } = loadConfig({ get: () => undefined });
+		expect(config.models[0]?.decisionModel).toEqual({ provider: "ollama", id: "tev1", baseUrl: "http://localhost:11434/v1" });
+		expect(warnings.join("\n")).toContain('secret "missing-key" is not in the store');
+	});
+
+	it("warns and drops a secret reference when the host has no secret store", () => {
+		writeProviders("  ollama:\n    baseUrl: http://localhost:11434/v1\n    apiKey: secret:some-key\n");
+		const { config, warnings } = loadConfig();
+		expect(config.models[0]?.decisionModel?.apiKey).toBeUndefined();
+		expect(config.models[0]?.decisionModel?.baseUrl).toBe("http://localhost:11434/v1");
+		expect(warnings.join("\n")).toContain("this host provides no secret store");
+	});
+
 	it("accepts a provider entry with no connection details", () => {
 		// A named-but-empty provider is how the TUI records "use the catalog"; it
 		// must not be an error on a host that has one.

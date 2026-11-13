@@ -51,6 +51,12 @@ the `src/index.ts` barrel. The OpenCode adapter lives in `packages/opencode`.
   `~/.pi/agent/switchback.yaml` and `<cwd>/.pi/switchback.yaml` are ignored
   even when present. State (`switchbackStateDir()`) is separate and still lives
   under `piConfigDir()`.
+- **Credentials fail per entry, never per file.** `resolveSecretApiKey()` pushes a
+  warning and drops the key when a `secret:<name>` reference cannot resolve (no
+  store on this host, or the name is absent from it); the entry keeps its
+  `baseUrl` and every other decision model stays usable. Only structural
+  problems (an `apiKey` without a `baseUrl`, an unknown key) fail the load. A
+  host with no vault at all is a normal case, not a broken file.
 - **Narrow, consumed ports.** A port names the slice the core reads, never the
   whole host object, and arrives with the seam that uses it — no port for a
   boundary nothing implements yet (`src/ports.ts` header owns the rule and

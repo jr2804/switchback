@@ -122,16 +122,11 @@ the bug where OpenCode silently ran pi's chains.
   decision, the router cycles to the next effective model without writing the
   block map (the universal baseline, root AGENTS.md rule 1); dispatch failures
   that reach the last entry surface to the user.
-- **The router's settled reasoning level rides `providerOptions`, never a message.**
-  Core resolves the level (`dispatch.ts`); `route.ts` `appliedLevel()` puts it in
-  the request's `providerOptions` under the key the *physical protocol* decodes
-  (`reasoningEffort` for the chat/responses families, `effort` for
-  `anthropic-messages`-style protocols), and `off` omits the key. An `effort`
-  message part is not an alternative: only `anthropic-messages` and
-  `openai-responses` accept it, and the host strips it for other routes inside
-  its own `prepareRequest` — a step this delegation bypasses by compiling the
-  physical route itself, so an unfiltered part made every chat protocol reject
-  the request and the cascade hung instead of failing over.
+- **The router's settled reasoning level is applied on the wire.** Core resolves
+  the level (`dispatch.ts`); `route.ts` `appliedLevel()` appends it as an
+  `effort` content part, because the host only emits `effort` parts for variants
+  it recognizes as its own effort names, while switchback's variants are its
+  category scale. `off` appends nothing (the provider default).
 - **Session state is per-session and process-lifetime.** `router.ts` keys
   `SwitchbackState` by `sessionKey`; a restart re-derives it from disk state and
   the config, as pi does across a fresh branch.
@@ -179,10 +174,14 @@ the bug where OpenCode silently ran pi's chains.
   override; the core owns format, migration and atomic writes.
 - **`secret:` refs resolve from the environment.** OpenCode's credential API
   activates stored profiles but never returns key material, so config secrets
-  use the env-backed `SecretResolver`; an unresolvable ref is a visible config
-  problem (core `ConfigError`). Physical-model credentials (API keys for the
-  dispatch itself) are looked up live through `ctx.integration.connection` in
-  `router.ts`.
+  use the env-backed `SecretResolver`. A ref that does not resolve is a
+  **warning naming the entry, not a failed load**: core drops that one key and
+  the endpoint and every other decision model stay usable (the rule itself
+  lives in `packages/core/AGENTS.md`). This matters most here — `process.env`
+  is the only store, so an unset variable is routine. Physical-model
+  credentials (API keys for the dispatch itself) are looked up live through
+  `ctx.integration.connection` in `router.ts`, and a provider with no stored
+  connection is normal, not an error to log.
 - **Catalog ids are provider-relative.** Published models carry the chain id
   minus the `switchback/` prefix (`switchback/auto` → `auto`); the host scopes
   them by the provider. Every published model needs `cost: []`,

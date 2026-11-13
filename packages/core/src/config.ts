@@ -419,28 +419,40 @@ const SECRETS_PREFIX = "secret:";
 /**
  * Resolve a `secret:<ref>` apiKey value against a secret store. Anything else
  * (the literal string `ollama`, a real token, etc.) passes through unchanged.
- * A missing reference throws `SecretsError` (re-raised by the caller) - a secret
- * reference that does not resolve is a user error, not a silent default.
+ *
+ * An unresolvable reference never fails the load: it becomes a warning and the
+ * key is dropped (`apiKey` resolves to `undefined`), so the entry keeps its
+ * `baseUrl` and every other decision model stays usable. One unavailable
+ * credential must not disable classification for the whole config - a host
+ * may have no store at all (OpenCode resolves refs against the environment),
+ * and a single unset variable is a routine state, not a broken file. The host
+ * reports the warning through its own notify channel.
  */
 export function resolveSecretApiKey(
 	apiKey: string | undefined,
 	secrets: { get(name: string): string | undefined } | undefined,
+	warnings: string[] = [],
+	where = "<config>",
 ): string | undefined {
 	if (apiKey === undefined) return undefined;
 	if (!apiKey.startsWith(SECRETS_PREFIX)) return apiKey;
-	if (secrets === undefined) {
-		throw new ConfigError(
-			`apiKey starts with "${SECRETS_PREFIX}" but no secret store was provided - pass one to loadConfig() or define the key in the secret store first.`,
-			"<config>",
-		);
-	}
 	const name = apiKey.slice(SECRETS_PREFIX.length);
 	if (name.length === 0) {
-		throw new ConfigError(`apiKey "${SECRETS_PREFIX}" is missing a name`, "<config>");
+		warnings.push(`${where}.apiKey "${SECRETS_PREFIX}" is missing a name - the key is ignored`);
+		return undefined;
+	}
+	if (secrets === undefined) {
+		warnings.push(
+			`${where}.apiKey "${apiKey}" cannot resolve (this host provides no secret store) - the key is ignored`,
+		);
+		return undefined;
 	}
 	const value = secrets.get(name);
 	if (value === undefined) {
-		throw new ConfigError(`apiKey "${apiKey}" does not resolve (secret "${name}" is not in the store)`, "<config>");
+		warnings.push(
+			`${where}.apiKey "${apiKey}" does not resolve (secret "${name}" is not in the store) - the key is ignored`,
+		);
+		return undefined;
 	}
 	return value;
 }
@@ -453,13 +465,19 @@ export function resolveSecretApiKey(
 function resolveFile(
 	file: SwitchbackFileConfig,
 	secrets: { get(name: string): string | undefined } | undefined = undefined,
+	warnings: string[] = [],
 ): ResolvedSwitchbackFileConfig {
 	const resolvedDecisionProviders: Record<string, DecisionProviderConfig> | undefined =
 		file.decisionProviders === undefined
 			? undefined
 			: Object.fromEntries(
 					Object.entries(file.decisionProviders).map(([provider, entry]) => {
-						const apiKey = resolveSecretApiKey(entry.apiKey, secrets);
+						const apiKey = resolveSecretApiKey(
+							entry.apiKey,
+							secrets,
+							warnings,
+							`decisionProviders.${provider}`,
+						);
 						const descriptor: DecisionProviderConfig = {
 							...(entry.baseUrl !== undefined ? { baseUrl: entry.baseUrl } : {}),
 							...(apiKey !== undefined ? { apiKey } : {}),
@@ -473,7 +491,7 @@ function resolveFile(
 			: Object.fromEntries(
 					Object.entries(file.decisionModels).map(([address, entry]) => {
 						const { provider, id } = splitAddress(address, `decisionModels.${address}`);
-						const apiKey = resolveSecretApiKey(entry.apiKey, secrets);
+						const apiKey = resolveSecretApiKey(entry.apiKey, secrets, warnings, `decisionModels.${address}`);
 						const descriptor: DecisionModelConfig = {
 							provider,
 							id,
@@ -707,7 +725,7 @@ export function loadConfig(
 			: base !== undefined
 				? resolve(path)
 				: resolve(configOverlayPath(host!));
-	return { config: resolveFile(merged, secrets), source, warnings };
+	return { config: resolveFile(merged, secrets, warnings), source, warnings };
 }
 
 /**

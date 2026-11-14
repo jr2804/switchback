@@ -64,7 +64,11 @@ the bug where OpenCode silently ran pi's chains.
   `config-command.ts` (the `/switchback-config` grammar and
   its single writer), `decision-model-check.ts` (the host-capability check
   that warns when a decision model has no connection details — OpenCode has no
-  classifier catalog, so unlike pi that is a real config gap here), `rpc.ts` (portable RPC definition + the readers that turn
+  classifier catalog, so unlike pi that is a real config gap here. Surface
+  rule: the warning rides only the switchback paths — the routing fan-out,
+  which names the routing session even on its first route, and the command
+  path. Boot/reload readers (`readConfigOr`) must not include it), `rpc.ts`
+  (portable RPC definition + the readers that turn
   `unknown` wire payloads into typed shapes), `notices.ts` (notice channel and
   sink refcount), `fuzzy.ts` (picker filtering), `bridge.ts` (router↔route
   seam, `globalThis` symbol), `router.ts` (core `decide()` wiring, credentials,

@@ -294,13 +294,19 @@ export default Plugin.define({
 	},
 });
 
-/** Read the shared config; a failure is reported lazily by the router. */
+/**
+ * Read the shared config for process-wide surfaces (setup, reload, guide,
+ * chain lookups). Only loader findings are announced here, one per distinct
+ * set. The decision-model connection gap is deliberately NOT part of this
+ * list: these readers run on every boot and provider reload in every host
+ * process, so including the gap turns it into startup noise for sessions
+ * that never select a switchback model. The gap rides the switchback surfaces
+ * instead - the routing fan-out (router.ts) and the command path (`readConfig`).
+ */
 function readConfigOr(fallback: ResolvedSwitchbackFileConfig | undefined): ResolvedSwitchbackFileConfig | undefined {
 	try {
 		const loaded = loadConfig(envSecrets, "opencode");
-		reportConfigWarnings([...loaded.warnings, ...findUnconnectedDecisionModels(loaded.config)], (message) =>
-			console.warn(message),
-		);
+		reportConfigWarnings(loaded.warnings, (message) => console.warn(message));
 		return loaded.config;
 	} catch {
 		return fallback;

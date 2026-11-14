@@ -10,6 +10,13 @@
  *
  * The check belongs to this package (not core) precisely because it is a *host
  * capability* statement: core must not warn about something pi supports.
+ *
+ * Surface rule: the warning announces itself only where switchback is actually
+ * used - the routing fan-out (router.ts, including the routing session on its
+ * first route) and the command path. The boot/reload readers (index.ts
+ * `readConfigOr`) deliberately omit it, or every host process in a fleet of
+ * short-lived sessions would reprint it for conversations that never select a
+ * switchback model.
  */
 
 import { decisionModelsWithoutConnection } from "switchback-core/classifier-connection.ts";

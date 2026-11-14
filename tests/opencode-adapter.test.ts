@@ -250,6 +250,43 @@ describe("bridge routing", () => {
 		expect(answer).toMatchObject({ status: "ok", current: "alpha-corp/alpha-model" });
 	});
 
+	it("announces an unconnected decision model on the route, once", async () => {
+		// No decisionModels connection at all. The gap must surface on the
+		// switchback route - the one conversation actually using switchback -
+		// never at plugin setup, which runs on every boot for sessions that
+		// never select a switchback model.
+		writeFileSync(
+			join(process.env["SWITCHBACK_CONFIG_DIR"] ?? tmp, "switchback.yaml"),
+			`models:
+  - id: switchback/auto
+    name: Auto (Switchback)
+    fallbacks:
+      - alpha-corp/alpha-model
+      - beta-corp/beta-model
+    decisionModel: fixture/jev
+decisionModels:
+  fixture/jev: {}
+`,
+		);
+		const synthetic = vi.fn();
+		// Not setup(): it unconditionally rewrites the connected fixture config,
+		// which would clobber the unconnected YAML above.
+		const built = fakeCtx(CATALOG, synthetic);
+		await plugin.setup(built.ctx as unknown as never);
+		const bridge = readBridge();
+		const answer = await bridge!.route({ chainId: "switchback/auto", sessionKey: "ses-warn", reason: "user" });
+		// The gap degrades classification, not routing: the chain still answers.
+		expect(answer).toMatchObject({ status: "ok", current: "alpha-corp/alpha-model" });
+		// The routing session receives the warning by name even on its FIRST
+		// route (it is not in the fan-out state map until a decision is recorded).
+		const gapNotices = notices(synthetic).filter((text) => text.includes("has no connection details"));
+		expect(gapNotices).toHaveLength(1);
+		expect(gapNotices[0]).toContain("decisionProviders.fixture");
+		// A second route with the same finding does not repeat the notice.
+		await bridge!.route({ chainId: "switchback/auto", sessionKey: "ses-warn", reason: "user" });
+		expect(notices(synthetic).filter((text) => text.includes("has no connection details"))).toHaveLength(1);
+	});
+
 	it("blocks the failed model and advances on a quota verdict", async () => {
 		const synthetic = vi.fn();
 		await setup(CATALOG, synthetic);

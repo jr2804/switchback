@@ -293,8 +293,8 @@ a `decisionModels:` entry for it:
   catalog and supplies the endpoint, wire API and credential (whatever `/login`
   or the provider's environment variable configured). Switchback stores nothing
   and asks for nothing on this path. OpenCode has no classifier catalog, so the
-  same address reports a startup warning naming the missing piece (`decisionProviders.<provider>`)
-  instead of failing silently.
+  same address reports a warning naming the missing piece (`decisionProviders.<provider>`)
+  the first time a switchback route runs, instead of failing silently.
 - **Entry with `baseUrl` — a direct endpoint.** Switchback drives the endpoint
   itself over the SystemOne wire API, in both hosts. This is the case that needs
   a switchback-side credential.
@@ -361,7 +361,7 @@ entry overrides the provider entry **in its entirety** — an empty override
 fields; it puts that one address back on catalog resolution. The provider
 entry covers every address of the provider that has no own entry; addresses
 with neither resolve from the host catalog (pi) or report the OpenCode
-startup warning.
+connection warning when a switchback route or command runs.
 
 When to use which: on **pi**, `decisionProviders` is only needed when the
 provider is not in pi's catalog (a local llama.cpp/Ollama box) — catalog
@@ -386,7 +386,9 @@ loud about a retired one. None of these are silent:
 An entry that carries no connection details is **not** a warning on pi: the
 address still resolves from the catalog, and an override may legitimately be
 waiting for a model to adopt it. On OpenCode the same situation leaves the
-address unusable, and the host check says so at startup (see below).
+address unusable, and the host check says so on the switchback path (see below)
+— deliberately not at startup, where it would greet every boot of sessions
+that never select a switchback model.
 
 ### When a decision model does not resolve
 
@@ -409,7 +411,8 @@ Two cases never reach that check. An address with its own `baseUrl` (or a
 `decisionProviders` entry) points at a SystemOne endpoint that publishes no
 model list, so there is nothing to look up — the registry is not asked. And on
 OpenCode, where there is no registry at all, a referenced address without any
-connection details reports its own startup warning instead:
+connection details reports its own warning when a switchback route or command
+runs (never at setup):
 
 ```text
 switchback config: decision model "typesafe/jev-latest" has no connection

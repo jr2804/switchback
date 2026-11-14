@@ -83,12 +83,12 @@ export function createRouter(options: RouterOptions): SwitchbackBridge {
 	const states = new Map<string, SwitchbackState>();
 	let configNotified = false;
 
-	const loadConfigSafe = (): ResolvedSwitchbackFileConfig | undefined => {
+	const loadConfigSafe = (currentSession?: string): ResolvedSwitchbackFileConfig | undefined => {
 		try {
 			const loaded = loadConfig(envSecrets, "opencode");
 			configNotified = false;
 			reportConfigWarnings([...loaded.warnings, ...findUnconnectedDecisionModels(loaded.config)], (message) =>
-				notifyAll(message),
+				notifyAll(message, currentSession),
 			);
 			return loaded.config;
 		} catch (error) {
@@ -102,10 +102,15 @@ export function createRouter(options: RouterOptions): SwitchbackBridge {
 		}
 	};
 
-	const notifyAll = (message: string): void => {
-		// Fan-out without a session handle: the provider package always supplies
-		// a session key, so this path only fires for setup-time problems.
-		for (const sessionID of states.keys()) {
+	const notifyAll = (message: string, currentSession?: string): void => {
+		// Fan-out without a session handle, with one exception: the routing
+		// session itself is included by name, because it is not in `states` yet
+		// on its first route (state is recorded only after a decision) and a
+		// warning about a degraded switchback run must reach the conversation
+		// that is actually using switchback.
+		const targets = new Set(states.keys());
+		if (currentSession !== undefined) targets.add(currentSession);
+		for (const sessionID of targets) {
 			void ctx.session.synthetic({ sessionID, text: message }).catch(() => {
 				// Nothing the routing decision can use; swallow.
 			});
@@ -169,7 +174,8 @@ export function createRouter(options: RouterOptions): SwitchbackBridge {
 	const bridge: SwitchbackBridge = {
 		async route(call: RouteCall): Promise<RouteAnswer> {
 			const now = Date.now();
-			const config = loadConfigSafe();
+			// The routing session is named so first-route warnings reach it too.
+			const config = loadConfigSafe(call.sessionKey);
 			if (config === undefined) {
 				return { status: "config-invalid", message: "switchback: config could not be loaded" };
 			}

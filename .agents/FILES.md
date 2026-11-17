@@ -29,18 +29,26 @@
 | Router decision vocabulary (`Decision`, `DecisionOutcome`) | `packages/core/src/decision.ts` |
 | Dispatch (`buildRoute`, pi `ModelRoute` construction) | `packages/pi/src/build-route.ts` |
 | Reasoning-level resolution (`resolveDispatchLevel`) | `packages/core/src/dispatch.ts` |
+| Reasoning-level vocabulary (`Level`, off→high mapping, clamping) | `packages/core/src/thinking.ts` |
 | Host boundary ports (`ModelRegistryPort`, `AvailabilityPort`, `ClassifierPort`, `NotifyPort`, `RouterRegistryPort`, `ThinkingSupportPort`) | `packages/core/src/ports.ts` |
 | Classification (`classifyError`) | `packages/core/src/classify.ts` |
 | Local-classifier provider registration | `packages/pi/src/local-classifier.ts` |
 | System One classifier transport (delegates to `@typesafe-ai/sdk`) | `packages/core/src/systemone.ts` |
 | Catalog validity (`resolveFallbacks`) | `packages/core/src/availability.ts` |
+| Context-window fit for a switch target | `packages/core/src/context-fit.ts` |
+| Idle-session reset ("switch to initial") | `packages/core/src/idle.ts` |
 | Config loader (YAML; the one shared file at `~/.config/switchback/switchback.yaml`) | `packages/core/src/config.ts` |
 | Decision-model connection resolution (address override → provider entry; `decisionModelConnection`) | `packages/core/src/classifier-connection.ts` |
+| Classifier provider catalog for the config dialogue (derived from pi's registry) | `packages/core/src/classifier-catalog.ts` |
+| Live discovery of SystemOne-compatible models on a local Ollama (`/api/tags`) | `packages/core/src/classifier-discovery.ts` |
+| One-shot classifier self-test for a configured decision model | `packages/core/src/classifier-probe.ts` |
 | Config editor (comment-preserving YAML round-trip; decision-model + provider CRUD) | `packages/core/src/config-editor.ts` |
 | Interactive config dialogue (`/switchback-config`) | `packages/pi/src/dialogue.ts` |
 | …its shared session, screen-title and prompt primitives | `packages/pi/src/dialogue-ui.ts` |
 | …its decision-model wizard (`decisionModel:` address picker + probe, `decisionModels` overrides menu, `decisionProviders` provider menu) | `packages/pi/src/dialogue-classifier.ts` |
 | …pi-side unresolvable-address check (registry lookup, direct endpoints skipped) | `packages/pi/src/decision-model-check.ts` |
+| …its searchable model picker (add physical models to a fallback list) | `packages/pi/src/model-picker.ts` |
+| …pi's `ThinkingSupportPort` answer (registry-derived level support) | `packages/pi/src/thinking-support.ts` |
 | …OpenCode-side unconnected-address check (no catalog there) | `packages/opencode/src/decision-model-check.ts` |
 | Shared types | `packages/core/src/types.ts` |
 | Atomic store writes (per-write staging path, retried rename) | `packages/core/src/atomic-write.ts` |

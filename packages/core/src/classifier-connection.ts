@@ -35,14 +35,18 @@ export function splitDecisionModelAddress(address: string): { provider: string; 
 /** The connection details an address resolves to: its own entry first, then its provider's. */
 export function decisionModelConnection(config: ConnectionSource, address: string): { baseUrl?: string } | undefined {
 	const parts = splitDecisionModelAddress(address);
-	return config.decisionModels?.[address] ?? (parts === undefined ? undefined : config.decisionProviders?.[parts.provider]);
+	return (
+		config.decisionModels?.[address] ??
+		(parts === undefined ? undefined : config.decisionProviders?.[parts.provider])
+	);
 }
 
 /** Every decision-model address the config references, de-duplicated, in model order. */
 export function referencedDecisionModelAddresses(config: ResolvedSwitchbackFileConfig): string[] {
 	const addresses = new Set<string>();
 	for (const model of config.models) {
-		if (model.decisionModel !== undefined) addresses.add(`${model.decisionModel.provider}/${model.decisionModel.id}`);
+		if (model.decisionModel !== undefined)
+			addresses.add(`${model.decisionModel.provider}/${model.decisionModel.id}`);
 	}
 	return [...addresses];
 }

@@ -465,7 +465,11 @@ decisionModels:
 	it("warns and drops a secret reference that the store cannot resolve", () => {
 		writeProviders("  ollama:\n    baseUrl: http://localhost:11434/v1\n    apiKey: secret:missing-key\n");
 		const { config, warnings } = loadConfig({ get: () => undefined });
-		expect(config.models[0]?.decisionModel).toEqual({ provider: "ollama", id: "tev1", baseUrl: "http://localhost:11434/v1" });
+		expect(config.models[0]?.decisionModel).toEqual({
+			provider: "ollama",
+			id: "tev1",
+			baseUrl: "http://localhost:11434/v1",
+		});
 		expect(warnings.join("\n")).toContain('secret "missing-key" is not in the store');
 	});
 

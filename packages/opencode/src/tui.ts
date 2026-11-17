@@ -23,13 +23,7 @@ import { readEdit, readGuideState, readNotice, SwitchbackRpc } from "./rpc.ts";
 import type { NoticeVariant } from "./rpc.ts";
 import { probeLocalClassifier } from "switchback-core";
 import { runGuide } from "./tui-guide.ts";
-import type {
-	GuideChain,
-	GuideConnections,
-	GuideModel,
-	GuidePorts,
-	GuideProbe,
-} from "./tui-guide.ts";
+import type { GuideChain, GuideConnections, GuideModel, GuidePorts, GuideProbe } from "./tui-guide.ts";
 
 /**
  * `Plugin.define` is an identity function; importing it from the package root

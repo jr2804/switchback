@@ -290,8 +290,8 @@ function connectionSource(connections: GuideConnections): {
 							entry.provider,
 							{ ...(entry.baseUrl === undefined ? {} : { baseUrl: entry.baseUrl }) },
 						]),
-				),
-			}),
+					),
+				}),
 	};
 }
 
@@ -412,15 +412,17 @@ async function editDecisionModel(ports: GuidePorts, chain: GuideChain): Promise<
 			{ title: "off", value: null, description: "cycle blindly when no classifier is configured" },
 			...modelOptions(ports.models()),
 			...connectedOptions(ports),
-			{ title: "Enter an address...", value: ENTER_ADDRESS, description: 'a "provider/model" id, e.g. ollama/jev' },
+			{
+				title: "Enter an address...",
+				value: ENTER_ADDRESS,
+				description: 'a "provider/model" id, e.g. ollama/jev',
+			},
 		],
 		current: current ?? null,
 		search: (query, options) => {
 			if (query.trim().length === 0) return options;
 			// Keep the "off" escape and the address escape reachable whatever the query is.
-			const pinned = options.filter(
-				(option) => option.value === null || option.value === ENTER_ADDRESS,
-			);
+			const pinned = options.filter((option) => option.value === null || option.value === ENTER_ADDRESS);
 			const rest = options.filter(
 				(option) => option.value !== null && option.value !== ENTER_ADDRESS,
 			) as readonly GuideOption<string>[];
@@ -801,8 +803,8 @@ async function editProvider(ports: GuidePorts, providerId: string): Promise<void
 							: `${usedBy} model${usedBy === 1 ? "" : "s"} classify with ${entry.provider}; without the entry they cannot classify.`,
 				});
 				if (confirmed === true) {
-				await dispatch(ports, `provider-remove ${entry.provider}`);
-				return;
+					await dispatch(ports, `provider-remove ${entry.provider}`);
+					return;
 				}
 				break;
 			}
@@ -853,10 +855,7 @@ export async function runGuide(ports: GuidePorts): Promise<void> {
 				{
 					title: "Decision providers",
 					value: PROVIDERS_MENU,
-					description:
-						providers.length === 0
-							? "no connections yet"
-							: `${providers.length} connected`,
+					description: providers.length === 0 ? "no connections yet" : `${providers.length} connected`,
 				},
 				{ title: "Add a chain", value: null, description: "create a new virtual model" },
 			],

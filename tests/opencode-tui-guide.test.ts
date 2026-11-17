@@ -30,7 +30,6 @@ import type { ProbeResult } from "switchback-core";
 import {
 	contextLabel,
 	editChain,
-	editProviders,
 	ENTER_ADDRESS,
 	modelOptions,
 	PROVIDERS_MENU,
@@ -313,18 +312,15 @@ describe("guide: decision model with connections", () => {
 		expect(host.probes).toEqual([
 			{ baseUrl: "http://localhost:11434", apiKey: "local", provider: "ollama", id: "jev" },
 		]);
-		expect(host.toasts.at(-1)?.message).toContain("switchback decision-model test: ollama/jev at http://localhost:11434");
+		expect(host.toasts.at(-1)?.message).toContain(
+			"switchback decision-model test: ollama/jev at http://localhost:11434",
+		);
 		expect(host.toasts.at(-1)?.variant).toBe("success");
 	});
 
 	it("keeps the setting when the quick check is declined", async () => {
 		const host = fakePorts({
-			answers: [
-				{ select: "decision" },
-				{ select: "ollama/jev" },
-				{ confirm: false },
-				{ select: undefined },
-			],
+			answers: [{ select: "decision" }, { select: "ollama/jev" }, { confirm: false }, { select: undefined }],
 			chains: [{ ...CHAIN, decisionModel: "ollama/jev" }],
 			models: MODELS,
 			connections: OLLAMA,
@@ -456,7 +452,9 @@ describe("guide: decision providers menu", () => {
 		expect(host.probes).toEqual([
 			{ baseUrl: "http://localhost:11434", apiKey: "local", provider: "ollama", id: "jev" },
 		]);
-		expect(host.toasts.at(-1)?.message).toContain("switchback decision-model test: ollama/jev at http://localhost:11434");
+		expect(host.toasts.at(-1)?.message).toContain(
+			"switchback decision-model test: ollama/jev at http://localhost:11434",
+		);
 	});
 
 	it("removes a provider after confirming", async () => {
@@ -495,11 +493,7 @@ describe("guide: decision providers menu", () => {
 
 	it("leaves the provider menu without dispatching", async () => {
 		const host = fakePorts({
-			answers: [
-				{ select: PROVIDERS_MENU },
-				{ select: "back" },
-				{ select: undefined },
-			],
+			answers: [{ select: PROVIDERS_MENU }, { select: "back" }, { select: undefined }],
 			connections: OLLAMA,
 		});
 		await runGuide(host.ports);

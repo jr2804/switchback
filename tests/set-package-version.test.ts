@@ -29,9 +29,13 @@ beforeEach(() => {
 	sandbox = mkdtempSync(join(tmpdir(), "switchback-version-"));
 	cpSync(join(ROOT, "scripts"), join(sandbox, "scripts"), { recursive: true });
 	for (const workspace of WORKSPACES) {
-		cpSync(join(ROOT, "packages", workspace, "package.json"), join(sandbox, "packages", workspace, "package.json"), {
-			recursive: false,
-		});
+		cpSync(
+			join(ROOT, "packages", workspace, "package.json"),
+			join(sandbox, "packages", workspace, "package.json"),
+			{
+				recursive: false,
+			},
+		);
 	}
 });
 

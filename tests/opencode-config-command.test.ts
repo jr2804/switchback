@@ -398,7 +398,10 @@ describe("/switchback-config: decision providers", () => {
 		const text = run("provider ollama https://jev.example.com secret:JEV_KEY");
 		expect(text).toContain("updated the decision-model connection for ollama");
 		const config = validateFileConfig(configYaml(), configFilePath()).config;
-		expect(config.decisionProviders?.["ollama"]).toEqual({ baseUrl: "https://jev.example.com", apiKey: "secret:JEV_KEY" });
+		expect(config.decisionProviders?.["ollama"]).toEqual({
+			baseUrl: "https://jev.example.com",
+			apiKey: "secret:JEV_KEY",
+		});
 	});
 
 	it("removes a provider entry", () => {
@@ -448,7 +451,7 @@ describe("/switchback-config: decision providers", () => {
 
 	it("routes a provider id containing a slash to the loader's message", () => {
 		const text = run("provider a/b http://localhost:11434");
-		expect(text).toContain('decisionProviders.a/b must be a provider id');
+		expect(text).toContain("decisionProviders.a/b must be a provider id");
 		// The rejected edit leaves the seeded file without the new map.
 		expect(configYaml().decisionProviders).toBeUndefined();
 	});

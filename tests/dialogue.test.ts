@@ -730,9 +730,9 @@ describe("dialogue: decision providers and per-model pick", () => {
 			{
 				classifierProviders: [CATALOG],
 				probeClassifier: async (jev) => {
-						probed.push(jev);
-						return probeResult(true);
-					},
+					probed.push(jev);
+					return probeResult(true);
+				},
 			},
 		);
 		// The set is a plain address; pi resolves the endpoint from its catalog.
@@ -767,11 +767,11 @@ describe("dialogue: decision providers and per-model pick", () => {
 				}),
 				undefined,
 				{
-						probeClassifier: async (jev) => {
-							probed.push(jev);
-							return probeResult(true);
-						},
+					probeClassifier: async (jev) => {
+						probed.push(jev);
+						return probeResult(true);
 					},
+				},
 			);
 			const config = readConfigFile(load());
 			expect(config.models[0]?.decisionModel).toBe("gpu-ollama/tev9");
@@ -783,7 +783,7 @@ describe("dialogue: decision providers and per-model pick", () => {
 			});
 			expect(config.decisionModels?.["gpu-ollama/tev9"]).toBeUndefined();
 			expect(probed).toEqual([
-					{ provider: "gpu-ollama", id: "tev9", baseUrl: "http://gpu:11434/v1", apiKey: "local" },
+				{ provider: "gpu-ollama", id: "tev9", baseUrl: "http://gpu:11434/v1", apiKey: "local" },
 			]);
 		} finally {
 			vi.unstubAllGlobals();
@@ -850,20 +850,18 @@ describe("dialogue: decision providers and per-model pick", () => {
 	});
 
 	it("edits and deletes a provider entry, reporting who still uses it", async () => {
-		seed(
-			`${SAMPLE}decisionProviders:\n  gpu-ollama:\n    baseUrl: http://gpu:11434/v1\n    apiKey: local\n`,
-		);
+		seed(`${SAMPLE}decisionProviders:\n  gpu-ollama:\n    baseUrl: http://gpu:11434/v1\n    apiKey: local\n`);
 		const ui = new ScriptedUi({
 			select: [
-					"Decision providers (1)...",
-					"gpu-ollama - direct: http://gpu:11434/v1 (unused)",
-					"Edit connection (baseUrl, apiKey)",
-					"(no API key - local endpoint)",
-					"gpu-ollama - direct: http://gpu:11434/v1 (unused)",
-					"Delete",
-					"Back",
-					"Done",
-				],
+				"Decision providers (1)...",
+				"gpu-ollama - direct: http://gpu:11434/v1 (unused)",
+				"Edit connection (baseUrl, apiKey)",
+				"(no API key - local endpoint)",
+				"gpu-ollama - direct: http://gpu:11434/v1 (unused)",
+				"Delete",
+				"Back",
+				"Done",
+			],
 			input: ["http://gpu2:11434/v1"],
 			confirm: [true],
 		});

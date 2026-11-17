@@ -521,7 +521,12 @@ function resolveFile(
 			: Object.fromEntries(
 					Object.entries(file.decisionModels).map(([address, entry]) => {
 						const { provider, id } = splitAddress(address, `decisionModels.${address}`);
-						const apiKey = resolveSecretApiKey(entry.apiKey, secrets, warnings, `decisionModels.${address}`);
+						const apiKey = resolveSecretApiKey(
+							entry.apiKey,
+							secrets,
+							warnings,
+							`decisionModels.${address}`,
+						);
 						const descriptor: DecisionModelConfig = {
 							provider,
 							id,

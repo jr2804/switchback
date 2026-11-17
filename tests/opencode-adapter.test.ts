@@ -450,7 +450,14 @@ describe("reasoning level application", () => {
 
 	it("keys the level the way the physical protocol decodes it", () => {
 		// Chat/responses families read `reasoningEffort`.
-		for (const protocol of ["openai-chat", "openai-compatible-chat", "open-responses", "zai-chat", "mistral-chat", "venice-chat"]) {
+		for (const protocol of [
+			"openai-chat",
+			"openai-compatible-chat",
+			"open-responses",
+			"zai-chat",
+			"mistral-chat",
+			"venice-chat",
+		]) {
 			expect(appliedLevel({}, "medium", protocol)).toEqual({ reasoningEffort: "medium" });
 		}
 		// Anthropic-and-friends read `effort`.
@@ -461,7 +468,10 @@ describe("reasoning level application", () => {
 
 	it("preserves providerOptions the host already set", () => {
 		const providerOptions = { store: false, reasoningEffort: "minimal" };
-		expect(appliedLevel({ providerOptions }, "high", "openai-chat")).toEqual({ store: false, reasoningEffort: "high" });
+		expect(appliedLevel({ providerOptions }, "high", "openai-chat")).toEqual({
+			store: false,
+			reasoningEffort: "high",
+		});
 	});
 });
 

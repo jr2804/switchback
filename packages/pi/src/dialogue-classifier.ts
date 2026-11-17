@@ -204,9 +204,7 @@ async function newProviderBackedAddress(ctx: DialogueContext, session: DialogueS
 				addDecisionProvider(session.loaded, {
 					provider: option.provider,
 					baseUrl,
-					...(apiKeySecretName !== null && apiKeySecretName !== undefined
-						? { apiKeySecretName }
-						: {}),
+					...(apiKeySecretName !== null && apiKeySecretName !== undefined ? { apiKeySecretName } : {}),
 				});
 			}
 		} catch (error) {
@@ -240,7 +238,7 @@ export async function decisionProvidersMenu(ctx: DialogueContext, session: Dialo
 		}
 		const index = labels.indexOf(choice);
 		const picked = index >= 0 ? entries[index] : undefined;
-		if (picked !== undefined) await decisionProviderEntryMenu(ctx, session, picked[0], picked[1]);
+		if (picked !== undefined) await decisionProviderEntryMenu(ctx, session, picked[0]);
 	}
 }
 
@@ -248,7 +246,6 @@ async function decisionProviderEntryMenu(
 	ctx: DialogueContext,
 	session: DialogueSession,
 	provider: string,
-	entry: DecisionModelEntry,
 ): Promise<void> {
 	const editOption = "Edit connection (baseUrl, apiKey)";
 	const deleteOption = "Delete";
@@ -258,10 +255,11 @@ async function decisionProviderEntryMenu(
 		if (config === undefined) return;
 		const current = (config.decisionProviders ?? {})[provider];
 		if (current === undefined) return; // deleted elsewhere in this session
-		const choice = await ctx.ui.select(
-			screenTitle(session.loaded, describeProvider(provider, current, config)),
-			[editOption, deleteOption, backOption],
-		);
+		const choice = await ctx.ui.select(screenTitle(session.loaded, describeProvider(provider, current, config)), [
+			editOption,
+			deleteOption,
+			backOption,
+		]);
 		if (choice === undefined || choice === backOption) return;
 		if (choice === editOption) {
 			const patch = await collectConnection(ctx, session, provider, current);
@@ -277,9 +275,7 @@ async function decisionProviderEntryMenu(
 			const confirmed = await ctx.ui.confirm(
 				screenTitle(session.loaded, `delete provider ${provider}`),
 				`Delete ${provider} from ${session.loaded.path}?` +
-					(refs > 0
-						? ` ${refs} model(s) use it and will fall back to catalog resolution.`
-						: ""),
+					(refs > 0 ? ` ${refs} model(s) use it and will fall back to catalog resolution.` : ""),
 			);
 			if (!confirmed) continue;
 			removeDecisionProvider(session.loaded, provider);

@@ -34,10 +34,7 @@ import type { ResolvedSwitchbackFileConfig } from "switchback-core/types.ts";
  * one warning per unresolvable address. Pure apart from registry reads; the
  * caller decides how (and how often) to surface the messages.
  */
-export function findUnresolvedDecisionModels(
-	registry: ClassifierPort,
-	config: ResolvedSwitchbackFileConfig,
-): string[] {
+export function findUnresolvedDecisionModels(registry: ClassifierPort, config: ResolvedSwitchbackFileConfig): string[] {
 	const warnings: string[] = [];
 	for (const address of referencedDecisionModelAddresses(config)) {
 		const parts = splitDecisionModelAddress(address);

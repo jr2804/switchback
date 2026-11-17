@@ -80,10 +80,7 @@ describe("decision-model check: resolution", () => {
 	it("warns when the registry does not know the id (the tev2 case)", () => {
 		// The registry knows tev1, the config asks for tev2: exactly the typo this
 		// check exists for.
-		const warnings = findUnresolvedDecisionModels(
-			registryWith(["ollama/tev1"]),
-			configWith("ollama/tev2"),
-		);
+		const warnings = findUnresolvedDecisionModels(registryWith(["ollama/tev1"]), configWith("ollama/tev2"));
 		expect(warnings).toHaveLength(1);
 		expect(warnings[0]).toContain('decision model "ollama/tev2" was not found');
 		expect(warnings[0]).toContain("blind cycling");

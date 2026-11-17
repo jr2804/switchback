@@ -39,7 +39,9 @@ describe("findUnconnectedDecisionModels", () => {
 
 	it("stays silent when the provider section carries the connection", () => {
 		const warnings = findUnconnectedDecisionModels(
-			configWith("typesafe/jev-latest", { decisionProviders: { typesafe: { baseUrl: "https://api.typesafe.ai/v1/" } } }),
+			configWith("typesafe/jev-latest", {
+				decisionProviders: { typesafe: { baseUrl: "https://api.typesafe.ai/v1/" } },
+			}),
 		);
 		expect(warnings).toEqual([]);
 	});

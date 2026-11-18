@@ -337,6 +337,8 @@ function buildFakeRequest(overrides: {
 	};
 	stateCurrent?: string;
 	transientRetries?: number;
+	/** Simulates a state that already stuck through one overflow verdict this cascade. */
+	overflowRetried?: boolean;
 	/** When true the branch has no router state yet (first request of a session). */
 	noState?: boolean;
 	/** Absolute timestamp for the single conversation message (idle-reset tests). */
@@ -400,6 +402,7 @@ function buildFakeRequest(overrides: {
 					state: {
 						current: overrides.stateCurrent ?? FALLBACKS.fallbacks[0]!,
 						transientRetries: overrides.transientRetries ?? 0,
+						...(overrides.overflowRetried ? { overflowRetried: true as const } : {}),
 					},
 				}),
 	};
@@ -1074,8 +1077,138 @@ describe("F2 — context overflow (pi's typed stopReason)", () => {
 		if (result.decision.kind === "stick") {
 			expect(result.decision.modelId).toBe("zai/glm-4.7");
 		}
+		// The stick is loaned, not permanent: the marker is what makes the NEXT
+		// overflow verdict in this cascade advance instead of sticking again.
+		expect(result.nextState?.overflowRetried).toBe(true);
 		const blocked = readBlockedMap(now);
 		expect(blocked["zai/glm-4.7"]).toBeUndefined();
+	});
+
+	it("router advances on the second overflow of a cascade (still no block)", async () => {
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			],
+		});
+		// pi already compacted and re-sent once (first overflow → stick + marker);
+		// the same model overflowed again, so the payload simply does not fit here.
+		const request = buildFakeRequest({
+			reason: "retry",
+			failed: { provider: "zai", id: "glm-4.7", errorMessage: "any", stopReason: "length" },
+			stateCurrent: "zai/glm-4.7",
+			overflowRetried: true,
+		});
+		const now = Date.now();
+		const result = await decideWith("retry", request, FALLBACKS, registry, { now, blocked: {} });
+		expect(result.decision.kind).toBe("switch");
+		if (result.decision.kind === "switch") {
+			expect(result.decision.reason).toBe("overflow-advance");
+			expect(result.decision.modelId).toBe("ollama-cloud/pro");
+		}
+		// Overflow is a request property, not model health: no block is written.
+		expect(readBlockedMap(now)["zai/glm-4.7"]).toBeUndefined();
+		// A fresh state for the new model - the marker must not leak into it, or a
+		// much later first overflow would skip its fair retry.
+		expect(result.nextState?.current).toBe("ollama-cloud/pro");
+		expect(result.nextState?.overflowRetried).toBeUndefined();
+		// The crash store shows an advance, not a stuck-stay.
+		const entry = Object.values(readCrashMap()).find((e) => e.provider === "zai" && e.model === "glm-4.7");
+		expect(entry?.action).toBe("overflow-advanced");
+	});
+
+	it("router reports exhaustion when the only entry keeps overflowing", async () => {
+		const registry = makeFakeRegistry({ entries: [{ provider: "zai", id: "glm-4.7" }] });
+		const request = buildFakeRequest({
+			reason: "retry",
+			failed: { provider: "zai", id: "glm-4.7", errorMessage: "any", stopReason: "length" },
+			stateCurrent: "zai/glm-4.7",
+			overflowRetried: true,
+		});
+		const now = Date.now();
+		const result = await decideWith("retry", request, FALLBACKS, registry, { now, blocked: {} });
+		expect(result.decision.kind).toBe("exhausted");
+		if (result.decision.kind === "exhausted") {
+			expect(result.decision.reason).toBe("overflow-no-fallback");
+		}
+		expect(readBlockedMap(now)["zai/glm-4.7"]).toBeUndefined();
+	});
+
+	it("next user turn after a give-up overflow advances instead of sticking", async () => {
+		// pi ended the run after the second overflow (agent_end recorded the
+		// give-up); nothing re-enters route() with a retry, so the USER path must
+		// move the session - stickiness alone would walk straight back into the
+		// model the payload does not fit.
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			],
+		});
+		const request = buildFakeRequest({ reason: "user", stateCurrent: "zai/glm-4.7" });
+		const now = Date.now();
+		const result = await decideWith("user", request, FALLBACKS, registry, {
+			now,
+			blocked: {},
+			overflowSkip: "zai/glm-4.7",
+			contextTokens: 90_000,
+		});
+		expect(result.decision.kind).toBe("switch");
+		if (result.decision.kind === "switch") {
+			expect(result.decision.reason).toBe("overflow-advance");
+			expect(result.decision.modelId).toBe("ollama-cloud/pro");
+		}
+		expect(result.nextState?.current).toBe("ollama-cloud/pro");
+		expect(result.nextState?.overflowRetried).toBeUndefined();
+	});
+
+	it("prefers a switch target that can hold the context", async () => {
+		// zai is skipped (it overflowed); ollama-cloud/pro has a small window, and
+		// minimax/plus can hold the 90k-token conversation - so the walk jumps the
+		// non-fitting intermediate entry instead of parking the session there.
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro", contextWindow: 32_000 },
+				{ provider: "minimax", id: "plus", contextWindow: 262_144 },
+			],
+		});
+		const request = buildFakeRequest({ reason: "user", stateCurrent: "zai/glm-4.7" });
+		const now = Date.now();
+		const result = await decideWith("user", request, FALLBACKS, registry, {
+			now,
+			blocked: {},
+			overflowSkip: "zai/glm-4.7",
+			contextTokens: 90_000,
+		});
+		expect(result.decision.kind).toBe("switch");
+		if (result.decision.kind === "switch") {
+			expect(result.decision.modelId).toBe("minimax/plus");
+		}
+	});
+
+	it("a stale overflow record for another model leaves stickiness alone", async () => {
+		const registry = makeFakeRegistry({
+			entries: [
+				{ provider: "zai", id: "glm-4.7" },
+				{ provider: "ollama-cloud", id: "pro" },
+			],
+		});
+		// The session switched away and back (or the record was keyed to another
+		// virtual model); pi only consumes the record while state.current still
+		// names the overflowed model, so the router sees a record for a model that
+		// is NOT current and must behave like a normal user turn.
+		const request = buildFakeRequest({ reason: "user", stateCurrent: "zai/glm-4.7" });
+		const now = Date.now();
+		const result = await decideWith("user", request, FALLBACKS, registry, {
+			now,
+			blocked: {},
+			overflowSkip: "ollama-cloud/pro",
+		});
+		expect(result.decision.kind).toBe("stick");
+		if (result.decision.kind === "stick") {
+			expect(result.decision.modelId).toBe("zai/glm-4.7");
+		}
 	});
 });
 
@@ -1235,7 +1368,7 @@ describe("observeUnretriedFailure — failures pi will not retry", () => {
 			answer: { class: "quota", scope: "account", resetScore: 5 },
 		});
 		const now = Date.now();
-		const acted = await observeUnretriedFailure({
+		const outcome = await observeUnretriedFailure({
 			failedId: "zai/glm-4.7",
 			errorMessage: OLLAMA_QUOTA,
 			stopReason: "error",
@@ -1244,7 +1377,7 @@ describe("observeUnretriedFailure — failures pi will not retry", () => {
 			now,
 			blocked: readBlockedMap(now),
 		});
-		expect(acted).toBe(true);
+		expect(outcome.acted).toBe(true);
 
 		// The block is what makes the next turn leave the model behind: a blocked
 		// current model is skipped by the `user` path, which is the whole point.
@@ -1285,7 +1418,7 @@ describe("observeUnretriedFailure — failures pi will not retry", () => {
 	it("does not block, and says so, when no classifier is configured", async () => {
 		const registry = makeFakeRegistry({ entries: [{ provider: "zai", id: "glm-4.7" }] });
 		const now = Date.now();
-		const acted = await observeUnretriedFailure({
+		const outcome = await observeUnretriedFailure({
 			failedId: "zai/glm-4.7",
 			errorMessage: OLLAMA_QUOTA,
 			stopReason: "error",
@@ -1294,7 +1427,8 @@ describe("observeUnretriedFailure — failures pi will not retry", () => {
 			now,
 			blocked: readBlockedMap(now),
 		});
-		expect(acted).toBe(false);
+		expect(outcome.acted).toBe(false);
+		expect(outcome.verdict).toBeUndefined();
 		// Nothing to justify a block with, so the model stays usable.
 		expect(isBlocked("zai/glm-4.7", now + 1_000, readBlockedMap(now + 1_000))).toBe(false);
 	});
@@ -1305,7 +1439,7 @@ describe("observeUnretriedFailure — failures pi will not retry", () => {
 			answer: { class: "transient", scope: "unknown" },
 		});
 		const now = Date.now();
-		const acted = await observeUnretriedFailure({
+		const outcome = await observeUnretriedFailure({
 			failedId: "zai/glm-4.7",
 			errorMessage: "529 over_error: temporarily unavailable",
 			stopReason: "error",
@@ -1314,7 +1448,8 @@ describe("observeUnretriedFailure — failures pi will not retry", () => {
 			now,
 			blocked: readBlockedMap(now),
 		});
-		expect(acted).toBe(false);
+		expect(outcome.acted).toBe(false);
+		expect(outcome.verdict?.class).toBe("transient");
 		expect(isBlocked("zai/glm-4.7", now + 1_000, readBlockedMap(now + 1_000))).toBe(false);
 	});
 });

@@ -192,6 +192,14 @@ export interface SwitchbackState {
 	 * cascade; see `chainWith()` in routing.ts.
 	 */
 	chainFailed?: ModelId[];
+	/**
+	 * True when an overflow verdict already stuck once on `current` in this retry
+	 * cascade. The first overflow gets one fair retry on the same model (pi has
+	 * just compacted for it); a second one advances instead of re-dispatching the
+	 * same doomed payload. Cleared by every switch and by every non-overflow stick,
+	 * so a stale marker can never pre-empt a later run's fair retry.
+	 */
+	overflowRetried?: boolean;
 }
 
 /** Cross-session blocked-until map. Keyed by "provider/id", value is epoch ms. */

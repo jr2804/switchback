@@ -101,6 +101,14 @@ export interface RouteInputs {
 	 * never to make a model ineligible. See `src/context-fit.ts`.
 	 */
 	contextTokens?: number;
+	/**
+	 * The model this session just gave up on with a context overflow (pi's
+	 * `agent_end` fallback records it; there is no retry left to re-route). On the
+	 * `user` path the router advances off this model instead of sticking to it,
+	 * because nothing else will move the session - overflow writes no block.
+	 * `undefined` = no recent overflow for this session.
+	 */
+	overflowSkip?: ModelId;
 }
 
 function buildStateAfterSwitch(current: ModelId, prior: SwitchbackState | undefined): SwitchbackState {
@@ -352,6 +360,43 @@ export async function decide(
 
 	const current = request.state?.current;
 
+	// Overflow advance: this session just gave up on `current` with a context
+	// overflow (pi's give-up point; see `observeUnretriedFailure`). Overflow writes
+	// no block, so stickiness would walk straight back into the model that cannot
+	// hold the payload - the one signal that must outrank stickiness on the user
+	// path. Advance forward from it, preferring a target that can hold the context;
+	// when nothing else is usable, fall through to the normal rules (sticking is
+	// then the only option).
+	const overflowSkip =
+		inputs.overflowSkip !== undefined && inputs.overflowSkip === current ? inputs.overflowSkip : undefined;
+	if (overflowSkip !== undefined) {
+		const pick = await pickWithContextFit({
+			resolved,
+			skip: overflowSkip,
+			blocked,
+			disabled: inputs.disabled,
+			now,
+			startAfter: current,
+			registry,
+			decisionModel: modelConfig.decisionModel,
+			contextTokens: inputs.contextTokens,
+		});
+		if (pick) {
+			inputs.notify?.(`switchback: ${overflowSkip} context overflow - advancing to ${pick.modelId}`, "warning");
+			return resolveDispatchLevel(
+				{
+					decision: { kind: "switch", modelId: pick.modelId, reason: "overflow-advance" },
+					nextState: buildStateAfterSwitch(pick.modelId, request.state),
+					thinkingLevel: request.thinkingLevel,
+				},
+				request,
+				modelConfig,
+				registry,
+				inputs,
+			);
+		}
+	}
+
 	// Idle reset ("switch to initial"): after a long idle the provider's prompt cache
 	// is cold, so staying buys nothing, and a model with a short quota window and no
 	// weekly cap is worth preferring again. Configured per virtual model; the pin
@@ -585,18 +630,66 @@ async function decideRetry(
 		};
 	}
 
-	// Overflow: pi already compacted; the route stays as the router chose it. Stick
-	// to the failed model without blocking or counting as a transient retry.
+	// Overflow: a property of the request (the payload did not fit), not of the
+	// model's health - it never writes a block. But staying put forever dead-ends
+	// the session: pi has already compacted for this retry, and OpenCode re-sends
+	// the identical payload with nothing in between. So the verdict buys exactly
+	// ONE stick - the fair retry on the same model - recorded in the state; a
+	// second overflow verdict in the same cascade advances instead, still without
+	// blocking. No other entry at all: exhausted, so the host surfaces the failure
+	// rather than looping on a model that cannot take the request.
 	if (classified?.class === "overflow") {
+		const stayId = failedId ?? priorState?.current ?? modelConfig.fallbacks[0]!;
+		if (priorState?.overflowRetried === true) {
+			const pick = await pickWithContextFit({
+				resolved,
+				skip: failedId,
+				excluded: retryExcluded,
+				failedScope: classified.scope,
+				blocked,
+				disabled: inputs.disabled,
+				now,
+				startAfter: advanceFrom,
+				registry,
+				decisionModel: modelConfig.decisionModel,
+				contextTokens: inputs.contextTokens,
+			});
+			recordDecideCrash(
+				failedId,
+				registry,
+				errorMessage,
+				now,
+				classified,
+				undefined,
+				pick ? "overflow-advanced" : "stuck-stayed",
+			);
+			if (pick) {
+				inputs.notify?.(`switchback: ${failedId} context overflow - advancing to ${pick.modelId}`, "warning");
+				return resolveDispatchLevel(
+					{
+						decision: { kind: "switch", modelId: pick.modelId, reason: "overflow-advance" },
+						nextState: buildStateAfterSwitch(pick.modelId, priorState),
+						thinkingLevel: request.thinkingLevel,
+					},
+					request,
+					modelConfig,
+					registry,
+					inputs,
+				);
+			}
+			return {
+				decision: { kind: "exhausted", reason: "overflow-no-fallback" },
+				thinkingLevel: request.thinkingLevel,
+			};
+		}
 		const modelId = failedId ?? priorState?.current ?? "(unknown)";
 		recordDecideCrash(failedId, registry, errorMessage, now, classified, undefined, "stuck-stayed");
 		return {
 			decision: { kind: "stick", modelId, reason: "overflow-stick" },
-			nextState: keepState(
-				failedId ?? priorState?.current ?? modelConfig.fallbacks[0]!,
-				priorState,
-				priorState?.transientRetries ?? 0,
-			),
+			nextState: {
+				...keepState(stayId, priorState, priorState?.transientRetries ?? 0),
+				overflowRetried: true,
+			},
 			thinkingLevel: request.thinkingLevel,
 		};
 	}

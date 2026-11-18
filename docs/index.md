@@ -5,9 +5,10 @@ Quota-aware graceful model fallback for [pi](https://github.com/earendil-works/p
 `switchback` registers a virtual model `switchback/auto`. Every request is
 routed through a user-configured fallback list; provider failures are
 classified by a single SystemOne classifier and the router advances on
-quota / auth / unknown, retries on transient, sticks on context overflow.
-When no classifier is available the router visibly notifies and cycles to
-the next non-blocked entry — the cycle is the universal baseline.
+quota / auth / unknown, retries on transient, and on context overflow sticks
+once (the fair post-compaction retry) before advancing to a model that can
+hold the session. When no classifier is available the router visibly notifies
+and cycles to the next non-blocked entry — the cycle is the universal baseline.
 
 Classifier-only by design: no keyword sets, no regex, no heuristics, and no
 prompt criteria taken from collected provider traffic (root `AGENTS.md`

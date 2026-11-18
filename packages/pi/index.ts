@@ -110,6 +110,20 @@ export default function (pi: ExtensionAPI) {
 	// repeated warning on every route would bury the conversation. Reserved for
 	// the per-route warning fan-out - the check itself is not wired yet.
 	const _decisionModelWarned = new Set<string>();
+
+	// Give-up overflows, keyed by "<session leaf>::<virtual model>": pi ends a run
+	// when a second overflow verdict follows the compact-and-retry attempt, and no
+	// retry is left to re-route - so the record made here in `agent_end` is what
+	// makes the *next* route advance off a model the payload does not fit (overflow
+	// writes no block; stickiness would otherwise walk straight back into it).
+	// Session-scoped on purpose: one session's oversized payload says nothing about
+	// the model for other sessions, and process-local on purpose: after a restart
+	// the model simply gets its normal stickiness back. Bounded like
+	// `handledFailures`; entries expire after OVERFLOW_SKIP_TTL_MS.
+	const overflowAdvances = new Map<string, { modelId: ModelId; at: number }>();
+	const OVERFLOW_SKIP_TTL_MS = 15 * 60_000;
+	const overflowKey = (ctx: ExtensionContext, virtualId: string): string =>
+		`${ctx.sessionManager.getLeafId() ?? ctx.sessionManager.getSessionId()}::${virtualId}`;
 	for (const modelConfig of modelConfigs) {
 		const fullVirtualId = modelConfig.id;
 		pi.registerVirtualModel<SwitchbackState>({
@@ -149,6 +163,17 @@ export default function (pi: ExtensionAPI) {
 				// switch target that can hold the conversation (see packages/core/src/context-fit.ts).
 				// pi reports null when no assistant has answered since the last compaction.
 				const contextTokens = ctx.getContextUsage()?.tokens ?? undefined;
+				// A give-up overflow recorded for THIS session and THIS virtual model:
+				// consumed once, and only while the session is still parked on the
+				// model that overflowed (a manual switch supersedes the record).
+				const overflowRecord = overflowAdvances.get(overflowKey(ctx, fullVirtualId));
+				const overflowSkip =
+					overflowRecord !== undefined &&
+					Date.now() - overflowRecord.at <= OVERFLOW_SKIP_TTL_MS &&
+					request.state?.current === overflowRecord.modelId
+						? overflowRecord.modelId
+						: undefined;
+				if (overflowSkip !== undefined) overflowAdvances.delete(overflowKey(ctx, fullVirtualId));
 				const result = await decide(request.reason, request, modelConfig, ctx.modelRegistry, {
 					now,
 					blocked,
@@ -158,6 +183,7 @@ export default function (pi: ExtensionAPI) {
 					debug,
 					...(pinned !== null && pinned !== undefined ? { pinned } : {}),
 					...(contextTokens !== undefined ? { contextTokens } : {}),
+					...(overflowSkip !== undefined ? { overflowSkip } : {}),
 				});
 				return buildRoute(ctx.modelRegistry, result.decision, result.thinkingLevel, result.nextState);
 			},
@@ -206,8 +232,9 @@ export default function (pi: ExtensionAPI) {
 					}
 					const modelConfig = findModelConfig(config, fullVirtualId);
 					const now = Date.now();
-					const acted = await observeUnretriedFailure({
-						failedId: `${message.provider}/${message.model}`,
+					const failedId = `${message.provider}/${message.model}`;
+					const outcome = await observeUnretriedFailure({
+						failedId,
 						errorMessage,
 						stopReason: message.stopReason,
 						decisionModel: modelConfig.decisionModel,
@@ -218,7 +245,24 @@ export default function (pi: ExtensionAPI) {
 							? { notify: (m: string, t: "info" | "warning" | "error") => ctx.ui.notify(m, t) }
 							: {}),
 					});
-					if (acted || handledFailures.size === 0) rememberHandled(errorMessage);
+					// An overflow give-up is the one unretried verdict that needs a routing
+					// consequence: overflow never writes a block, so without this record the
+					// next turn sticks to a model the payload does not fit and repeats the
+					// whole compact-retry-give-up cycle. Tell the user the session will move.
+					if (outcome.verdict?.class === "overflow") {
+						overflowAdvances.set(overflowKey(ctx, fullVirtualId), { modelId: failedId, at: now });
+						if (overflowAdvances.size > 64) {
+							const oldest = overflowAdvances.keys().next();
+							if (!oldest.done) overflowAdvances.delete(oldest.value);
+						}
+						if (ctx.hasUI) {
+							ctx.ui.notify(
+								`switchback: ${failedId} context overflow - the next request advances to a model that can hold this session`,
+								"warning",
+							);
+						}
+					}
+					if (outcome.acted || handledFailures.size === 0) rememberHandled(errorMessage);
 				}
 			})();
 		});

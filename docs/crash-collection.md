@@ -18,7 +18,7 @@ from this file is promoted into the repo.
   count: number;         // increment per record
   verdict: { class, scope, promptVersion } | null;  // null on no-classifier path
   noClassifierReason?: "not-configured" | "unresolvable" | "timeout" | "threw" | "unparseable";
-  action: "blind-cycle" | "blocked+advanced" | "stuck-stayed";
+  action: "blind-cycle" | "blocked+advanced" | "stuck-stayed" | "overflow-advanced";
   annotated?: { class: ErrorClass, note: string, at: number };  // user-confirmed
   verdictHistory: Array<{ at, verdict, noClassifierReason?, action }>;  // bounded at 50
 }
@@ -35,7 +35,9 @@ from this file is promoted into the repo.
 1. `decideRetry` records one crash per failed retry. Both classified and
    no-classifier paths write — the corpus grows even while no classifier
    is configured. Record errors are swallowed; the crash store is a side
-   effect, not a blocker on routing.
+   effect, not a blocker on routing. An overflow retry records
+   `stuck-stayed` on the first verdict (the fair stick) and
+   `overflow-advanced` when the second verdict moves the session forward.
 2. `classifyError` checks the cache first. If the raw-message sha256 has
    an `annotated` entry, that class is returned directly with
    `source: "annotation"` and `resetAtMs: undefined` (default block).

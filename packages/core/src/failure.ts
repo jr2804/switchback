@@ -180,7 +180,11 @@ export async function assessFailure(opts: {
  * This is the fallback for that case. It reuses `assessFailure`, so the
  * verdict and the block are produced by exactly the same code as the retry
  * path; only the routing decision is absent, because there is no retry left to
- * re-route. Returns true when it acted, so the caller can skip duplicates.
+ * re-route. Returns what the failure became, so the caller can act on the
+ * verdict class: `acted` mirrors the old boolean (the assessment touched the
+ * block map), and `verdict` lets pi's `agent_end` record an overflow give-up -
+ * the one verdict that needs a routing consequence on the *next* turn, because
+ * overflow writes no block for stickiness to trip over.
  */
 export async function observeUnretriedFailure(opts: {
 	failedId: string | undefined;
@@ -191,7 +195,7 @@ export async function observeUnretriedFailure(opts: {
 	now: number;
 	blocked: BlockedMap;
 	notify?: NotifyPort;
-}): Promise<boolean> {
+}): Promise<{ acted: boolean; verdict: ClassifiedError | undefined }> {
 	const { failedId, errorMessage, now } = opts;
 	const assessed = await assessFailure({
 		failedId,
@@ -211,7 +215,7 @@ export async function observeUnretriedFailure(opts: {
 		// No verdict means nothing to justify a block with; record the sighting so
 		// the corpus shows the gap, and leave routing untouched.
 		recordDecideCrash(failedId, opts.registry, errorMessage, now, null, assessed.noClassifierReason, "blind-cycle");
-		return false;
+		return { acted: false, verdict: undefined };
 	}
 	const classified = assessed.verdict;
 	const action: CrashAction = assessed.touchedBlocks ? "blocked+advanced" : "stuck-stayed";
@@ -224,5 +228,5 @@ export async function observeUnretriedFailure(opts: {
 			"warning",
 		);
 	}
-	return assessed.touchedBlocks;
+	return { acted: assessed.touchedBlocks, verdict: classified };
 }

@@ -38,7 +38,7 @@ import type { ClassifiedError, ErrorClass, ErrorScope } from "./types.ts";
 import type { NoClassifierReason } from "./classify.ts";
 
 /** What the router did about a particular failure. */
-export type CrashAction = "blind-cycle" | "blocked+advanced" | "stuck-stayed";
+export type CrashAction = "blind-cycle" | "blocked+advanced" | "stuck-stayed" | "overflow-advanced";
 
 /** A classifier verdict (with the prompt version that produced it). */
 export interface CrashVerdict {

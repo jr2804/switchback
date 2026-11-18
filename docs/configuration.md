@@ -262,8 +262,8 @@ Details worth knowing:
   unresolvable, timeout, threw, unparseable) the session keeps its current
   model: unlike error classification this is a preference, so the conservative
   outcome is to change nothing.
-- **Only `user`/`direct` routes are affected.** Continuations, retries and
-  overflow stickiness keep their existing behaviour, which is what preserves the
+- **Only `user`/`direct` routes are affected.** Continuations, retries and the
+  overflow paths keep their existing behaviour, which is what preserves the
   cache while a conversation is actually running.
 - **Blocked entries are skipped.** The reset picks the first *usable* entry, so a
   head model that is quota-blocked is passed over until its reset time.
